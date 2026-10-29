@@ -1,0 +1,342 @@
+#include "SettingsHub.h"
+
+#include <algorithm>
+#include <cmath>
+
+#include "TextRender.h"
+#include "Theme.h"
+
+namespace sf {
+
+namespace {
+constexpr int kW = 1832, kH = 960, kPad = 40, kGap = 24;
+constexpr int kCols = 4, kHomeTop = 140, kHomeCardH = 240;
+constexpr int kListTop = 236, kRowH = 96, kRowGap = 16, kMaxItems = 12;
+constexpr float kWorldW = 2.0f, kDist = 1.7f;
+
+void fillRoundRect(Bitmap& bm, float x0, float y0, float x1, float y1, float r, Color8 c) {
+    const int ix0 = std::max(0, static_cast<int>(x0) - 1), ix1 = std::min(bm.w, static_cast<int>(x1) + 2);
+    const int iy0 = std::max(0, static_cast<int>(y0) - 1), iy1 = std::min(bm.h, static_cast<int>(y1) + 2);
+    const float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f, hx = (x1 - x0) * 0.5f - r, hy = (y1 - y0) * 0.5f - r;
+    for (int y = iy0; y < iy1; ++y)
+        for (int x = ix0; x < ix1; ++x) {
+            const float dx = std::max(std::fabs(x + 0.5f - cx) - hx, 0.0f), dy = std::max(std::fabs(y + 0.5f - cy) - hy, 0.0f);
+            const float cover = std::clamp(r - std::sqrt(dx * dx + dy * dy) + 0.5f, 0.0f, 1.0f);
+            if (cover <= 0) continue;
+            uint8_t* p = &bm.rgba[(static_cast<size_t>(y) * bm.w + x) * 4];
+            const float a = cover * c.a / 255.0f, pa = p[3] / 255.0f, oa = a + pa * (1 - a);
+            if (oa <= 0) continue;
+            p[0] = static_cast<uint8_t>((c.r * a + p[0] * pa * (1 - a)) / oa);
+            p[1] = static_cast<uint8_t>((c.g * a + p[1] * pa * (1 - a)) / oa);
+            p[2] = static_cast<uint8_t>((c.b * a + p[2] * pa * (1 - a)) / oa);
+            p[3] = static_cast<uint8_t>(oa * 255);
+        }
+}
+
+Color8 toColor8(Vec3 v, uint8_t a = 255) {
+    auto q = [](float f) { return static_cast<uint8_t>(std::clamp(f, 0.0f, 1.0f) * 255 + 0.5f); };
+    return Color8{q(v.x), q(v.y), q(v.z), a};
+}
+}  // namespace
+
+void SettingsHub::open(Vec3 eye, Vec3 forward) {
+    Vec3 f = {forward.x, 0.0f, forward.z};
+    if (length(f) < 0.25f) f = fallbackFlat_;
+    f = normalize(f);
+    fallbackFlat_ = f;
+    Vec3 c = eye + f * kDist;
+    c.y = eye.y;
+    base_ = Mat4::translate(c) * Mat4::rotateY(std::atan2(-f.x, -f.z));
+    page_ = -1;
+    sel_ = homeSel_ = 0;
+    open_ = true;
+    dirty_ = true;
+}
+
+void SettingsHub::refreshValues() {
+    vals_.clear();
+    if (page_ < 0 || page_ >= static_cast<int>(cats_.size())) return;
+    for (const SettingsItem& it : cats_[static_cast<size_t>(page_)].items) vals_.push_back(it.value ? it.value() : std::string());
+}
+
+std::string SettingsHub::signature() const {
+    std::string s = std::to_string(page_) + ":" + std::to_string(sel_) + ":" + currentTheme().name + ":" +
+                    std::to_string(hoverBtn_) + (fullscreen_ ? "F" : "W");
+    for (const std::string& v : vals_) s += "|" + v;
+    return s;
+}
+
+void SettingsHub::rebuild() {
+    const Theme& th = currentTheme();
+    const Color8 acc = toColor8(th.accent), alt = toColor8(th.alt);
+    const Color8 white{238, 242, 250, 255}, grey{140, 153, 184, 255};
+    Bitmap bm;
+    bm.w = kW;
+    bm.h = kH;
+    bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 0);
+    rects_.clear();
+    fillRoundRect(bm, 0, 0, kW, kH, 36, Color8{10, 14, 26, 240});
+
+    const bool home = page_ < 0 || page_ >= static_cast<int>(cats_.size());
+    const std::string title = home ? "SETTINGS" : cats_[static_cast<size_t>(page_)].name;
+    drawText(bm, kPad + 8, 82, title, 54, FontFace::UIBold, acc);
+    const std::string sub = home ? "SHELL PREFERENCES  +  WINDOWS CONTROL PANEL" : cats_[static_cast<size_t>(page_)].subtitle;
+    drawText(bm, kW - kPad - 8 - measureText(sub, 24, FontFace::UI), 98, sub, 24, FontFace::UI, grey);
+    fillRoundRect(bm, kPad, 108, kW - kPad, 112, 2, toColor8(th.accent, 120));
+    {
+        closeRect_ = {kW - 116.0f, 12, kW - 16.0f, 68};
+        fsRect_ = {kW - 232.0f, 12, kW - 132.0f, 68};
+        const bool hf = hoverBtn_ == 1, hc = hoverBtn_ == 2;
+        if (hf) fillRoundRect(bm, fsRect_.x0, fsRect_.y0, fsRect_.x1, fsRect_.y1, 16, Color8{40, 56, 92, 255});
+        if (hc) fillRoundRect(bm, closeRect_.x0, closeRect_.y0, closeRect_.x1, closeRect_.y1, 16, Color8{200, 60, 70, 255});
+        const Color8 fc = hf ? white : grey, xc = hc ? white : grey;
+        auto line = [&](float x0, float y0, float x1, float y1, Color8 c) {
+            const float len = std::max(std::fabs(x1 - x0), std::fabs(y1 - y0));
+            for (float s = 0; s <= len; s += 0.5f) {
+                const float x = x0 + (x1 - x0) * s / len, y = y0 + (y1 - y0) * s / len;
+                fillRoundRect(bm, x - 2, y - 2, x + 2, y + 2, 2, c);
+            }
+        };
+        const float fx = (fsRect_.x0 + fsRect_.x1) * 0.5f, cy = 40;
+        const float a = fullscreen_ ? 9.0f : 16.0f, b = fullscreen_ ? 14.0f : 11.0f;
+        line(fx - a, cy - b, fx + a, cy - b, fc);
+        line(fx - a, cy + b, fx + a, cy + b, fc);
+        line(fx - a, cy - b, fx - a, cy + b, fc);
+        line(fx + a, cy - b, fx + a, cy + b, fc);
+        const float mx = (closeRect_.x0 + closeRect_.x1) * 0.5f;
+        line(mx - 14, cy - 14, mx + 14, cy + 14, xc);
+        line(mx - 14, cy + 14, mx + 14, cy - 14, xc);
+    }
+
+    auto card = [&](const Rect& r, bool sel, float radius) {
+        if (sel) fillRoundRect(bm, r.x0 - 4, r.y0 - 4, r.x1 + 4, r.y1 + 4, radius + 4, acc);
+        fillRoundRect(bm, r.x0, r.y0, r.x1, r.y1, radius, sel ? Color8{34, 48, 78, 255} : Color8{22, 30, 50, 255});
+    };
+
+    if (home) {
+        const int n = static_cast<int>(cats_.size());
+        const float cw = static_cast<float>(kW - 2 * kPad - (kCols - 1) * kGap) / kCols;
+        for (int i = 0; i < n; ++i) {
+            const SettingsCategory& c = cats_[static_cast<size_t>(i)];
+            const float x = kPad + (i % kCols) * (cw + kGap), y = static_cast<float>(kHomeTop + (i / kCols) * (kHomeCardH + kGap));
+            const Rect r{x, y, x + cw, y + kHomeCardH};
+            rects_.push_back(r);
+            card(r, i == sel_, 26);
+            drawText(bm, x + 28, y + 52, c.tag, 20, FontFace::UIBold, c.tag == "SHELL" ? acc : alt);
+            drawText(bm, x + 28, y + 126, ellipsize(c.name, 38, FontFace::UIBold, cw - 56), 38, FontFace::UIBold, white);
+            float ty = y + 168;
+            for (const std::string& line : wrapText(c.subtitle, 22, FontFace::UI, cw - 56, 2)) {
+                drawText(bm, x + 28, ty, line, 22, FontFace::UI, grey);
+                ty += 28;
+            }
+        }
+    } else {
+        const SettingsCategory& c = cats_[static_cast<size_t>(page_)];
+        const Rect br{kPad, 132, kPad + 260, 212};
+        rects_.push_back(br);
+        card(br, sel_ == 0, 22);
+        drawText(bm, br.x0 + (260 - measureText("< BACK", 32, FontFace::UIBold)) * 0.5f, 186, "< BACK", 32, FontFace::UIBold, white);
+        const float cw = static_cast<float>(kW - 2 * kPad - kGap) / 2;
+        const int n = std::min(static_cast<int>(c.items.size()), kMaxItems);
+        for (int i = 0; i < n; ++i) {
+            const SettingsItem& it = c.items[static_cast<size_t>(i)];
+            const float x = kPad + (i % 2) * (cw + kGap), y = static_cast<float>(kListTop + (i / 2) * (kRowH + kRowGap));
+            const Rect r{x, y, x + cw, y + kRowH};
+            rects_.push_back(r);
+            card(r, sel_ == i + 1, 20);
+            const std::string val = static_cast<size_t>(i) < vals_.size() ? vals_[static_cast<size_t>(i)] : std::string();
+            const float vw = val.empty() ? 0.0f : std::min(measureText(val, 30, FontFace::UIBold), cw * 0.45f);
+            drawText(bm, x + 28, y + 42, ellipsize(it.title, 30, FontFace::UIBold, cw - 70 - vw), 30, FontFace::UIBold, white);
+            if (!it.hint.empty()) drawText(bm, x + 28, y + 76, ellipsize(it.hint, 20, FontFace::UI, cw - 70 - vw), 20, FontFace::UI, grey);
+            if (!val.empty()) {
+                const std::string v = ellipsize(val, 30, FontFace::UIBold, vw);
+                drawText(bm, x + cw - 28 - measureText(v, 30, FontFace::UIBold), y + 60, v, 30, FontFace::UIBold, acc);
+            }
+        }
+    }
+    if (!rects_.empty()) sel_ = std::clamp(sel_, 0, static_cast<int>(rects_.size()) - 1);
+    aspect_ = static_cast<float>(bm.w) / bm.h;
+    label_ = renderer_.createLabel(bm);
+}
+
+int SettingsHub::hitIndex(Vec3 o, Vec3 d) const {
+    float px, py, t;
+    if (!toPanel(o, d, px, py, t)) return -1;
+    for (size_t i = 0; i < rects_.size(); ++i)
+        if (px >= rects_[i].x0 && px <= rects_[i].x1 && py >= rects_[i].y0 && py <= rects_[i].y1) return static_cast<int>(i);
+    return -1;
+}
+
+bool SettingsHub::toPanel(Vec3 o, Vec3 d, float& px, float& py, float& t) const {
+    const Mat4 inv = base_.rigidInverse();
+    const Vec3 lo = inv.transformPoint(o), ld = inv.transformDir(d);
+    if (std::fabs(ld.z) < 1e-5f) return false;
+    t = -lo.z / ld.z;
+    if (t < 0) return false;
+    const float x = lo.x + ld.x * t, y = lo.y + ld.y * t, worldH = worldW_ / aspect_;
+    px = (x / worldW_ + 0.5f) * kW;
+    py = (0.5f - y / worldH) * kH;
+    return true;
+}
+
+int SettingsHub::hitButton(Vec3 o, Vec3 d) const {
+    float px, py, t;
+    if (!toPanel(o, d, px, py, t)) return 0;
+    auto in = [&](const Rect& r) { return px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1; };
+    if (in(closeRect_)) return 2;
+    if (in(fsRect_)) return 1;
+    return 0;
+}
+
+void SettingsHub::pointer(Vec3 o, Vec3 d) {
+    if (fullscreen_) applyFullscreen();
+    const int h = hitIndex(o, d);
+    if (h >= 0 && h != sel_) sel_ = h;
+    hoverBtn_ = hitButton(o, d);
+}
+
+void SettingsHub::applyFullscreen() {
+    const float viewH = 2.0f * viewTan_, viewW = viewH * viewAspect_;
+    worldW_ = std::min(viewW, viewH * aspect_);
+    base_ = Mat4::translate({0, 0, -1.0f});
+}
+
+void SettingsHub::toggleFullscreen() {
+    fullscreen_ = !fullscreen_;
+    if (fullscreen_) {
+        savedBase_ = base_;
+        applyFullscreen();
+    } else {
+        base_ = savedBase_;
+        worldW_ = kWorldW;
+    }
+    dirty_ = true;
+}
+
+void SettingsHub::close() {
+    if (fullscreen_) toggleFullscreen();
+    open_ = false;
+}
+
+void SettingsHub::step(int delta) {
+    const int n = static_cast<int>(rects_.size());
+    if (n > 0) sel_ = ((sel_ + delta) % n + n) % n;
+}
+
+void SettingsHub::move(int dx, int dy) {
+    if (rects_.empty()) return;
+    const Rect& cur = rects_[static_cast<size_t>(sel_)];
+    const float cx = (cur.x0 + cur.x1) * 0.5f, cy = (cur.y0 + cur.y1) * 0.5f;
+    int best = -1;
+    float bestScore = 1e9f;
+    for (size_t i = 0; i < rects_.size(); ++i) {
+        if (static_cast<int>(i) == sel_) continue;
+        const float ox = (rects_[i].x0 + rects_[i].x1) * 0.5f - cx, oy = (rects_[i].y0 + rects_[i].y1) * 0.5f - cy;
+        const float along = dx != 0 ? ox * dx : oy * dy, perp = dx != 0 ? std::fabs(oy) : std::fabs(ox);
+        if (along < 20.0f) continue;
+        const float score = along + 3.0f * perp;
+        if (score < bestScore) { bestScore = score; best = static_cast<int>(i); }
+    }
+    if (best >= 0) sel_ = best;
+}
+
+void SettingsHub::activateSelected() {
+    if (rects_.empty()) return;
+    if (page_ < 0 || page_ >= static_cast<int>(cats_.size())) {
+        if (sel_ < static_cast<int>(cats_.size())) {
+            homeSel_ = sel_;
+            page_ = sel_;
+            sel_ = 1;
+            dirty_ = true;
+        }
+        return;
+    }
+    if (sel_ == 0) {
+        back();
+        return;
+    }
+    const auto& items = cats_[static_cast<size_t>(page_)].items;
+    if (sel_ - 1 < static_cast<int>(items.size()) && items[static_cast<size_t>(sel_ - 1)].act) items[static_cast<size_t>(sel_ - 1)].act();
+    dirty_ = true;
+}
+
+bool SettingsHub::activateHit(Vec3 o, Vec3 d) {
+    const int b = hitButton(o, d);
+    if (b == 1) {
+        toggleFullscreen();
+        return true;
+    }
+    if (b == 2) {
+        close();
+        return true;
+    }
+    const int h = hitIndex(o, d);
+    if (h < 0) return false;
+    sel_ = h;
+    activateSelected();
+    return true;
+}
+
+bool SettingsHub::back() {
+    if (fullscreen_) {
+        toggleFullscreen();
+        return true;
+    }
+    if (page_ < 0) return false;
+    page_ = -1;
+    sel_ = homeSel_;
+    dirty_ = true;
+    return true;
+}
+
+void SettingsHub::update(double dt, double) {
+    if (!open_) return;
+    if (fullscreen_) applyFullscreen();
+    valueTimer_ += dt;
+    if (dirty_ || valueTimer_ > 0.5) {
+        refreshValues();
+        valueTimer_ = 0;
+    }
+    const std::string s = signature();
+    if (dirty_ || s != sig_ || !label_) {
+        rebuild();
+        sig_ = signature();
+        dirty_ = false;
+    }
+}
+
+void SettingsHub::render() {
+    if (!open_ || !label_) return;
+    if (fullscreen_) applyFullscreen();
+    else renderer_.clearDepth();
+    const float h = worldW_ / aspect_;
+    const float uv[4] = {0, 0, 1, 1};
+    const float white[3] = {1, 1, 1};
+    if (!fullscreen_) {
+        const float pad = 0.03f;
+        const float fw = worldW_ + pad * 2, fh = h + pad * 2;
+        renderer_.drawGlass(base_ * Mat4::translate({0, 0, -0.01f}) * Mat4::scale({fw, fh, 1}), fw / fh, 0.03f / fh);
+    }
+    renderer_.drawWebRegion(*label_, base_ * Mat4::scale({worldW_, h, 1}), uv, aspect_, fullscreen_ ? 0.0f : 0.02f / h, 0.0f,
+                            fullscreen_ ? 1.0f : 0.94f, white);
+}
+
+float SettingsHub::hitDistance(Vec3 o, Vec3 d) const {
+    if (!open_) return -1.0f;
+    float px, py, t;
+    if (!toPanel(o, d, px, py, t)) return -1.0f;
+    const float m = fullscreen_ ? 0.0f : 0.03f / worldW_ * kW;
+    if (px < -m || px > kW + m || py < -m || py > kH + m) return -1.0f;
+    return t * length(d);
+}
+
+bool SettingsHub::bounds(Vec3& centre, Vec3& normal, float& w, float& h) const {
+    if (!open_ || fullscreen_) return false;
+    centre = base_.transformPoint({0, 0, 0});
+    normal = normalize(base_.transformDir({0, 0, 1}));
+    w = worldW_ + 0.06f;
+    h = worldW_ / aspect_ + 0.06f;
+    return true;
+}
+
+}  // namespace sf

@@ -1,0 +1,10 @@
+build/
+third_party/cef/
+installer/Output/
+installer/stage/
+*.log
+*.pdb
+__pycache__/
+*.png
+!assets/**/*.png
+.vs/
