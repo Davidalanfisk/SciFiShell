@@ -94,8 +94,6 @@ gently turns to face them and stays put until you move.
 ### Editor
 ![Editor](docs/tool-editor.jpg)
 
-### Settings
-![Settings](docs/tool-settings.jpg)
 
 ## What's coming
 
