@@ -142,9 +142,9 @@ Clicking a file frame opens a panel with details and actions (open, copy, send, 
 
 - Build the installer (needs Inno Setup: `winget install -e --id JRSoftware.InnoSetup`): build Release first, then
   `powershell -ExecutionPolicy Bypass -File .\installer\build-installer.ps1 -Version 0.1.0` -> `installer\Output\SciFiShell-Setup-0.1.0.exe`. It installs per-user to `%LOCALAPPDATA%\Programs\SciFiShell` (or Program Files if you choose "all users"), with Start menu / optional desktop shortcuts.
-- Publish a release: `powershell -ExecutionPolicy Bypass -File .\installer\build-installer.ps1 -Version 0.2.0 -Publish` (uses `gh release create v0.2.0`, attaching the installer to the private repo `Davidalanfisk/SciFiShell`).
+- Publish a release: `powershell -ExecutionPolicy Bypass -File .\installer\build-installer.ps1 -Version 0.2.0 -Publish` (uses `gh release create v0.2.0`, attaching the installer to the public repo `Davidalanfisk/SciFiShell`).
 - Updates: an installed shell runs `update.ps1` hidden at launch. It asks GitHub for the latest release, and if the tag is newer than `version.txt` it asks "Download and install now?"; Yes downloads the installer and runs it silently, which closes and restarts the shell. The Start menu has "Check for SciFi Shell updates" (reports "up to date" too). `SCIFI_NO_UPDATE=1` skips the launch check.
-- Because the repo is private the updater needs a GitHub token with read access (Contents) to it: put it in `%APPDATA%\SciFiShell\update_token.txt`, or set `GITHUB_TOKEN`, or have `gh` logged in.
+- The repo is public, so the updater needs no token or GitHub account.
 - Build prerequisites for source builds: the CEF binary distribution must be extracted to `third_party\cef` (not committed - it is ~420 MB); Diligent and OpenXR are fetched by CMake.
 
 City extras: stepped ramps at the end of every road and hub spoke let you walk on and off the slabs without jumping; the storage regions sit closer to the central components; the central hub streams data packets to the CPU / RAM / GPU monuments (faster when they are busier) and pulses a beacon.
