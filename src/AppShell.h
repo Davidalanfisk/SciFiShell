@@ -1,5 +1,6 @@
 #pragma once
 // Top-level application: window, subsystems, state machine (menu <-> file room) and main loop.
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -67,6 +68,23 @@ private:
     std::unique_ptr<FileRoom> room_;
     std::unique_ptr<City> city_;
     bool cityMode_ = false, clearRoomPending_ = false;
+    // Click-to-ride: a bus lane carries the player along its route like a data packet.
+    bool riding_ = false;
+    std::vector<Vec3> ridePath_;
+    float rideLen_ = 0, rideDist_ = 0, rideT_ = 0, rideY0_ = 0;
+    void startRide(const std::vector<Vec3>& path);
+    void rideStep(double dt);
+    // Loading indicator (white command-ring) and the work deferred until it has been drawn once.
+    std::function<void()> deferred_;
+    int deferDelay_ = 0;
+    float loadingT_ = 2.0f, loaderA_ = 0.0f;
+    std::shared_ptr<GpuLabel> loadLabel_;
+    // Idle fly-through of the city, driven by the scripting system.
+    double idleT_ = 0;
+    bool tourActive_ = false;
+    void startTour();
+    void stopTour();
+    bool browserFocus_ = false;  // browser (not a hosted program) has the pointer when both are open
     Camera savedCam_;
     bool cityCamSet_ = false;
     int powerArmed_ = 0;  // 1 restart / 2 shutdown awaiting a confirming second click

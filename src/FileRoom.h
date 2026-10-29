@@ -69,6 +69,7 @@ public:
     void setHover(Node* node);
     // Activates a card: folders are opened. Returns a short status message.
     std::string activate(Node* node);
+    bool opensRoom(Node* node) const;  // activating this card enters a room / folder (can take a moment to build)
     // Goes to the parent folder (or the drives room from a drive root). Returns a status message.
     std::string goUp();
     // Opens the first text (textOnly) or image/video/audio card in the room; returns a status message.

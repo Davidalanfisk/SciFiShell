@@ -167,3 +167,10 @@ The app runs commands from a script file: set SCIFI_SCRIPT=<file> at launch, or 
 
 Set SCIFI_NO_SCRIPT=1 to disable. Mouse clicks cannot be injected yet.
 
+
+## Bus lanes, loader and idle tour
+- The tool ring can be opened at any time (F2 / middle mouse / Y), even with apps or the browser open. Several programs and the browser can be open together; the window you aim at has the pointer and keyboard.
+- Bus lanes have proper corners. Click a lane in the city to be carried along it to the end of the route like a data packet; move, click or press Esc to step off.
+- The floor grid glows near you and fades quickly with distance.
+- A white command-ring loader shows at start-up, while the city builds, and when entering a building or room.
+- After 10 s without input in the city the shell flies a tour of the hub, CPU/RAM/GPU and storage regions using the scripting system. Any input stops it. (Scripts: `cam X Y Z YAW PITCH SECONDS` and `ride ROUTE` were added.)

@@ -815,6 +815,13 @@ std::string FileRoom::goUp() {
     return path_.empty() ? "This PC" : "Opened " + clip(path_, 24);
 }
 
+bool FileRoom::opensRoom(Node* node) const {
+    auto* card = (node && node->isCard()) ? static_cast<CardNode*>(node) : nullptr;
+    if (!card) return false;
+    if (card->roomIndex >= 0) return true;
+    return card->roomIndex > -2 && !card->isParentLink && card->entry.isDir;
+}
+
 std::string FileRoom::activate(Node* node) {
     auto* card = (node && node->isCard()) ? static_cast<CardNode*>(node) : nullptr;
     if (!card) return "";

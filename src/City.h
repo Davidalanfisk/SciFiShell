@@ -29,6 +29,10 @@ public:
     float floorAt(const Vec3& p, float radius, float eyeH) const;
     // Ray pick over the towers; sets the hover highlight. Returns false when nothing is hit.
     bool pick(Vec3 origin, Vec3 dir, std::string& path, std::string& name);
+    // Click a bus lane: fills the points of the ride to the far end of that route.
+    bool pickRoute(Vec3 origin, Vec3 dir, std::vector<Vec3>& path) const;
+    void routes(std::vector<std::vector<Vec3>>& out) const;
+    void tourPoints(std::vector<Vec3>& out) const;  // monuments + storage regions for the idle fly-through
     void clearHover() { hoverP_ = hoverB_ = hoverT_ = -1; }
     // Remembers the hovered building as the one being entered; exitSpawn() is street level in front of its door.
     void markEntered();

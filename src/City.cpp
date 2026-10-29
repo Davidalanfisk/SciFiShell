@@ -459,6 +459,8 @@ void City::render(Renderer& r, Vec3 eye) {
                 float len = std::fabs(x1 - x0) * ease(grow);
                 if (len > 0.5f) renderBox(r, {x0 + (x1 > x0 ? 1 : -1) * len * 0.5f, y, z}, {len, 0.15f, 3.0f}, th.accent, 0.3f, 5, grow, 0, 0);
             };
+            // Corner pieces fill the notch where each spoke turns.
+            if (coreGrow_[1] > 0.5f || coreGrow_[2] > 0.5f) renderBox(r, {0, y, 30}, {3.0f, 0.15f, 3.0f}, th.accent, 0.3f, 5, 1, 0, 0);
             zRoad(0, 0, -55 + plinth * 0.5f, coreGrow_[0]);
             double gb = s.ramTotal / 1073741824.0;
             int K = std::clamp<int>((int)(gb / 4.0 + 0.5), 2, 16);
@@ -515,6 +517,7 @@ void City::render(Renderer& r, Vec3 eye) {
                 roadX(0, p.cx - sx * p.side * 0.5f, lane);
             } else {
                 roadX(0, p.cx, lane);
+                if (rg > 0.99f) renderBox(r, {p.cx, kRoadY, lane}, {3.0f, 0.15f, 3.0f}, tint, seed, 5, p.grow, 0, 0);
                 roadZ(lane, p.cz - sz * p.side * 0.5f, p.cx);
             }
             ++draws;
@@ -747,6 +750,76 @@ void City::resolve(Vec3& p, float rad, float eyeH) const {
             else if (m == n) p.z = b.z0 - rad;
             else p.z = b.z1 + rad;
         }
+}
+
+// Bus routes as polylines from the hub / core out to the destination (also drives the click-to-ride shortcut).
+void City::routes(std::vector<std::vector<Vec3>>& out) const {
+    out.clear();
+    const SystemStats& s = data_.stats();
+    const int N = std::clamp<int>(s.cores, 1, 32);
+    const float plinth = std::max(14.0f, N * 4.2f / (2.0f * kPi)) * 2.0f + 10.0f;
+    const float y = kRoadY;
+    const double gb = s.ramTotal / 1073741824.0;
+    const int K = std::clamp<int>((int)(gb / 4.0 + 0.5), 2, 16);
+    if (coreGrow_[0] > 0.9f) out.push_back({{0, y, 0}, {0, y, -55 + plinth * 0.5f}});
+    if (coreGrow_[1] > 0.9f) out.push_back({{0, y, 0}, {0, y, 30}, {-52 + (K * 3.4f + 6.0f) * 0.5f, y, 30}});
+    if (coreGrow_[2] > 0.9f) out.push_back({{0, y, 0}, {0, y, 30}, {52 - 23.0f, y, 30}});
+    const int n = (int)platforms_.size();
+    for (int i = 0; i < n; ++i) {
+        const auto& p = platforms_[i];
+        if (p.grow < 0.9f) continue;
+        const float lane = (i - (n - 1) * 0.5f) * 3.5f;
+        const float sx = p.cx >= 0 ? 1.0f : -1.0f, sz = p.cz >= 0 ? 1.0f : -1.0f;
+        if (std::fabs(p.cz) < p.side * 0.5f + 2.0f) out.push_back({{0, y, lane}, {p.cx - sx * p.side * 0.5f, y, lane}});
+        else out.push_back({{0, y, lane}, {p.cx, y, lane}, {p.cx, y, p.cz - sz * p.side * 0.5f}});
+    }
+}
+
+bool City::pickRoute(Vec3 o, Vec3 d, std::vector<Vec3>& path) const {
+    if (d.y > -1e-3f) return false;
+    const float t = (kRoadY + 0.1f - o.y) / d.y;
+    if (t < 0 || t > 700.0f) return false;
+    const float hx = o.x + d.x * t, hz = o.z + d.z * t;
+    std::vector<std::vector<Vec3>> rs;
+    routes(rs);
+    for (const auto& r : rs) {
+        for (size_t k = 0; k + 1 < r.size(); ++k) {
+            const Vec3 a = r[k], b = r[k + 1];
+            const float ex = b.x - a.x, ez = b.z - a.z, l2 = ex * ex + ez * ez;
+            if (l2 < 1e-3f) continue;
+            const float u = clampf(((hx - a.x) * ex + (hz - a.z) * ez) / l2, 0.0f, 1.0f);
+            const float px = a.x + ex * u - hx, pz = a.z + ez * u - hz;
+            if (px * px + pz * pz > 2.2f * 2.2f) continue;
+            // Total length and the click position along it decide which end to carry the rider to.
+            float total = 0, along = 0;
+            for (size_t m = 0; m + 1 < r.size(); ++m) {
+                const float sl = std::sqrt((r[m + 1].x - r[m].x) * (r[m + 1].x - r[m].x) + (r[m + 1].z - r[m].z) * (r[m + 1].z - r[m].z));
+                if (m < k) along += sl;
+                if (m == k) along += sl * u;
+                total += sl;
+            }
+            const Vec3 hit{a.x + ex * u, kRoadY, a.z + ez * u};
+            path.clear();
+            path.push_back(hit);
+            if (along < total * 0.5f) {
+                for (size_t m = k + 1; m < r.size(); ++m) path.push_back(r[m]);
+            } else {
+                for (size_t m = k + 1; m-- > 0;) path.push_back(r[m]);
+            }
+            return path.size() > 1;
+        }
+    }
+    return false;
+}
+
+void City::tourPoints(std::vector<Vec3>& out) const {
+    out.clear();
+    out.push_back({0, 0, 0});
+    out.push_back({0, 0, -55});
+    out.push_back({-52, 0, 30});
+    out.push_back({52, 0, 30});
+    for (const auto& p : platforms_)
+        if (p.grow > 0.9f) out.push_back({p.cx, 0, p.cz});
 }
 
 bool City::pick(Vec3 o, Vec3 d, std::string& path, std::string& name) {

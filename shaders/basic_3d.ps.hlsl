@@ -314,7 +314,8 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         float rk = fres * fade * (1.0 - 0.45 * rough);
         float3 sky = skyColor(float3(vdir.x, -vdir.y, vdir.z), tm, g_Accent.rgb, g_Alt.rgb);
         float3 reflection = (reflSum + sky * (1.0 - saturate(cov))) * metalTint;
-        col *= fade * (1.0 / (1.0 + dist * dist / 3600.0));  // grid and pulses dim steadily with distance from the player
+        float gd = length(In.WPos.xz - eyeP.xz) + 0.35 * max(eyeP.y, 0.0);
+        col *= fade * exp(-gd * 0.018) / (1.0 + gd * gd / 900.0);  // grid and pulses dim steadily with distance from the player
         col += metal * (1.0 - fres) * fade + reflection * rk * 0.3;
         // Distance haze: beyond ~95 m the floor is an opaque patch of exactly the horizon colour, so the grid has no visible edge.
         col = col * (1.0 - mist) + mistColor(g_Accent.rgb) * mist;

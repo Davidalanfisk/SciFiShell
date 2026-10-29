@@ -145,6 +145,12 @@ bool AppShell::init() {
     room_->onExitBuilding = [this] { toggleCity(true); };
     viewer_->onStep = [this](int dir) { room_->stepFrom(viewer_->path(), dir); };
     crosshair_ = renderer_.createLabel(rasterizeLines({""}, 1, 4, 4));
+    {
+        Bitmap lb;
+        lb.w = lb.h = 1;
+        lb.rgba = {255, 255, 255, 255};
+        loadLabel_ = renderer_.createLabel(lb);
+    }
     if (std::getenv("SCIFI_START_MENU")) {  // debugging aid: the old start menu
         state_ = State::Menu;
     } else {
@@ -495,6 +501,18 @@ bool AppShell::scriptExec(const std::string& line) {
     } else if (cmd == "look") {
         const float yw = num(0), p = num(0), s = num(0);
         startMove(false, true, false, {}, yw * deg, p * deg, s);
+    } else if (cmd == "cam") {
+        const float x = num(0), y = num(0), z = num(0), yw = num(0) * deg, p = num(0) * deg, s = num(0);
+        float dy = std::fmod(yw - camera_.yaw, 2.0f * kPi);
+        if (dy > kPi) dy -= 2.0f * kPi;
+        if (dy < -kPi) dy += 2.0f * kPi;
+        startMove(true, true, true, {x, y, z}, camera_.yaw + dy, p, s);
+    } else if (cmd == "ride") {
+        std::vector<std::vector<Vec3>> rs;
+        if (city_) city_->routes(rs);
+        const size_t i = static_cast<size_t>(num(0));
+        if (cityMode_ && i < rs.size()) startRide(rs[i]);
+        else scriptLog("no such route");
     } else if (cmd == "fly") {
         std::string v;
         is >> v;
@@ -642,6 +660,98 @@ void AppShell::toggleCity(bool on) {
     }
 }
 
+void AppShell::startRide(const std::vector<Vec3>& path) {
+    if (path.size() < 2) return;
+    ridePath_ = path;
+    rideLen_ = 0;
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+        const float dx = path[i + 1].x - path[i].x, dz = path[i + 1].z - path[i].z;
+        rideLen_ += std::sqrt(dx * dx + dz * dz);
+    }
+    rideDist_ = 0;
+    rideT_ = 0;
+    rideY0_ = camera_.position.y;
+    riding_ = true;
+    flying_ = true;
+    vy_ = 0.0f;
+    menu_->setStatus("RIDING THE BUS LANE - move or click to step off");
+}
+
+// Carry the camera along the route: quick acceleration, a long cruise, then a gentle slow-down at the end.
+void AppShell::rideStep(double dt) {
+    rideT_ += static_cast<float>(dt);
+    const float remaining = rideLen_ - rideDist_;
+    const float v = std::min({80.0f, 10.0f + rideT_ * 75.0f, 5.0f + remaining * 2.4f});
+    rideDist_ += v * static_cast<float>(dt);
+    float d = rideDist_;
+    Vec3 pos = ridePath_.back(), dir{0, 0, -1};
+    bool done = rideDist_ >= rideLen_ - 0.3f;
+    for (size_t i = 0; i + 1 < ridePath_.size(); ++i) {
+        const Vec3 a = ridePath_[i], b = ridePath_[i + 1];
+        const float dx = b.x - a.x, dz = b.z - a.z, sl = std::sqrt(dx * dx + dz * dz);
+        if (sl < 1e-3f) continue;
+        dir = {dx / sl, 0, dz / sl};
+        if (d <= sl || i + 2 == ridePath_.size()) {
+            const float u = std::min(1.0f, d / sl);
+            pos = {a.x + dx * u, 0, a.z + dz * u};
+            break;
+        }
+        d -= sl;
+    }
+    const float k = std::min(1.0f, static_cast<float>(dt) * 4.0f);
+    float dy = std::fmod(std::atan2(-dir.x, -dir.z) - camera_.yaw, 2.0f * kPi);
+    if (dy > kPi) dy -= 2.0f * kPi;
+    if (dy < -kPi) dy += 2.0f * kPi;
+    camera_.yaw += dy * k;
+    camera_.pitch += (-0.06f - camera_.pitch) * k * 0.5f;
+    const float e = std::min(1.0f, rideT_ * 2.0f);
+    camera_.position = {pos.x, rideY0_ + (2.4f - rideY0_) * e, pos.z};
+    vy_ = 0.0f;
+    flying_ = true;
+    if (done) {
+        riding_ = false;
+        flying_ = false;
+        menu_->setStatus("");
+    }
+}
+
+// Fly the camera round the city's landmarks with the scripting system; any control input stops it (see tick).
+void AppShell::startTour() {
+    std::vector<Vec3> pts;
+    city_->tourPoints(pts);
+    if (pts.empty()) return;
+    script_.clear();
+    scriptPc_ = 0;
+    scriptWait_ = 0;
+    script_.push_back("fly on");
+    const float deg = 180.0f / kPi;
+    bool first = true;
+    for (const Vec3& p : pts) {
+        Vec3 off{-p.x, 0, -p.z};
+        float l = std::sqrt(off.x * off.x + off.z * off.z);
+        off = l < 1.0f ? Vec3{0, 0, 1} : Vec3{off.x / l, 0, off.z / l};
+        const bool hub = l < 1.0f;
+        const float back = hub ? 70.0f : 85.0f, up = hub ? 45.0f : 55.0f;
+        const Vec3 pos{p.x + off.x * back, up, p.z + off.z * back};
+        const float fx = p.x - pos.x, fz = p.z - pos.z, hd = std::sqrt(fx * fx + fz * fz);
+        const float yaw = std::atan2(-fx, -fz) * deg, pitch = std::atan2(-(up - 8.0f), hd) * deg;
+        char b[160];
+        std::snprintf(b, sizeof b, "cam %.1f %.1f %.1f %.1f %.1f %.1f", pos.x, pos.y, pos.z, yaw, pitch, first ? 5.0f : 8.0f);
+        script_.push_back(b);
+        script_.push_back("wait 2.5");
+        if (std::getenv("SCIFI_TOUR")) script_.push_back("where");
+        first = false;
+    }
+    tourActive_ = true;
+}
+
+void AppShell::stopTour() {
+    script_.clear();
+    scriptPc_ = 0;
+    scriptWait_ = 0;
+    mv_.on = false;
+    tourActive_ = false;
+}
 void AppShell::toggleVR() {
     if (vrOn_) {
         vr_.stop();
@@ -772,10 +882,8 @@ void AppShell::launchApp(int index) {
     if (app_ && app_ != a) app_->blur();
     app_ = a;
     a->setView(renderer_.aspect(), std::tan(kFovY * 0.5f));
-    if (!a->active()) a->open(head_.eye, head_.forward,     vrOn_);
-#ifdef SCIFI_HAS_CEF
-    if (browser_ && browser_->active()) browser_->close();
-#endif
+    if (!a->active()) a->open(head_.eye, head_.forward, vrOn_);
+    browserFocus_ = false;
 }
 
 // With several panels up, the one nearest along the aim ray owns the pointer.
@@ -806,23 +914,21 @@ void AppShell::switchTo(int id) {
             if (!a->active()) a->open(head_.eye, head_.forward, vrOn_);
             if (app_ && app_ != a) app_->blur();
             app_ = a;
-        } else if (id != 2 && id != 0 && a->active()) {
-            // keep other panels while switching between apps
+        } else if (id != 0 && a->active()) {
+            // keep other panels open alongside
         } else if (a->active()) {
             a->hide();
         }
     }
     if (id >= 10 && id < 10 + static_cast<int>(apps_.size())) {
-#ifdef SCIFI_HAS_CEF
-        if (browser_ && browser_->active()) browser_->close();
-#endif
+        browserFocus_ = false;
         return;
     }
 #endif
 #ifdef SCIFI_HAS_CEF
     if (browser_) {
         if (id == 2 && !browser_->active()) browser_->open("", head_.eye, head_.forward, vrOn_);
-        else if (id != 2 && browser_->active()) browser_->close();
+        else if (id == 0 && browser_->active()) browser_->close();
     }
 #endif
 }
@@ -918,6 +1024,12 @@ void AppShell::tick(double dt) {
 #endif
     }
     handleSwitcher(in, pad);
+    if (deferred_ && --deferDelay_ <= 0) {  // the loading ring has been on screen: do the heavy work now
+        auto job = std::move(deferred_);
+        deferred_ = nullptr;
+        job();
+        loadingT_ = 0.5f;
+    }
     if (renaming_ && !settingsPanel_->isOpen()) renaming_ = false;
     const bool vEditing = viewer_->editing() && !kbOff;
     if (in.toggleVR && !vEditing && !browserTyping && !appTyping) toggleVR();
@@ -946,7 +1058,32 @@ void AppShell::tick(double dt) {
     if (in.themeCycle) cycleTheme();
     if (in.screenshot) shotPending_ = true;
     const bool ringWasOpen = ring_->isOpen();
-    if (state_ == State::FileRoom && !viewer_->editing() && !browserOpen && !appOpen && !ringWasOpen && !settingsPanel_->isOpen() && !appsPanel_->isOpen() && !viewer_->overlay() && ringToggle) {
+    {
+        const bool anyInput = in.moveX != 0 || in.moveY != 0 || in.moveZ != 0 || in.lookX != 0 || in.lookY != 0 || in.click || in.clickUp ||
+                              in.wheel != 0 || in.escape || in.select || in.back || in.up || in.down || in.left || in.right || in.space ||
+                              in.ring || in.browser || in.tabStep != 0 || !in.keys.empty() || !in.text.empty() || in.toggleVR ||
+                              std::fabs(pad.lx) + std::fabs(pad.ly) + std::fabs(pad.rx) + std::fabs(pad.ry) + pad.lt + pad.rt > 0.2f ||
+                              pad.aPressed || pad.bPressed || pad.yPressed || vrInput_.selectPressed || vrInput_.menuPressed ||
+                              vrInput_.backPressed || vrInput_.moveX != 0 || vrInput_.moveY != 0;
+        static const bool tourAllowed = !std::getenv("SCIFI_SCRIPT") || std::getenv("SCIFI_TOUR");
+        if (anyInput) {
+            idleT_ = 0;
+            if (tourActive_) stopTour();
+        } else {
+            idleT_ += dt;
+        }
+        const bool busy = ring_->isOpen() || settingsPanel_->isOpen() || appsPanel_->isOpen() || appOpen || browserOpen || viewer_->active() ||
+                          deferred_ || riding_ || vrOn_;
+        if (tourActive_ && (!cityMode_ || busy)) stopTour();
+        if (tourAllowed && !tourActive_ && idleT_ > 10.0 && cityMode_ && city_ && city_->built() && !busy && script_.empty() && !mv_.on) startTour();
+        if (tourActive_ && scriptPc_ >= script_.size() && !mv_.on && scriptWait_ <= 0) tourActive_ = false;  // finished; restarts while idle
+        if (riding_ && (pointerSelect || in.escape || back || ringToggle || std::fabs(moveX) + std::fabs(moveY) + std::fabs(kbZ) > 0.1f)) riding_ = false;
+        if (riding_) {
+            moveX = moveY = kbZ = 0.0f;
+            if (rideT_ < 0.7f) lookX = lookY = 0.0f;
+        }
+    }
+    if (state_ == State::FileRoom && !viewer_->editing() && !ringWasOpen && !settingsPanel_->isOpen() && !appsPanel_->isOpen() && !viewer_->overlay() && ringToggle) {
         // Desktop: use the live camera (head_ lags a frame); VR: the headset pose captured at render time.
         if (vrOn_) ring_->open(head_.eye, head_.forward);
         else ring_->open(camera_.position, Vec3{-std::sin(camera_.yaw), 0.0f, -std::cos(camera_.yaw)});
@@ -974,7 +1111,7 @@ void AppShell::tick(double dt) {
         // Desktop windows behave like fixed windows: while the aim is over one, the view and walking freeze and the mouse
         // moves a cursor. Moving off it hands control back to the camera, which eases round to where the cursor was.
         const bool windowed = !vrOn_ && !appsPanel_->isOpen() && !ring_->isOpen() &&
-                              ((settingsPanel_->isOpen() && !settingsPanel_->fullscreen()) || (appOpen && !app_->fullscreen()) || (!appOpen && browserOpen && !browserFs) ||
+                              ((settingsPanel_->isOpen() && !settingsPanel_->fullscreen()) || (appOpen && !app_->fullscreen()) || (browserOpen && !browserFs) ||
                                (!appOpen && !browserOpen && viewer_->active() && !viewer_->overlay()));
         if (!windowed) {
             winFocus_ = false;
@@ -1094,6 +1231,21 @@ void AppShell::tick(double dt) {
                 lockedWin_ = false;
             } else if (!winFocus_ && over && lockedWin_) winFocus_ = true;
         }
+        // With a browser and programs open together, whichever the aim last touched (nearest along the ray) has focus.
+        bool browserFirst = browserOpen && !appOpen;
+#if defined(SCIFI_HAS_CEF) && defined(_WIN32)
+        if (browserOpen && appOpen) {
+            const float bt = browser_->hitDistance(o, d);
+            float at = 1e9f;
+            for (auto& a : apps_) {
+                const float t = a->active() ? a->hitDistance(o, d) : -1.0f;
+                if (t >= 0 && t < at) at = t;
+            }
+            if (bt >= 0 && bt <= at) browserFocus_ = true;
+            else if (at < 1e9f) browserFocus_ = false;
+            browserFirst = browserFocus_;
+        }
+#endif
         if (appsPanel_->isOpen()) {
             updateCamera(dt, 0, 0, 0, lookX, lookY);
             room_->setHover(nullptr);
@@ -1179,7 +1331,7 @@ void AppShell::tick(double dt) {
                 else if (ring_->appsMode()) ring_->showApps(false);
                 else ring_->close();
             }
-        } else if (appOpen) {
+        } else if (appOpen && !browserFirst) {
 #ifdef _WIN32
             const float tanHalf = std::tan(kFovY * 0.5f);
             if (!app_->busy()) pickApp(o, d);
@@ -1353,28 +1505,41 @@ void AppShell::tick(double dt) {
             if (cityMode_) {
                 room_->setHover(nullptr);
                 std::string path, name;
+                std::vector<Vec3> routePath;
                 if (city_ && city_->pick(o, d, path, name)) {
-                    if (pointerSelect || keySelect) {
+                    if ((pointerSelect || keySelect) && !deferred_) {
                         city_->markEntered();
                         city_->clearHover();
-                        room_->load(path);
-                        toggleCity(false);
-                        if (room_->building()) {
-                            camera_.position = {0, 1.6f, 1.6f};
-                            camera_.yaw = 0;
-                            camera_.pitch = 0;
-                            room_->setEye(camera_.position);
-                        } else {
-                            camera_.yaw = kPi + kPi * std::min(1.0f, room_->cardCount() / 14.0f);
-                        }
-                        menu_->setStatus("INSIDE " + name + " - ESC returns to the city");
+                        deferred_ = [this, path, name] {
+                            room_->load(path);
+                            toggleCity(false);
+                            if (room_->building()) {
+                                camera_.position = {0, 1.6f, 1.6f};
+                                camera_.yaw = 0;
+                                camera_.pitch = 0;
+                                room_->setEye(camera_.position);
+                            } else {
+                                camera_.yaw = kPi + kPi * std::min(1.0f, room_->cardCount() / 14.0f);
+                            }
+                            menu_->setStatus("INSIDE " + name + " - ESC returns to the city");
+                        };
+                        deferDelay_ = 3;
                     }
+                } else if (pointerSelect && city_ && !riding_ && city_->pickRoute(o, d, routePath)) {
+                    startRide(routePath);
                 }
             } else {
             if (city_) city_->clearHover();
             Node* hit = pickNode(room_->root(), o, d);
             room_->setHover(hit);
-            if ((pointerSelect || keySelect) && hit) menu_->setStatus(room_->activate(hit));
+            if ((pointerSelect || keySelect) && hit && !deferred_) {
+                if (room_->opensRoom(hit)) {
+                    deferred_ = [this, hit] { menu_->setStatus(room_->activate(hit)); };
+                    deferDelay_ = 3;
+                } else {
+                    menu_->setStatus(room_->activate(hit));
+                }
+            }
             if (back || (in.escape && room_->inRoom())) menu_->setStatus(room_->goUp());
             else if (in.escape) toggleCity(true);
             }
@@ -1384,6 +1549,13 @@ void AppShell::tick(double dt) {
         }
     }
 
+    if (riding_) rideStep(dt);
+    {
+        const bool want = deferred_ || loadingT_ > 0.0f || (cityMode_ && city_ && !city_->built());
+        if (loadingT_ > 0.0f) loadingT_ -= static_cast<float>(dt);
+        loaderA_ += ((want ? 1.0f : 0.0f) - loaderA_) * std::min(1.0f, static_cast<float>(dt) * 8.0f);
+        if (!want && loaderA_ < 0.01f) loaderA_ = 0.0f;
+    }
     time_ += dt;
     fpsAccum_ += dt;
     ++fpsFrames_;
@@ -1533,6 +1705,17 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         appsPanel_->root().renderTree(renderer_);
     }
     if (switcher_->isOpen()) switcher_->render(view, renderer_.aspect(), std::tan(kFovY * 0.5f), vrOn_);
+    if (loaderA_ > 0.01f && loadLabel_) {
+        // White loading ring, modelled on the command ring: segments chase round it so it is clear the shell is working.
+        renderer_.clearDepth();
+        const float dist = 1.2f, dia = 0.34f;
+        const Vec3 at = vrOn_ ? Vec3{0, 0, -dist} : Vec3{0, 0, -dist};
+        const float t = static_cast<float>(time_);
+        renderer_.setTheme({1, 1, 1}, {1, 1, 1});
+        renderer_.drawRing(*loadLabel_, view.rigidInverse() * Mat4::translate(at) * Mat4::scale({dia, dia, 1.0f}), 12,
+                           std::floor(std::fmod(t * 9.0f, 12.0f)), t * 1.2f, loaderA_, 0.5f + 0.5f * std::sin(t * 6.0f));
+        renderer_.setTheme(currentTheme().accent, currentTheme().alt);
+    }
     if (settings_.showFps && fpsLabel_) {
         // Head-locked readout in the top-left of the view.
         renderer_.clearDepth();
