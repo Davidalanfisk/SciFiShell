@@ -693,7 +693,7 @@ void AppShell::rideStep(double dt) {
         dir = {dx / sl, 0, dz / sl};
         if (d <= sl || i + 2 == ridePath_.size()) {
             const float u = std::min(1.0f, d / sl);
-            pos = {a.x + dx * u, 0, a.z + dz * u};
+            pos = {a.x + dx * u, a.y + (b.y - a.y) * u, a.z + dz * u};
             break;
         }
         d -= sl;
@@ -705,7 +705,7 @@ void AppShell::rideStep(double dt) {
     camera_.yaw += dy * k;
     camera_.pitch += (-0.06f - camera_.pitch) * k * 0.5f;
     const float e = std::min(1.0f, rideT_ * 2.0f);
-    camera_.position = {pos.x, rideY0_ + (2.4f - rideY0_) * e, pos.z};
+    camera_.position = {pos.x, rideY0_ + (pos.y + 2.32f - rideY0_) * e, pos.z};
     vy_ = 0.0f;
     flying_ = true;
     if (done) {
@@ -725,24 +725,24 @@ void AppShell::startTour() {
     scriptWait_ = 0;
     script_.push_back("fly on");
     const float deg = 180.0f / kPi;
-    bool first = true;
-    for (const Vec3& p : pts) {
-        Vec3 off{-p.x, 0, -p.z};
-        float l = std::sqrt(off.x * off.x + off.z * off.z);
-        off = l < 1.0f ? Vec3{0, 0, 1} : Vec3{off.x / l, 0, off.z / l};
-        const bool hub = l < 1.0f;
-        const float back = hub ? 70.0f : 85.0f, up = hub ? 45.0f : 55.0f;
-        const Vec3 pos{p.x + off.x * back, up, p.z + off.z * back};
-        const float fx = p.x - pos.x, fz = p.z - pos.z, hd = std::sqrt(fx * fx + fz * fz);
-        const float yaw = std::atan2(-fx, -fz) * deg, pitch = std::atan2(-(up - 8.0f), hd) * deg;
+    // One continuous journey: no pauses, a leg's length sets its time, and the altitude swings between low runs through the
+    // city blocks and high sweeps above them.
+    const float alts[] = {60.0f, 7.0f, 28.0f, 5.0f, 85.0f, 10.0f, 40.0f, 6.0f};
+    const size_t count = pts.size();
+    std::vector<Vec3> way(count);
+    for (size_t i = 0; i < count; ++i) way[i] = {pts[i].x, alts[i % 8], pts[i].z};
+    Vec3 prev = {0, 60.0f, 240.0f};
+    for (size_t i = 0; i < count; ++i) {
+        const Vec3 cur = way[i], nxt = way[(i + 1) % count];
+        const float lx = cur.x - prev.x, lz = cur.z - prev.z, leg = std::sqrt(lx * lx + lz * lz + (cur.y - prev.y) * (cur.y - prev.y));
+        const float fx = nxt.x - cur.x, fz = nxt.z - cur.z, hd = std::max(1.0f, std::sqrt(fx * fx + fz * fz));
+        const float yaw = std::atan2(-fx, -fz) * deg, pitch = std::atan2(nxt.y - cur.y, hd) * deg * 0.6f - 3.0f;
+        const float secs = std::clamp(leg / 38.0f, 3.0f, 9.0f);
         char b[160];
-        std::snprintf(b, sizeof b, "cam %.1f %.1f %.1f %.1f %.1f %.1f", pos.x, pos.y, pos.z, yaw, pitch, first ? 5.0f : 8.0f);
+        std::snprintf(b, sizeof b, "cam %.1f %.1f %.1f %.1f %.1f %.1f", cur.x, cur.y, cur.z, yaw, pitch, secs);
         script_.push_back(b);
-        script_.push_back("wait 2.5");
-        if (std::getenv("SCIFI_TOUR")) script_.push_back("where");
-        first = false;
-    }
-    tourActive_ = true;
+        prev = cur;
+    }    tourActive_ = true;
 }
 
 void AppShell::stopTour() {

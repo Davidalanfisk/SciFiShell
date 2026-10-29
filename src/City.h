@@ -91,6 +91,15 @@ private:
     struct Ramp { float x, z; int dir; int plat; };  // dir: 0 +x, 1 -x, 2 +z, 3 -z (the way the ramp runs away from the slab edge)
     void rampList(std::vector<Ramp>& out) const;
     void gatherBoxes(const Vec3& p, float rad, std::vector<Box>& out) const;
+    // The bus network: every storage route is planned so it never runs under a platform or monument, and where it has to cross
+    // another lane it rides over it on a ramped bridge. Heights are relative to the road surface.
+    struct Piece { float x0, x1, z0, z1, yc, th, f; int plat; };
+    struct NetRoute { int plat; std::vector<Vec3> pts; };  // pts: x, height above road, z
+    void buildNetwork() const;
+    mutable bool netBuilt_ = false;
+    mutable std::vector<NetRoute> net_;
+    mutable std::vector<Piece> pieces_;
+    mutable std::vector<Box> bridgeFloor_;
     int hoverP_ = -1, hoverB_ = -1, hoverT_ = -1;
     bool hasEntered_ = false;
     Vec3 enteredDoor_;
