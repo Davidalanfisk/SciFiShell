@@ -9,7 +9,7 @@
 
 namespace sf {
 
-enum class Tool { Browser = 0, Files, Editor, Media, Settings, Theme, Apps, Power };
+enum class Tool { Browser = 0, Files, Editor, Media, Settings, Theme, Apps, Power, Monitor, FileBrowser, Terminal };
 
 class ToolRing {
 public:
@@ -39,6 +39,7 @@ public:
     bool appsMode() const { return appsMode_; }
     bool appHot() const { return appsMode_ && appHot_; }  // the pointer is over the outer ring
     int appSelected() const { return appSel_; }
+    int appCount() const { return static_cast<int>(sets_[level_].names.size()); }
 
     static constexpr int kCount = 5;  // Files, Settings, Theme, Apps, Power
 

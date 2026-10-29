@@ -390,6 +390,24 @@ bool CodeEditor::save() {
     return true;
 }
 
+bool CodeEditor::saveAs(const std::string& path) {
+    if (readOnly_) return false;
+    const std::string old = path_;
+    path_ = path;
+    if (!save()) {
+        path_ = old;
+        return false;
+    }
+    std::string ext = fs::u8path(path).extension().string();
+    if (!ext.empty()) ext.erase(0, 1);
+    for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    langId_ = findLang(ext);
+    language_ = langId_ >= 0 ? kLangs[langId_].name : "Plain text";
+    statesDirty_ = true;
+    touch();
+    return true;
+}
+
 int CodeEditor::cursorColumn() const { return dispColOf(lines_[curLine_], static_cast<size_t>(curCol_)); }
 
 void CodeEditor::clampCursor() {

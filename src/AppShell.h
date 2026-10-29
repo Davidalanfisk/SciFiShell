@@ -17,6 +17,10 @@
 #include "AppCatalog.h"
 #endif
 #include "SettingsHub.h"
+#include "SysMonitor.h"
+#include "Terminal.h"
+#include "FileBrowser.h"
+#include "TextEditor.h"
 #include "SettingsPanel.h"
 #include "TaskSwitcher.h"
 #include "ToolRing.h"
@@ -112,6 +116,14 @@ private:
     std::unique_ptr<ToolRing> ring_;
     std::unique_ptr<TaskSwitcher> switcher_;
     std::unique_ptr<SettingsHub> settingsPanel_;
+    std::unique_ptr<SysMonitor> monitor_;
+    std::unique_ptr<Terminal> terminal_;
+    std::unique_ptr<FileBrowser> files2d_;
+    std::unique_ptr<TextEditor> editor2d_;
+    bool faceWasOpen_ = false;
+    float faceT_ = 0;  // seconds left of the gentle turn that squares the camera up to a freshly opened window
+    PanelApp* panel_ = nullptr;  // the open floating app panel (only one at a time)
+    void openPanel(PanelApp* p);
     std::unique_ptr<SettingsPanel> appsPanel_;
 #ifdef _WIN32
     std::vector<std::unique_ptr<AppWindow>> apps_;  // one per catalog entry, created on first launch

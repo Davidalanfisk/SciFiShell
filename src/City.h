@@ -29,6 +29,9 @@ public:
     float floorAt(const Vec3& p, float radius, float eyeH) const;
     // Ray pick over the towers; sets the hover highlight. Returns false when nothing is hit.
     bool pick(Vec3 origin, Vec3 dir, std::string& path, std::string& name);
+    // Click a hardware monument: 0 = CPU, 1 = RAM, 2 = GPU, -1 = none. Independent of the building geometry.
+    int pickMonument(Vec3 origin, Vec3 dir) const;
+    const SystemStats& sysStats() const { return data_.stats(); }
     // Click a bus lane: fills the points of the ride to the far end of that route.
     bool pickRoute(Vec3 origin, Vec3 dir, std::vector<Vec3>& path) const;
     void routes(std::vector<std::vector<Vec3>>& out) const;

@@ -119,6 +119,53 @@ bool AppShell::init() {
     switcher_ = std::make_unique<TaskSwitcher>(renderer_);
     settings_.load();
     settingsPanel_ = std::make_unique<SettingsHub>(renderer_);
+    monitor_ = std::make_unique<SysMonitor>(renderer_, [this] { return city_ ? city_->sysStats() : SystemStats{}; });
+    terminal_ = std::make_unique<Terminal>(renderer_);
+    editor2d_ = std::make_unique<TextEditor>(renderer_);
+    editor2d_->requestOpen = [this] {
+        openPanel(files2d_.get());
+        files2d_->pickHandler = [this](const std::string& path) {
+            openPanel(editor2d_.get());
+            editor2d_->openPath(path);
+        };
+    };
+    files2d_ = std::make_unique<FileBrowser>(renderer_);
+    files2d_->openFile = [this](const std::string& path) {
+        namespace fs = std::filesystem;
+        const FileKind k = classifyFile(path, false);
+        if (k == FileKind::Other) {
+            ShellExecuteW(nullptr, L"open", fs::u8path(path).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            return;
+        }
+        OpenRequest req;
+        req.path = path;
+        req.name = fs::u8path(path).filename().u8string();
+        req.kind = k;
+        const Vec3 f = camera_.forward();
+        req.cardPos = camera_.position + f * 2.0f;
+        req.cardYaw = camera_.yaw;
+        if (panel_) { panel_->close(); panel_ = nullptr; }
+        viewer_->open(req, head_);
+    };
+    files2d_->openRoom = [this](const std::string& folder) {
+        if (deferred_) return;
+        if (panel_) { panel_->close(); panel_ = nullptr; }
+        if (city_) { city_->markEntered(); city_->clearHover(); }
+        deferred_ = [this, folder] {
+            room_->load(folder);
+            if (cityMode_) toggleCity(false);
+            if (room_->building()) {
+                camera_.position = {0, 1.6f, 1.6f};
+                camera_.yaw = 0;
+                camera_.pitch = 0;
+                room_->setEye(camera_.position);
+            } else {
+                camera_.yaw = kPi + kPi * std::min(1.0f, room_->cardCount() / 14.0f);
+            }
+            menu_->setStatus("INSIDE " + folder);
+        };
+        deferDelay_ = 3;
+    };
 #ifdef _WIN32
     {
         SDL_SysWMinfo wm;
@@ -163,7 +210,7 @@ bool AppShell::init() {
 #endif
         if (std::getenv("SCIFI_OPEN_SETTINGS")) settingsPanel_->open(head_.eye, head_.forward);  // debugging aid
         if (std::getenv("SCIFI_OPEN_APPS")) { ring_->open(head_.eye, head_.forward); runTool(Tool::Apps); if (const char* l = std::getenv("SCIFI_OPEN_APPS")) if (l[0] == '2') ring_->enterLevel(1); }  // debugging aid
-        if (!std::getenv("SCIFI_START_ROOM") && !std::getenv("SCIFI_START_PATH")) toggleCity(true);  // the city is the home view
+        if (!std::getenv("SCIFI_START_ROOM") && !std::getenv("SCIFI_START_PATH") && !std::getenv("SCIFI_NO_CITY")) toggleCity(true);  // SCIFI_NO_CITY: skip the city build when testing UI  // the city is the home view
 #ifdef _WIN32
         if (const char* oa = std::getenv("SCIFI_OPEN_APP")) launchApp(std::max(0, std::atoi(oa) - 1));  // debugging aid: 1 = Notepad, 2 = next catalog entry...
 #endif
@@ -385,6 +432,14 @@ void AppShell::saveScreenshot() {
 #endif
 }
 
+void AppShell::openPanel(PanelApp* p) {
+    if (panel_ && panel_ != p) panel_->close();
+    panel_ = p;
+    ring_->close();
+    const bool vr = vrOn_;
+    p->open(vr ? head_.eye : camera_.position, vr ? head_.forward : camera_.forward());
+}
+
 void AppShell::runTool(Tool tool) {
     ring_->pulse();
     switch (tool) {
@@ -406,26 +461,26 @@ void AppShell::runTool(Tool tool) {
                 menu_->setStatus("This PC");
             }
             break;
-        case Tool::Editor:
-            if (cityMode_) toggleCity(false);
-            menu_->setStatus(room_->openFirst(true));
-            break;
+        case Tool::Editor: openPanel(editor2d_.get()); break;
+        case Tool::Monitor: openPanel(monitor_.get()); break;
+        case Tool::FileBrowser: openPanel(files2d_.get()); break;
+        case Tool::Terminal: openPanel(terminal_.get()); break;
         case Tool::Media:
             buildSettingsHub();
             settingsPanel_->open(vrOn_ ? head_.eye : camera_.position,
-                                 vrOn_ ? head_.forward : Vec3{-std::sin(camera_.yaw), 0.0f, -std::cos(camera_.yaw)});
+                                 vrOn_ ? head_.forward : camera_.forward());
             settingsPanel_->openPage("MEDIA PLAYER");
             break;
         case Tool::Settings:
             buildSettingsHub();
             settingsPanel_->open(vrOn_ ? head_.eye : camera_.position,
-                                 vrOn_ ? head_.forward : Vec3{-std::sin(camera_.yaw), 0.0f, -std::cos(camera_.yaw)});
+                                 vrOn_ ? head_.forward : camera_.forward());
             break;
         case Tool::Power:
             powerArmed_ = 0;
             buildSettingsHub();
             settingsPanel_->open(vrOn_ ? head_.eye : camera_.position,
-                                 vrOn_ ? head_.forward : Vec3{-std::sin(camera_.yaw), 0.0f, -std::cos(camera_.yaw)});
+                                 vrOn_ ? head_.forward : camera_.forward());
             settingsPanel_->openPage("POWER");
             break;
         case Tool::Theme: cycleTheme(); break;
@@ -444,7 +499,7 @@ void AppShell::runTool(Tool tool) {
                     icons.push_back(std::move(bm));
                 }
                 ring_->setLevel(1, names, icons, true);
-                std::vector<std::string> top = {"WEB", "MEDIA", "WINDOWS APPS"};
+                std::vector<std::string> top = {"WEB", "MEDIA", "SYSTEM MONITOR", "FILE BROWSER", "EDITOR", "TERMINAL", "WINDOWS APPS"};
                 auto topLabel = [](const std::string& n) {
                     const size_t sp = n.find(' ');
                     Bitmap bm;
@@ -568,6 +623,14 @@ bool AppShell::scriptExec(const std::string& line) {
         if (v == "files") runTool(Tool::Files);
         else if (v == "settings") runTool(Tool::Settings);
         else if (v == "theme") runTool(Tool::Theme);
+        else if (v == "monitor") runTool(Tool::Monitor);
+        else if (v == "terminal") runTool(Tool::Terminal);
+        else if (v == "files2d") runTool(Tool::FileBrowser);
+        else if (v == "editor") runTool(Tool::Editor);
+        else if (v == "edtype") { std::string s; std::getline(is >> std::ws, s); editor2d_->text(s); }
+        else if (v == "edkey") { editor2d_->key(EditKey::Enter); }
+        else if (v == "edsave") { editor2d_->key(EditKey::Save); }
+        else if (v == "termtype") { std::string s; std::getline(is >> std::ws, s); terminal_->text(s + "\r"); }
         else if (v == "media") runTool(Tool::Media);
         else if (v == "page") { std::string pg; std::getline(is >> std::ws, pg); settingsPanel_->openPage(pg); }
         else if (v == "mediafolder") { std::string p; std::getline(is >> std::ws, p); mediaCategories(); mediaLib_->addFolder(p); }
@@ -1077,6 +1140,8 @@ void AppShell::tick(double dt) {
     const bool appTyping = false;
 #endif
     FrameInput in = input_.poll();
+    const bool panelOpen = panel_ && panel_->isOpen();
+    const bool panelTyping = panelOpen && !kbOff && panel_->wantsText();
     PadState pad = pad_.poll();
     if (in.quit) running_ = false;
     if (in.resized) renderer_.resize();
@@ -1098,13 +1163,13 @@ void AppShell::tick(double dt) {
     }
     if (renaming_ && !settingsPanel_->isOpen()) renaming_ = false;
     const bool vEditing = viewer_->editing() && !kbOff;
-    if (in.toggleVR && !vEditing && !browserTyping && !appTyping) toggleVR();
-    input_.setTextInput(vEditing || browserTyping || appTyping || renaming_);
+    if (in.toggleVR && !vEditing && !browserTyping && !appTyping && !panelTyping) toggleVR();
+    input_.setTextInput(vEditing || browserTyping || appTyping || panelTyping || renaming_);
     if (renaming_) in.fullscreen = in.browser = in.toggleVR = in.space = in.up = in.down = in.left = in.right = in.back = false;
 
     const float fdt = static_cast<float>(dt);
     // Typing only captures the keyboard when a text field (page or address bar) has focus, so WASD walks otherwise.
-    const bool typing = vEditing || browserTyping || appTyping || renaming_;
+    const bool typing = vEditing || browserTyping || appTyping || panelTyping || renaming_;
     // While typing, WASD belong to the text field; hold Alt to walk with the keyboard anyway (pad / VR sticks always walk).
     const bool kbMove = !typing || (SDL_GetModState() & KMOD_ALT) != 0;
     float kbX = kbMove ? in.moveX : 0.0f, kbY = kbMove ? in.moveY : 0.0f, kbZ = kbMove ? in.moveZ : 0.0f;
@@ -1125,6 +1190,28 @@ void AppShell::tick(double dt) {
     if (in.screenshot) shotPending_ = true;
     const bool ringWasOpen = ring_->isOpen();
     {
+        // A window that has just opened: ease the view round to face it, then leave the camera locked where it is.
+        PanelApp* wp = panel_ && panel_->isOpen() ? panel_ : nullptr;
+        const bool winOpen = wp || settingsPanel_->isOpen();
+        if (winOpen && !faceWasOpen_) faceT_ = 1.3f;
+        faceWasOpen_ = winOpen;
+        const bool userMoving = in.moveX != 0 || in.moveY != 0 || in.moveZ != 0 || std::fabs(pad.rx) + std::fabs(pad.ry) > 0.2f;
+        if (!winOpen || vrOn_ || riding_ || userMoving) faceT_ = 0;
+        if (faceT_ > 0) {
+            faceT_ -= static_cast<float>(dt);
+            Vec3 c, n;
+            float bw, bh;
+            if (wp ? wp->bounds(c, n, bw, bh) : settingsPanel_->bounds(c, n, bw, bh)) {
+                const Vec3 d = c - camera_.position;
+                const float ty = std::atan2(-d.x, -d.z), tp = std::atan2(d.y, std::sqrt(d.x * d.x + d.z * d.z));
+                float dy = std::fmod(ty - camera_.yaw + 3.0f * kPi, 2.0f * kPi) - kPi;
+                const float k = 1.0f - std::exp(-static_cast<float>(dt) * 4.0f);
+                camera_.yaw += dy * k;
+                camera_.pitch += (tp - camera_.pitch) * k;
+            }
+        }
+    }
+    {
         const bool anyInput = in.moveX != 0 || in.moveY != 0 || in.moveZ != 0 || in.lookX != 0 || in.lookY != 0 || in.click || in.clickUp ||
                               in.wheel != 0 || in.escape || in.select || in.back || in.up || in.down || in.left || in.right || in.space ||
                               in.ring || in.browser || in.tabStep != 0 || !in.keys.empty() || !in.text.empty() || in.toggleVR ||
@@ -1138,7 +1225,7 @@ void AppShell::tick(double dt) {
         } else {
             idleT_ += dt;
         }
-        const bool busy = ring_->isOpen() || settingsPanel_->isOpen() || appsPanel_->isOpen() || appOpen || browserOpen || viewer_->active() ||
+        const bool busy = ring_->isOpen() || settingsPanel_->isOpen() || panelOpen || appsPanel_->isOpen() || appOpen || browserOpen || viewer_->active() ||
                           deferred_ || riding_ || vrOn_;
         if (tourActive_ && (!cityMode_ || busy)) stopTour();
         if (tourAllowed && !tourActive_ && idleT_ > 10.0 && cityMode_ && city_ && city_->built() && !busy && script_.empty() && !mv_.on) startTour();
@@ -1149,7 +1236,7 @@ void AppShell::tick(double dt) {
             if (rideT_ < 0.7f) lookX = lookY = 0.0f;
         }
     }
-    if (state_ == State::FileRoom && !viewer_->editing() && !ringWasOpen && !settingsPanel_->isOpen() && !appsPanel_->isOpen() && !viewer_->overlay() && ringToggle) {
+    if (state_ == State::FileRoom && !viewer_->editing() && !ringWasOpen && !settingsPanel_->isOpen() && !panelOpen && !appsPanel_->isOpen() && !viewer_->overlay() && ringToggle) {
         // Desktop: use the live camera (head_ lags a frame); VR: the headset pose captured at render time.
         if (vrOn_) ring_->open(head_.eye, head_.forward);
         else ring_->open(camera_.position, Vec3{-std::sin(camera_.yaw), 0.0f, -std::cos(camera_.yaw)});
@@ -1177,7 +1264,7 @@ void AppShell::tick(double dt) {
         // Desktop windows behave like fixed windows: while the aim is over one, the view and walking freeze and the mouse
         // moves a cursor. Moving off it hands control back to the camera, which eases round to where the cursor was.
         const bool windowed = !vrOn_ && !appsPanel_->isOpen() && !ring_->isOpen() &&
-                              ((settingsPanel_->isOpen() && !settingsPanel_->fullscreen()) || (appOpen && !app_->fullscreen()) || (browserOpen && !browserFs) ||
+                              ((settingsPanel_->isOpen() && !settingsPanel_->fullscreen()) || (panelOpen && !panel_->fullscreen()) || (appOpen && !app_->fullscreen()) || (browserOpen && !browserFs) ||
                                (!appOpen && !browserOpen && viewer_->active() && !viewer_->overlay()));
         if (!windowed) {
             winFocus_ = false;
@@ -1202,6 +1289,7 @@ void AppShell::tick(double dt) {
 #endif
                 if (viewer_->hits(oo, dd)) h = true;
                 if (settingsPanel_->isOpen() && settingsPanel_->hitDistance(oo, dd) >= 0) h = true;
+                if (panelOpen && panel_->hitDistance(oo, dd) >= 0) h = true;
                 return h;
             };
             auto winBounds = [&](const Vec3& oo, const Vec3& dd, Vec3& c, Vec3& n, float& w, float& h) {
@@ -1212,6 +1300,7 @@ void AppShell::tick(double dt) {
                 if (browserOpen && browser_->hitDistance(oo, dd) >= 0 && browser_->bounds(c, n, w, h)) return true;
 #endif
                 if (viewer_->hits(oo, dd) && viewer_->bounds(c, n, w, h)) return true;
+                if (panelOpen && panel_->hitDistance(oo, dd) >= 0 && panel_->bounds(c, n, w, h)) return true;
                 return settingsPanel_->isOpen() && settingsPanel_->hitDistance(oo, dd) >= 0 && settingsPanel_->bounds(c, n, w, h);
             };
             bool dragging = viewer_->dragging();
@@ -1323,6 +1412,34 @@ void AppShell::tick(double dt) {
                 if (!appsPanel_->activateHit(o, d)) appsPanel_->activateSelected();
             } else if (keySelect) appsPanel_->activateSelected();
             else if (back || in.escape || ringToggle) appsPanel_->close();
+        } else if (panelOpen) {
+            // Floating app panel (system monitor, files, terminal): movement frozen, cursor drives it like a window.
+            const float stan = std::tan(kFovY * 0.5f);
+            if (vrOn_ && panel_->fullscreen()) panel_->toggleFullscreen();
+            panel_->setView(stan, renderer_.aspect());
+            if (panel_->fullscreen()) {
+                int ww = 1, wh = 1;
+                SDL_GetWindowSize(window_, &ww, &wh);
+                updateCamera(dt, 0, 0, 0, 0, 0);
+                cursorX_ = clampf(cursorX_ + in.lookX * 2.0f / std::max(ww, 1) + pad.rx * 1.5f * fdt, -1.0f, 1.0f);
+                cursorY_ = clampf(cursorY_ - in.lookY * 2.0f / std::max(wh, 1) - pad.ry * 1.5f * fdt, -1.0f, 1.0f);
+                o = {0, 0, 0};
+                d = normalize({cursorX_ * stan * renderer_.aspect(), cursorY_ * stan, -1.0f});
+            } else {
+                updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed);
+            }
+            room_->setHover(nullptr);
+            panel_->pointer(o, d);
+            if (in.wheel != 0.0f) panel_->wheel(in.wheel);
+            if (panelTyping) {
+                for (EditKey k : in.keys) panel_->key(k);
+                if (!in.text.empty()) panel_->text(in.text);
+            }
+            if (pointerSelect) panel_->click(o, d);
+            else if (in.escape || back || ringToggle) {
+                if (panelTyping && in.escape && !ringToggle && !back) panel_->ctrl("esc");
+                else if (!panel_->back()) panel_->close();
+            }
         } else if (settingsPanel_->isOpen()) {
             // Settings panel: movement frozen, aim at a row and click / A / trigger to change it.
             const float stan = std::tan(kFovY * 0.5f);
@@ -1382,8 +1499,14 @@ void AppShell::tick(double dt) {
             if (ring_->appsMode() && (pointerSelect || keySelect) && (ring_->appHot() || keySelect)) {
                 const int idx = ring_->appSelected();
                 if (ring_->appLevel() == 0) {
-                    if (idx == 2) ring_->enterLevel(1);
-                    else runTool(idx == 0 ? Tool::Browser : Tool::Media);
+                    const int nTop = ring_->appCount();
+                    if (idx == nTop - 1) ring_->enterLevel(1);
+                    else if (idx == 0) runTool(Tool::Browser);
+                    else if (idx == 1) runTool(Tool::Media);
+                    else if (idx == 2) runTool(Tool::Monitor);
+                    else if (idx == 3) runTool(Tool::FileBrowser);
+                    else if (idx == 4) runTool(Tool::Editor);
+                    else if (idx == 5) runTool(Tool::Terminal);
                 } else {
                     ring_->close();
 #ifdef _WIN32
@@ -1591,6 +1714,9 @@ void AppShell::tick(double dt) {
                         };
                         deferDelay_ = 3;
                     }
+                } else if (city_ && (pointerSelect || keySelect) && !riding_ && city_->pickMonument(o, d) >= 0) {
+                    monitor_->setFocus(city_->pickMonument(o, d));
+                    openPanel(monitor_.get());
                 } else if (pointerSelect && city_ && !riding_ && city_->pickRoute(o, d, routePath)) {
                     startRide(routePath);
                 }
@@ -1640,6 +1766,10 @@ void AppShell::tick(double dt) {
         room_->setAccent(th.accent);
         ring_->update(dt, time_);
         settingsPanel_->update(dt, time_);
+        monitor_->update(dt);
+        terminal_->update(dt);
+        files2d_->update(dt);
+        editor2d_->update(dt);
         appsPanel_->update(dt, time_);
     }
     scriptTick(dt);
@@ -1714,6 +1844,17 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         return;
     }
 #endif
+    if (state_ == State::FileRoom && desktopPass && !vrOn_ && panel_ && panel_->isOpen() && panel_->fullscreen()) {
+        renderer_.setView(Mat4::identity(), proj);
+        renderer_.clearDepth();
+        panel_->render();
+        if (crosshair_) {
+            const float t = std::tan(kFovY * 0.5f), dist = 0.9f;
+            Vec3 p{cursorX_ * t * renderer_.aspect() * dist, cursorY_ * t * dist, -dist};
+            renderer_.drawPointer(*crosshair_, pointerMatrix(p, {0, 0, -1}, {0, 1, 0}, 0.1f), currentTheme().accent);
+        }
+        return;
+    }
     if (state_ == State::FileRoom && desktopPass && !vrOn_ && settingsPanel_->isOpen() && settingsPanel_->fullscreen()) {
         renderer_.setView(Mat4::identity(), proj);
         renderer_.clearDepth();
@@ -1775,6 +1916,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         ring_->render(renderer_);
     }
     if (state_ == State::FileRoom && settingsPanel_->isOpen()) settingsPanel_->render();
+    if (state_ == State::FileRoom && panel_ && panel_->isOpen()) panel_->render();
     if (state_ == State::FileRoom && appsPanel_->isOpen()) {
         renderer_.clearDepth();
         appsPanel_->root().renderTree(renderer_);
@@ -1975,7 +2117,7 @@ void AppShell::openFileRoom(const DirEntry& entry) {
     cats.push_back(std::move(cat));
     settingsPanel_->setCategories(std::move(cats));
     settingsPanel_->open(vrOn_ ? head_.eye : camera_.position,
-                         vrOn_ ? head_.forward : Vec3{-std::sin(camera_.yaw), 0.0f, -std::cos(camera_.yaw)});
+                         vrOn_ ? head_.forward : camera_.forward());
     settingsPanel_->openPage("FILE");
 }
 

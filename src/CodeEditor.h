@@ -15,6 +15,8 @@ public:
 
     bool load(const std::string& path);  // false when the file cannot be read
     bool save();                         // false when read-only or the write failed
+    bool saveAs(const std::string& path);  // adopts the path, then saves
+    const std::string& path() const { return path_; }
     void clear();
 
     bool dirty() const { return dirty_; }

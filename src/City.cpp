@@ -965,6 +965,37 @@ void City::drawSlope(Renderer& r, Vec3 a, Vec3 b, float width, float th, Vec3 ne
     const Mat4 w = Mat4::translate(c) * Mat4::rotateY(std::atan2(dx, dz)) * Mat4::rotateX(-std::atan2(dy, hl)) * Mat4::scale({width, th, len});
     r.drawBuilding(*dummy_, w, neon, seed, kind, emerge, 0.0f, 0.0f);
 }
+int City::pickMonument(Vec3 o, Vec3 d) const {
+    std::vector<Box> boxes;
+    monumentBoxes(boxes);
+    int best = -1;
+    float bestT = 1e30f;
+    for (const Box& b : boxes) {
+        const float cx = (b.x0 + b.x1) * 0.5f, cz = (b.z0 + b.z1) * 0.5f;
+        int id = cz < -20 ? 0 : (cx < -20 ? 1 : (cx > 20 ? 2 : -1));
+        if (id < 0) continue;
+        const float lo[3] = {b.x0, 0.0f, b.z0}, hi[3] = {b.x1, b.y1, b.z1};
+        const float org[3] = {o.x, o.y, o.z}, dr[3] = {d.x, d.y, d.z};
+        float t0 = 0, t1 = 1e30f;
+        bool ok = true;
+        for (int i = 0; i < 3 && ok; ++i) {
+            if (std::fabs(dr[i]) < 1e-6f) {
+                if (org[i] < lo[i] || org[i] > hi[i]) ok = false;
+            } else {
+                float a = (lo[i] - org[i]) / dr[i], c = (hi[i] - org[i]) / dr[i];
+                if (a > c) std::swap(a, c);
+                t0 = std::max(t0, a);
+                t1 = std::min(t1, c);
+                if (t0 > t1) ok = false;
+            }
+        }
+        if (ok && t0 < bestT) {
+            bestT = t0;
+            best = id;
+        }
+    }
+    return best;
+}
 void City::monumentBoxes(std::vector<Box>& out) const {
     const SystemStats& s = data_.stats();
     auto add = [&](float cx, float cz, float hx, float hz, float top) { out.push_back({cx - hx, cx + hx, top, cz - hz, cz + hz}); };

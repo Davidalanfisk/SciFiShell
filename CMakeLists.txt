@@ -57,6 +57,12 @@ set(SOURCES
     src/Settings.cpp
     src/SettingsPanel.cpp
     src/SettingsHub.cpp
+    src/UiKit.cpp
+    src/PanelApp.cpp
+    src/SysMonitor.cpp
+    src/Terminal.cpp
+    src/FileBrowser.cpp
+    src/TextEditor.cpp
     src/ToolRing.cpp
     src/FileRoom.cpp
     src/InputSystem.cpp
@@ -123,7 +129,7 @@ target_link_libraries(SciFiShell PRIVATE
 
 if(WIN32)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineD3D12-static xinput d3d12 dxgi pdh
-                          mfplat mfreadwrite mfuuid propsys ole32 oleaut32 iphlpapi powrprof ws2_32)
+                          mfplat mfreadwrite mfuuid propsys ole32 oleaut32 iphlpapi powrprof ws2_32 psapi)
 elseif(APPLE)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineMetal-static)
 else()

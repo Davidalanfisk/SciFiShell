@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <cmath>
 
+#include <cstdio>
+
 #include "TextRender.h"
+#include "UiKit.h"
 #include "Theme.h"
 
 namespace sf {
@@ -44,8 +47,8 @@ void SettingsHub::open(Vec3 eye, Vec3 forward) {
     if (length(f) < 0.25f) f = fallbackFlat_;
     f = normalize(f);
     fallbackFlat_ = f;
-    Vec3 c = eye + f * kDist;
-    c.y = eye.y;
+    Vec3 c = length(forward) < 0.5f ? eye + f * kDist : eye + normalize(forward) * kDist;
+    c.y = std::max(c.y, eye.y - 1.0f);
     base_ = Mat4::translate(c) * Mat4::rotateY(std::atan2(-f.x, -f.z));
     page_ = -1;
     sel_ = homeSel_ = 0;
@@ -67,50 +70,25 @@ std::string SettingsHub::signature() const {
 }
 
 void SettingsHub::rebuild() {
-    const Theme& th = currentTheme();
-    const Color8 acc = toColor8(th.accent), alt = toColor8(th.alt);
-    const Color8 white{238, 242, 250, 255}, grey{140, 153, 184, 255};
     Bitmap bm;
     bm.w = kW;
     bm.h = kH;
     bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 0);
     rects_.clear();
-    fillRoundRect(bm, 0, 0, kW, kH, 0, Color8{10, 14, 26, 240});
-
+    const ui::Tokens tk = ui::tokens();
     const bool home = page_ < 0 || page_ >= static_cast<int>(cats_.size());
     const std::string title = home ? "SETTINGS" : cats_[static_cast<size_t>(page_)].name;
-    drawText(bm, kPad + 8, 82, title, 54, FontFace::UIBold, acc);
     const std::string sub = home ? "SHELL PREFERENCES  +  WINDOWS CONTROL PANEL" : cats_[static_cast<size_t>(page_)].subtitle;
-    drawText(bm, kW - kPad - 8 - measureText(sub, 24, FontFace::UI), 98, sub, 24, FontFace::UI, grey);
-    fillRoundRect(bm, kPad, 108, kW - kPad, 112, 2, toColor8(th.accent, 120));
+    ui::panel(bm, title, "");
+    drawText(bm, kW - kPad - 8 - measureText(sub, 24, FontFace::UI) - 240, 56, sub, 24, FontFace::UI, tk.dim);
     {
-        closeRect_ = {kW - 116.0f, 12, kW - 16.0f, 68};
-        fsRect_ = {kW - 232.0f, 12, kW - 132.0f, 68};
-        const bool hf = hoverBtn_ == 1, hc = hoverBtn_ == 2;
-        if (hf) fillRoundRect(bm, fsRect_.x0, fsRect_.y0, fsRect_.x1, fsRect_.y1, 16, Color8{40, 56, 92, 255});
-        if (hc) fillRoundRect(bm, closeRect_.x0, closeRect_.y0, closeRect_.x1, closeRect_.y1, 16, Color8{200, 60, 70, 255});
-        const Color8 fc = hf ? white : grey, xc = hc ? white : grey;
-        auto line = [&](float x0, float y0, float x1, float y1, Color8 c) {
-            const float len = std::max(std::fabs(x1 - x0), std::fabs(y1 - y0));
-            for (float s = 0; s <= len; s += 0.5f) {
-                const float x = x0 + (x1 - x0) * s / len, y = y0 + (y1 - y0) * s / len;
-                fillRoundRect(bm, x - 2, y - 2, x + 2, y + 2, 2, c);
-            }
-        };
-        const float fx = (fsRect_.x0 + fsRect_.x1) * 0.5f, cy = 40;
-        const float a = fullscreen_ ? 9.0f : 16.0f, b = fullscreen_ ? 14.0f : 11.0f;
-        line(fx - a, cy - b, fx + a, cy - b, fc);
-        line(fx - a, cy + b, fx + a, cy + b, fc);
-        line(fx - a, cy - b, fx - a, cy + b, fc);
-        line(fx + a, cy - b, fx + a, cy + b, fc);
-        const float mx = (closeRect_.x0 + closeRect_.x1) * 0.5f;
-        line(mx - 14, cy - 14, mx + 14, cy + 14, xc);
-        line(mx - 14, cy + 14, mx + 14, cy - 14, xc);
+        ui::Rect fs, cl;
+        ui::windowButtons(bm, kW, hoverBtn_, fs, cl);
+        fsRect_ = {fs.x0, fs.y0, fs.x1, fs.y1};
+        closeRect_ = {cl.x0, cl.y0, cl.x1, cl.y1};
     }
-
-    auto card = [&](const Rect& r, bool sel, float radius) {
-        if (sel) fillRoundRect(bm, r.x0 - 4, r.y0 - 4, r.x1 + 4, r.y1 + 4, radius + 4, acc);
-        fillRoundRect(bm, r.x0, r.y0, r.x1, r.y1, radius, sel ? Color8{34, 48, 78, 255} : Color8{22, 30, 50, 255});
+    auto card = [&](const Rect& r, bool sel) {
+        ui::card(bm, ui::Rect{r.x0, r.y0, r.x1, r.y1}, sel ? ui::State::Selected : ui::State::Normal);
     };
 
     if (home) {
@@ -121,21 +99,28 @@ void SettingsHub::rebuild() {
             const float x = kPad + (i % kCols) * (cw + kGap), y = static_cast<float>(kHomeTop + (i / kCols) * (kHomeCardH + kGap));
             const Rect r{x, y, x + cw, y + kHomeCardH};
             rects_.push_back(r);
-            card(r, i == sel_, 26);
-            drawText(bm, x + 28, y + 52, c.tag, 20, FontFace::UIBold, c.tag == "SHELL" ? acc : alt);
-            drawText(bm, x + 28, y + 126, ellipsize(c.name, 38, FontFace::UIBold, cw - 56), 38, FontFace::UIBold, white);
-            float ty = y + 168;
+            const bool sel = i == sel_;
+            card(r, sel);
+            char num[8];
+            std::snprintf(num, sizeof num, "%02d", i + 1);
+            const Color8 tagCol = c.tag == "SHELL" ? tk.accent : tk.alt;
+            drawText(bm, x + 28, y + 56, num, 34, FontFace::Mono, ui::withAlpha(tagCol, 200));
+            ui::labelRight(bm, x + cw - 28, y + 52, c.tag, 20, FontFace::UIBold, tagCol);
+            drawText(bm, x + 28, y + 128, ellipsize(c.name, 38, FontFace::UIBold, cw - 56), 38, FontFace::UIBold, tk.text);
+            float ty = y + 166;
             for (const std::string& line : wrapText(c.subtitle, 22, FontFace::UI, cw - 56, 2)) {
-                drawText(bm, x + 28, ty, line, 22, FontFace::UI, grey);
+                drawText(bm, x + 28, ty, line, 22, FontFace::UI, tk.dim);
                 ty += 28;
             }
+            ui::line(bm, x + 20, y + kHomeCardH - 38, x + cw - 20, y + kHomeCardH - 38, 1, ui::withAlpha(tk.border, 160));
+            drawText(bm, x + 28, y + kHomeCardH - 12, "OPEN MODULE", 18, FontFace::UIBold, sel ? tk.accent : tk.muted);
+            drawText(bm, x + cw - 44, y + kHomeCardH - 12, ">", 20, FontFace::UIBold, sel ? tk.accent : tk.muted);
         }
     } else {
         const SettingsCategory& c = cats_[static_cast<size_t>(page_)];
         const Rect br{kPad, 132, kPad + 260, 212};
         rects_.push_back(br);
-        card(br, sel_ == 0, 22);
-        drawText(bm, br.x0 + (260 - measureText("< BACK", 32, FontFace::UIBold)) * 0.5f, 186, "< BACK", 32, FontFace::UIBold, white);
+        ui::button(bm, ui::Rect{br.x0, br.y0, br.x1, br.y1}, "< BACK", sel_ == 0 ? ui::State::Selected : ui::State::Normal, false, 30);
         const float cw = static_cast<float>(kW - 2 * kPad - kGap) / 2;
         const int n = std::min(static_cast<int>(c.items.size()), kMaxItems);
         for (int i = 0; i < n; ++i) {
@@ -143,14 +128,14 @@ void SettingsHub::rebuild() {
             const float x = kPad + (i % 2) * (cw + kGap), y = static_cast<float>(kListTop + (i / 2) * (kRowH + kRowGap));
             const Rect r{x, y, x + cw, y + kRowH};
             rects_.push_back(r);
-            card(r, sel_ == i + 1, 20);
+            card(r, sel_ == i + 1);
             const std::string val = static_cast<size_t>(i) < vals_.size() ? vals_[static_cast<size_t>(i)] : std::string();
             const float vw = val.empty() ? 0.0f : std::min(measureText(val, 30, FontFace::UIBold), cw * 0.45f);
-            drawText(bm, x + 28, y + 42, ellipsize(it.title, 30, FontFace::UIBold, cw - 70 - vw), 30, FontFace::UIBold, white);
-            if (!it.hint.empty()) drawText(bm, x + 28, y + 76, ellipsize(it.hint, 20, FontFace::UI, cw - 70 - vw), 20, FontFace::UI, grey);
+            drawText(bm, x + 28, y + 42, ellipsize(it.title, 30, FontFace::UIBold, cw - 70 - vw), 30, FontFace::UIBold, tk.text);
+            if (!it.hint.empty()) drawText(bm, x + 28, y + 76, ellipsize(it.hint, 20, FontFace::UI, cw - 70 - vw), 20, FontFace::UI, tk.dim);
             if (!val.empty()) {
                 const std::string v = ellipsize(val, 30, FontFace::UIBold, vw);
-                drawText(bm, x + cw - 28 - measureText(v, 30, FontFace::UIBold), y + 60, v, 30, FontFace::UIBold, acc);
+                drawText(bm, x + cw - 28 - measureText(v, 30, FontFace::UIBold), y + 60, v, 30, FontFace::UIBold, tk.accent);
             }
         }
     }
