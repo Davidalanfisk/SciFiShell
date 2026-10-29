@@ -1,9 +1,0 @@
-wait 30
-fly on
-cam 0 420 0 0 -89 0.1
-wait 3
-shot top.png
-cam 0 90 60 0 -45 0.1
-wait 2
-shot mid.png
-quit
