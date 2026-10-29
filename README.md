@@ -1,7 +1,91 @@
 # SciFiShell
 
-Fullscreen LCARS-style 3D desktop shell prototype: Diligent Engine rendering, SDL2 windowing/input,
-XInput (Xbox) controller, and OpenXR VR.
+### *Your computer, as a neon city. Fly through it. Ride your data.*
+
+![The city](docs/city-overview.jpg)
+
+SciFiShell turns your PC into a glowing, dark, Tron-style 3D city. Every drive is a district, every folder a
+building, every file a card on a wall. Your CPU, GPU, RAM and storage are landmarks wired together by
+**bus lanes** with live data packets racing along them. Browse your files, play your music and video, surf the web,
+and just *fly around inside your own machine*.
+
+## Get it (Windows)
+
+1. Download the installer from the **[latest release](https://github.com/Davidalanfisk/SciFiShell/releases/latest)**.
+2. Run it. Windows SmartScreen may warn because the installer isn't code-signed yet: **More info → Run anyway**.
+3. Launch **SciFiShell**. Updates are offered automatically on start-up, so you'll always get the newest build.
+
+## Controls
+
+**Mouse & keyboard**
+
+| Do this | By |
+|---|---|
+| Move | `W` `A` `S` `D` |
+| Look around | Move the mouse |
+| Jump | `Space` |
+| Fly on/off | Double-tap `Space` |
+| Fly up / down | `Space` / `Left Ctrl` |
+| Go faster | Hold `Left Shift` |
+| Select / open / click | Left mouse button |
+| **Open the command ring** | **Middle mouse button** or `F2` (works anywhere, even with apps open) |
+| Back / close | `Esc` or `Backspace` |
+| Browser | `B` |
+| Fullscreen media | `F` |
+| Edit text file / save | `E` / `Ctrl+S` |
+| Cycle colour theme | `F6` |
+| Toggle VR | `V` |
+| Screenshot | `F12` (saved to `Pictures\SciFiShell`) |
+
+**Xbox controller:** left stick move · right stick look · **A** select · **B** back · **Y** command ring
+**VR (OpenXR):** ray + trigger to select · left thumbstick to move · menu button for the ring
+
+## Quick tutorial
+
+You start in the city, standing at the hub. The big tower in the middle is your **system core**, and the districts
+around it are your drives. **Walk** with WASD, or **double-tap Space to fly** and take in the skyline.
+
+- **Open a drive or building:** look at it and click. Step through the door and you're in a *file room*: every file
+  is a card on the wall. Click a folder card to go deeper, `..` to go up, and use the grand exit doors to get back to
+  the street.
+- **Lifts:** tall buildings have multiple floors. Press the call button outside the lift, step in, and choose a floor
+  from the buttons inside.
+- **View things:** click an image, text file, video or audio card to open it in the viewer. Long-click a card to lock
+  your view onto it. Press `E` on text to edit, `Ctrl+S` to save, `F` for fullscreen.
+- **Ride the bus lanes:** click any bus lane and you'll be sucked into it and carried like a packet of data all the
+  way to the end of the route, a fast way to cross the city. Each bus is dual-lane: one channel in, one out.
+- **The command ring:** middle-click (or `F2`) any time to summon it. From here open **Web**, **Media**, **Windows
+  Apps** and Settings. You can run several apps at once, and the ring is always available.
+- **Media player:** a Winamp-style player for audio *and* video. Point it at your media folders, let it scan into a
+  library, build playlists, and keep the music going in the background while you explore.
+- **Browser:** a real web browser (Chromium) floating in your world.
+- **Idle tour:** leave it alone for 10 seconds and the camera takes you on a cinematic flight through the city. Touch
+  any control to take over again.
+
+![The hub and bus lanes](docs/city-hub.jpg)
+![The command ring](docs/command-ring.jpg)
+![Settings](docs/settings.jpg)
+
+## What's coming
+
+*"I tried to picture clusters of information as they moved through the computer."*
+
+This is the first light-cycle lap. The grid is about to get **gnarly**:
+
+- **Networking:** link up cities across the wire. Your machine, your friends' machines, one shared grid.
+- **Shared spaces:** VR-chat-style hangouts where you and your crew drift through each other's data, together.
+- **Customisable apartments:** GTA-style personal pads inside the city. Decorate, hoard, show off.
+- **Seamless games:** step through a door and you're *in* the game. No launcher, no loading screen, just the grid
+  rewriting itself around you.
+- **3D object importing:** drop models straight into your world and watch them materialise on the grid.
+- **Worlds within worlds:** buildings that contain cities that contain buildings. Biodigital jazz, man. The sky is
+  the limit, and the sky is also made of code.
+
+*End of line.*
+
+---
+
+# For developers
 
 ## Dependencies
 
@@ -41,18 +125,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 Pin a Diligent release with `-DSCIFI_DILIGENT_TAG=<tag>` (default `master`). Shaders are copied next to the
 executable (`shaders/`) and compiled at start-up.
 
-## Controls
-
-| Input | Menu | File room |
-|---|---|---|
-| Keyboard | Up/Down select, Enter/Space activate, `V` toggle VR | WASD move, Enter/Space open the card under the crosshair, Esc/Backspace back to menu |
-| Mouse | Hover to select, left click activates | Look around; left click opens the card under the crosshair |
-| Xbox pad | D-pad up/down select, **A** activate | Left stick move, right stick look, **A** open, **B** back |
-| VR (OpenXR) | Right controller ray points, trigger activates | Left thumbstick move, right ray + trigger open card, **B** (or menu button) back |
-
-The app starts directly in the **This PC** room (all drives plus Home). The `..` card goes to the parent folder (or back
-to This PC from a drive root); folder cards open that folder. Keyboard: WASD move, Space up, Left Ctrl down, Backspace
-(pad **B**, VR **B**) go up a folder, `V` toggles VR, Esc quits.
+Inside a file room the `..` card goes to the parent folder (or back to This PC from a drive root); folder cards open
+that folder.
 
 ## Web browser + 3D Web Depth Compositor (Windows)
 
