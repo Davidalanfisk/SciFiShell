@@ -92,6 +92,9 @@ if(WIN32 AND EXISTS "${SCIFI_CEF_ROOT}/libcef_dll/CMakeLists.txt")
     list(APPEND SOURCES src/WebBrowser.cpp src/WebLayerAnalyzer.cpp src/WebDepthCompositor.cpp)
 endif()
 
+if(WIN32)
+    list(APPEND SOURCES assets/icon/app.rc)
+endif()
 add_executable(SciFiShell ${SOURCES})
 if(WIN32)
     # Out-of-process UI Automation clicker for hosted Windows programs (see src/UiaHelper.cpp).

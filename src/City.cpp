@@ -76,14 +76,18 @@ City::~City() { data_.stop(); }
 float City::emergeProgress() const { return (float)std::min(1.0, clock_ / 8.0); }
 
 Vec3 City::tintColor(int i) const {
-    const Theme& t = currentTheme();
-    switch (i % 5) {
-        case 0: return t.accent;
-        case 1: return t.alt;
-        case 2: return {0.2f, 1.0f, 0.45f};
-        case 3: return {1.0f, 0.25f, 0.8f};
-        default: return {1.0f, 0.8f, 0.2f};
-    }
+    // Dark, moody palette (deep teals, steel blues, muted amber, violet, crimson, jade). Beyond 16 regions the hue stays
+    // distinct by rotating the palette and dimming a little, so no two neighbouring regions or buses share a colour.
+    static const Vec3 pal[16] = {
+        {0.04f, 0.62f, 0.78f}, {0.10f, 0.38f, 0.80f}, {0.62f, 0.38f, 0.10f}, {0.34f, 0.18f, 0.72f},
+        {0.05f, 0.58f, 0.40f}, {0.70f, 0.16f, 0.26f}, {0.30f, 0.62f, 0.70f}, {0.52f, 0.50f, 0.12f},
+        {0.58f, 0.22f, 0.62f}, {0.18f, 0.46f, 0.30f}, {0.74f, 0.30f, 0.12f}, {0.20f, 0.28f, 0.60f},
+        {0.12f, 0.70f, 0.60f}, {0.52f, 0.30f, 0.46f}, {0.40f, 0.52f, 0.78f}, {0.62f, 0.54f, 0.34f}};
+    if (i == 0) return currentTheme().accent * 0.8f;
+    const int round = i / 16;
+    Vec3 c = pal[i % 16];
+    if (round > 0) c = Vec3{c.z, c.x, c.y} * (1.0f - 0.12f * float(std::min(round, 4)));
+    return c;
 }
 
 std::shared_ptr<GpuLabel> City::makeText(const std::string& s) {
@@ -432,22 +436,48 @@ void City::render(Renderer& r, Vec3 eye) {
             renderBox(r, {0, (kSlabH + 0.6f) * 0.5f * g, 0}, {8, (kSlabH + 0.6f) * g, 8}, th.alt, 0.35f, 6, coreGrow_[0], 1.0f, 0);
             // Activity: data packets stream from the hub to the CPU / RAM / GPU, faster and denser the busier each is.
             if (!r.mirror() && g > 0.99f) {
-                const float loads[3] = {shownCpu_, shownRam_, shownGpu_};
-                const Vec3 ends[3] = {{0, 0, -55}, {-52, 0, 30}, {52, 0, 30}};
-                const Vec3 cols[3] = {th.accent, th.alt, th.accent};
-                for (int m = 0; m < 3; ++m) {
-                    const float dx = std::fabs(ends[m].x), dz = std::fabs(ends[m].z), len = dx + dz;
-                    const float sx = ends[m].x < 0 ? -1.0f : 1.0f, sz = ends[m].z < 0 ? -1.0f : 1.0f;
-                    const int P = 4;
+                // Packets ride the real road polylines (same data as the roads and click-to-ride) so they follow every corner,
+                // ramp and bridge, sitting on the road surface.
+                auto packets = [&](const std::vector<Vec3>& pts, const Vec3& col, float speed, int P, float seed) {
+                    if (pts.size() < 2) return;
+                    auto surf = [](float h) { return kRoadY + 0.075f + h + (h > 0.01f ? 0.075f : 0.0f); };
+                    std::vector<float> cum{0.0f};
+                    for (size_t k = 0; k + 1 < pts.size(); ++k)
+                        cum.push_back(cum.back() + std::fabs(pts[k + 1].x - pts[k].x) + std::fabs(pts[k + 1].z - pts[k].z));
+                    const float len = cum.back();
+                    if (len < 1.0f) return;
                     for (int k = 0; k < P; ++k) {
-                        const float ph = float(std::fmod(clock_ * (0.08 + 0.35 * loads[m]) + k / float(P), 1.0));
+                        const float ph = float(std::fmod(clock_ * speed + (k + seed) / float(P), 1.0));
                         const float d = ph * len;
-                        const Vec3 at = d < dx ? Vec3{sx * d, kRoadY + 0.4f, 0} : Vec3{sx * dx, kRoadY + 0.4f, sz * (d - dx)};
-                        const float fade = std::sin(ph * kPi);
-                        renderBox(r, at, {2.2f, 0.5f, 2.2f}, cols[m] * (0.4f + 1.2f * fade), 0.3f, 5, 1, 0, 0);
+                        size_t s0 = 0;
+                        while (s0 + 2 < cum.size() && cum[s0 + 1] < d) ++s0;
+                        const float u = clampf((d - cum[s0]) / std::max(cum[s0 + 1] - cum[s0], 1e-3f), 0.0f, 1.0f);
+                        const Vec3 a = pts[s0], b = pts[s0 + 1];
+                        const float px = a.x + (b.x - a.x) * u, pz = a.z + (b.z - a.z) * u;
+                        if (std::fabs(px) < 13.5f && std::fabs(pz) < 13.5f) continue;
+                        const float ph2 = 0.5f + 0.5f * std::sin(ph * kPi);
+                        const float sy = surf(a.y) + (surf(b.y) - surf(a.y)) * u;
+                        renderBox(r, {px, sy + 0.26f, pz}, {2.0f, 0.5f, 2.0f}, col * (0.4f + 1.2f * ph2), 0.3f, 5, 1, 0, 0);
                     }
-                }
-                const float beat = 0.5f + 0.5f * std::sin(float(clock_) * 3.0f);
+                };
+                const float loads[3] = {shownCpu_, shownRam_, shownGpu_};
+                const Vec3 cols[3] = {th.accent, th.alt, th.accent};
+                {
+                    std::vector<std::vector<Vec3>> rs;
+                    routes(rs);
+                    int idx = 0;
+                    for (int m = 0; m < 3; ++m) {
+                        if (coreGrow_[m] <= 0.9f) continue;
+                        std::vector<Vec3> pts;
+                        for (const Vec3& v : rs[idx++]) pts.push_back({v.x, v.y - kRoadY, v.z});
+                        packets(pts, cols[m], 0.08f + 0.35f * loads[m], 4, 0.0f);
+                    }
+                    for (const NetRoute& nr : net_) {
+                        if (platforms_[nr.plat].grow < 0.9f) continue;
+                        if (std::fabs(eye.x - nr.pts.back().x) > 400.0f && std::fabs(eye.z - nr.pts.back().z) > 400.0f) continue;
+                        packets(nr.pts, tintColor(platforms_[nr.plat].tint), 0.05f + 0.1f * (nr.plat % 3), 5, nr.plat * 0.37f);
+                    }
+                }                const float beat = 0.5f + 0.5f * std::sin(float(clock_) * 3.0f);
                 renderBox(r, {0, kSlabH + 0.8f + 0.5f * beat, 0}, {5.0f, 0.3f, 5.0f}, th.accent * (0.5f + beat), 0.3f, 5, 1, 0, 0);
             }
             const float y = kRoadY + 0.02f;
