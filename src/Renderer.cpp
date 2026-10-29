@@ -134,6 +134,9 @@ bool Renderer::init(SDL_Window* window, const std::string& shaderDir) {
     if (!createPipeline(webPipeline_, "Web layer", "basic_3d.vs.hlsl", "web_layer.ps.hlsl", true)) return false;
     if (!createPipeline(floorPipeline_, "Floor", "basic_3d.vs.hlsl", "basic_3d.ps.hlsl", true, true, true)) return false;
     buildMeshes();
+    if (std::getenv("SCIFI_NOPOST")) postFx_ = false;
+    createPipeline(postPipeline_, "Post", "basic_3d.vs.hlsl", "post.ps.hlsl", false, false, false, true);
+    createPipeline(blitPipeline_, "Post blit", "basic_3d.vs.hlsl", "post.ps.hlsl", false, false, false, false, true);
     return true;
 }
 
@@ -167,7 +170,94 @@ void Renderer::ensureMsaaTargets(MsaaTargets& m, uint32_t w, uint32_t h) {
     m.h = h;
 }
 
+void Renderer::runPost() {
+    if (!postFx_ || !postPipeline_.pso) return;
+    const auto& scd = swapChain_->GetDesc();
+    if (!postTex_ || postW_ != scd.Width || postH_ != scd.Height) {
+        postTex_.Release();
+        postSRB_.Release();
+        TextureDesc td;
+        td.Name = "Post source";
+        td.Type = RESOURCE_DIM_TEX_2D;
+        td.Width = scd.Width;
+        td.Height = scd.Height;
+        td.MipLevels = 1;
+        td.Format = scd.ColorBufferFormat;
+        td.BindFlags = BIND_SHADER_RESOURCE;
+        device_->CreateTexture(td, nullptr, &postTex_);
+        if (!postTex_) return;
+        blitSRB_.Release();
+        postPipeline_.pso->CreateShaderResourceBinding(&postSRB_, true);
+        if (blitPipeline_.pso) blitPipeline_.pso->CreateShaderResourceBinding(&blitSRB_, true);
+        if (blitSRB_)
+            if (auto* bv = blitSRB_->GetVariableByName(SHADER_TYPE_PIXEL, "g_Tex"))
+                bv->Set(postTex_->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+        if (auto* var = postSRB_->GetVariableByName(SHADER_TYPE_PIXEL, "g_Tex"))
+            var->Set(postTex_->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+        postW_ = scd.Width;
+        postH_ = scd.Height;
+    }
+    ITextureView* rtv = swapChain_->GetCurrentBackBufferRTV();
+    CopyTextureAttribs ca;
+    ca.pSrcTexture = rtv->GetTexture();
+    ca.pDstTexture = postTex_;
+    ca.SrcTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+    ca.DstTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+    context_->CopyTexture(ca);
+    context_->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    Viewport vp{0, 0, static_cast<float>(postW_), static_cast<float>(postH_), 0.0f, 1.0f};
+    context_->SetViewports(1, &vp, postW_, postH_);
+    const Mat4 sv = view_, sp = proj_;
+    view_ = Mat4::identity();
+    proj_ = Mat4::identity();
+    const float color[4] = {1.0f / static_cast<float>(postW_), 1.0f / static_cast<float>(postH_), accent_[3], 1.0f};
+    const float zero[4] = {0, 0, 0, 0};
+    draw(postPipeline_, postSRB_, quad_, Mat4::scale({2, 2, 1}), color, zero, zero);
+    view_ = sv;
+    proj_ = sp;
+}
+
+void Renderer::postWorld() {
+    if (!desktopActive_ || !postFx_ || worldPosted_ || !postPipeline_.pso) return;
+    if (samples_ <= 1) {
+        runPost();
+        context_->SetRenderTargets(1, &mainRtv_, mainDsv_, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        worldPosted_ = true;
+        return;
+    }
+    if (!blitPipeline_.pso || !resolveDst_) return;
+    ResolveTextureSubresourceAttribs ra;
+    ra.SrcTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+    ra.DstTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+    context_->ResolveTextureSubresource(resolveSrc_, resolveDst_, ra);
+    runPost();
+    if (!blitSRB_) return;
+    // Copy the finished world back into the multisampled target so the UI can be drawn over it (and still be anti-aliased).
+    CopyTextureAttribs ca;
+    ca.pSrcTexture = resolveDst_;
+    ca.pDstTexture = postTex_;
+    ca.SrcTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+    ca.DstTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+    context_->CopyTexture(ca);
+    context_->SetRenderTargets(1, &mainRtv_, mainDsv_, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    Viewport vp{0, 0, static_cast<float>(curW_), static_cast<float>(curH_), 0.0f, 1.0f};
+    context_->SetViewports(1, &vp, curW_, curH_);
+    const Mat4 sv = view_, sp = proj_;
+    view_ = Mat4::identity();
+    proj_ = Mat4::identity();
+    const float color[4] = {1.0f / static_cast<float>(postW_), 1.0f / static_cast<float>(postH_), 0.0f, 1.0f};
+    const float blit[4] = {1, 0, 0, 0};
+    const float zero[4] = {0, 0, 0, 0};
+    draw(blitPipeline_, blitSRB_, quad_, Mat4::scale({2, 2, 1}), color, blit, zero);
+    view_ = sv;
+    proj_ = sp;
+    clearDepth();
+    worldPosted_ = true;
+}
+
 void Renderer::endTarget() {
+    desktopActive_ = false;
+    worldPosted_ = false;
     if (!resolveDst_) return;
     ResolveTextureSubresourceAttribs ra;
     ra.SrcTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
@@ -181,7 +271,7 @@ void Renderer::endTarget() {
 }
 
 bool Renderer::createPipeline(Pipeline& out, const char* name, const char* vsFile, const char* psFile, bool blend, bool premul,
-                              bool reflection) {
+                              bool reflection, bool post, bool blit) {
     GraphicsPipelineStateCreateInfo ci;
     ci.PSODesc.Name = name;
     ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
@@ -189,10 +279,11 @@ bool Renderer::createPipeline(Pipeline& out, const char* name, const char* vsFil
     g.NumRenderTargets = 1;
     g.RTVFormats[0] = kColorFormat;
     g.DSVFormat = kDepthFormat;
-    g.SmplDesc.Count = samples_;
+    g.SmplDesc.Count = post ? 1 : samples_;
+    if (post) g.DSVFormat = TEX_FORMAT_UNKNOWN;
     g.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     g.RasterizerDesc.CullMode = CULL_MODE_NONE;
-    g.DepthStencilDesc.DepthEnable = True;
+    g.DepthStencilDesc.DepthEnable = (post || blit) ? False : True;
     g.DepthStencilDesc.DepthWriteEnable = blend ? False : True;
     if (blend) {
         auto& rt = g.BlendDesc.RenderTargets[0];
@@ -340,6 +431,7 @@ void Renderer::beginDesktopFrame() {
 }
 
 void Renderer::beginTarget(ITextureView* rtv, ITextureView* dsv, uint32_t w, uint32_t h, bool desktop) {
+    desktopActive_ = desktop;
     if (samples_ > 1) {
         MsaaTargets& m = msaa_[desktop ? 0 : 1];
         ensureMsaaTargets(m, w, h);

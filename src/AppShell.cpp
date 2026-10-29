@@ -444,9 +444,25 @@ void AppShell::runTool(Tool tool) {
                     icons.push_back(std::move(bm));
                 }
                 ring_->setLevel(1, names, icons, true);
-                std::vector<std::string> top = {"WEB", "EDITOR", "MEDIA", "WINDOWS"};
+                std::vector<std::string> top = {"WEB", "MEDIA", "WINDOWS APPS"};
+                auto topLabel = [](const std::string& n) {
+                    const size_t sp = n.find(' ');
+                    Bitmap bm;
+                    bm.w = 256;
+                    bm.h = 128;
+                    bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 0);
+                    auto line = [&](const std::string& s, float px, float base) {
+                        drawText(bm, (bm.w - measureText(s, px, FontFace::UI)) * 0.5f, base, s, px, FontFace::UI, Color8{});
+                    };
+                    if (sp == std::string::npos) line(n, 70.0f, 86.0f);
+                    else {
+                        line(n.substr(0, sp), 50.0f, 56.0f);
+                        line(n.substr(sp + 1), 50.0f, 112.0f);
+                    }
+                    return bm;
+                };
                 std::vector<Bitmap> topIcons;
-                for (const auto& n : top) topIcons.push_back(makeLabel(n, 64.0f, FontFace::UI, Color8{}, 256, 128));
+                for (const auto& n : top) topIcons.push_back(topLabel(n));
                 ring_->setLevel(0, top, topIcons, true);
             }
             ring_->showApps(!ring_->appsMode());
@@ -1366,8 +1382,8 @@ void AppShell::tick(double dt) {
             if (ring_->appsMode() && (pointerSelect || keySelect) && (ring_->appHot() || keySelect)) {
                 const int idx = ring_->appSelected();
                 if (ring_->appLevel() == 0) {
-                    if (idx == 3) ring_->enterLevel(1);
-                    else runTool(idx == 0 ? Tool::Browser : idx == 1 ? Tool::Editor : Tool::Media);
+                    if (idx == 2) ring_->enterLevel(1);
+                    else runTool(idx == 0 ? Tool::Browser : Tool::Media);
                 } else {
                     ring_->close();
 #ifdef _WIN32
@@ -1732,6 +1748,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
     }
     activeRoot().renderTree(renderer_);
     if (cityMode_ && city_) city_->render(renderer_, realEye);
+    if (cityMode_ && city_) renderer_.postWorld();  // effects are for the city; inside buildings and rooms text stays sharp
     if (state_ == State::FileRoom && viewer_->active()) {
         renderer_.clearDepth();
         viewer_->root().renderTree(renderer_);

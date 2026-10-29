@@ -761,7 +761,7 @@ void AppWindow::render(Renderer& renderer) {
     if (fullscreen_) applyFullscreenLayout();
     if (s_->contentW <= 0 && !fullscreen_) s_->worldH = s_->worldW * kWinH / kWinW;
     if (s_->contentW > 0 && !fullscreen_) s_->worldH = s_->worldW * s_->contentH / s_->contentW;
-    const float gap = 0.015f, pad = 0.03f, round = 0.014f;
+    const float gap = 0.015f, pad = 0.03f, round = 0.004f;
     if (!fullscreen_) {
         // One glass card behind the title bar and the program.
         const float top = s_->worldH * 0.5f + gap + s_->barH + pad, bottom = -s_->worldH * 0.5f - pad;

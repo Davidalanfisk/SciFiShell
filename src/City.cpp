@@ -76,19 +76,29 @@ City::~City() { data_.stop(); }
 float City::emergeProgress() const { return (float)std::min(1.0, clock_ / 8.0); }
 
 Vec3 City::tintColor(int i) const {
-    // Dark, moody palette (deep teals, steel blues, muted amber, violet, crimson, jade). Beyond 16 regions the hue stays
-    // distinct by rotating the palette and dimming a little, so no two neighbouring regions or buses share a colour.
-    static const Vec3 pal[16] = {
-        {0.02f, 0.46f, 0.62f}, {0.05f, 0.22f, 0.58f}, {0.55f, 0.62f, 0.70f}, {0.10f, 0.58f, 0.66f},
-        {0.02f, 0.30f, 0.44f}, {0.70f, 0.78f, 0.84f}, {0.16f, 0.34f, 0.74f}, {0.04f, 0.52f, 0.50f},
-        {0.30f, 0.46f, 0.60f}, {0.08f, 0.40f, 0.80f}, {0.42f, 0.74f, 0.80f}, {0.20f, 0.20f, 0.52f},
-        {0.00f, 0.38f, 0.34f}, {0.62f, 0.68f, 0.76f}, {0.12f, 0.26f, 0.38f}, {0.26f, 0.66f, 0.74f}};    if (i == 0) return currentTheme().accent * 0.8f;
-    const int round = i / 16;
-    Vec3 c = pal[i % 16];
-    if (round > 0) c = Vec3{c.z, c.x, c.y} * (1.0f - 0.12f * float(std::min(round, 4)));
+    // Dark blue / cyan / teal range with white-ish steel greys mixed in. Hue steps by the golden ratio and saturation and
+    // brightness drift on their own periods, so every index gets a distinct colour however many drives and regions exist.
+    if (i == 0) return currentTheme().accent * 0.8f;
+    auto fr = [](float v) { return v - std::floor(v); };
+    const float u = fr(i * 0.6180339f), v = fr(i * 0.7548777f), w = fr(i * 0.5698403f);
+    Vec3 c;
+    if (i % 5 == 3) {
+        const float l = 0.42f + 0.50f * v;  // cool whites, each a slightly different temperature
+        c = Vec3{l * (0.82f + 0.12f * u), l * (0.90f + 0.08f * w), l};
+    } else {
+        const float h = 0.44f + 0.22f * u;  // 160 to 240 degrees: sea-green through cyan to blue
+        const float sat = 0.62f + 0.36f * w, val = 0.34f + 0.46f * v;
+        const float hh = h * 6.0f;
+        const float f = hh - std::floor(hh);
+        const float p = val * (1.0f - sat), q = val * (1.0f - sat * f), tt = val * (1.0f - sat * (1.0f - f));
+        switch ((int)std::floor(hh) % 6) {
+            case 2: c = {p, val, tt}; break;
+            case 3: c = {p, q, val}; break;
+            default: c = {tt, p, val}; break;
+        }
+    }
     return c;
 }
-
 std::shared_ptr<GpuLabel> City::makeText(const std::string& s) {
     return renderer_.createLabel(makeLabel(s, 54.0f, FontFace::UI, Color8{}, 96, 4));
 }
@@ -284,7 +294,9 @@ void City::drawLabel(Renderer& r, GpuLabel& l, Vec3 at, float h, Vec3 eye, Vec3 
     pp.radius = 0.3f;
     pp.selected = 0;
     pp.segments = 0;
-    r.drawPanel(l, Mat4::translate(at) * Mat4::rotateY(yaw) * Mat4::scale({w, h, 1.0f}), color, pp);
+    // Floating white text only: no frame, the texture alpha shapes it.
+    const float white[3] = {1, 1, 1}, uvAll[4] = {0, 0, 1, 1};
+    r.drawWebRegion(l, Mat4::translate(at) * Mat4::rotateY(yaw) * Mat4::scale({w, h, 1.0f}), uvAll, l.aspect, 0.0f, -1.0f, 1.0f, white);
 }
 
 std::shared_ptr<GpuLabel> City::makeDoorLabel(const std::string& name) {
@@ -438,7 +450,7 @@ void City::render(Renderer& r, Vec3 eye) {
             if (!r.mirror() && g > 0.99f) {
                 // Packets ride the real road polylines (same data as the roads and click-to-ride) so they follow every corner,
                 // ramp and bridge, sitting on the road surface.
-                auto packets = [&](const std::vector<Vec3>& pts, const Vec3& col, float speed, int P, float seed) {
+                auto packets = [&](const std::vector<Vec3>& pts, const Vec3& col, float speed, int P, float seed, bool rev) {
                     if (pts.size() < 2) return;
                     auto surf = [](float h) { return kRoadY + 0.075f + h + (h > 0.01f ? 0.075f : 0.0f); };
                     std::vector<float> cum{0.0f};
@@ -447,17 +459,21 @@ void City::render(Renderer& r, Vec3 eye) {
                     const float len = cum.back();
                     if (len < 1.0f) return;
                     for (int k = 0; k < P; ++k) {
-                        const float ph = float(std::fmod(clock_ * speed + (k + seed) / float(P), 1.0));
+                        const float ph0 = float(std::fmod(clock_ * speed + (k + seed) / float(P), 1.0));
+                        const float ph = rev ? 1.0f - ph0 : ph0;  // the receive lane runs the route backwards
                         const float d = ph * len;
                         size_t s0 = 0;
                         while (s0 + 2 < cum.size() && cum[s0 + 1] < d) ++s0;
                         const float u = clampf((d - cum[s0]) / std::max(cum[s0 + 1] - cum[s0], 1e-3f), 0.0f, 1.0f);
                         const Vec3 a = pts[s0], b = pts[s0 + 1];
-                        const float px = a.x + (b.x - a.x) * u, pz = a.z + (b.z - a.z) * u;
+                        // Each bus has two lanes (send and receive); traffic keeps to its own side of the centre line.
+                        const float sl = std::fabs(b.x - a.x) + std::fabs(b.z - a.z) + 1e-4f;
+                        const float lane = rev ? -0.75f : 0.75f;
+                        const float px = a.x + (b.x - a.x) * u + (b.z - a.z) / sl * lane, pz = a.z + (b.z - a.z) * u - (b.x - a.x) / sl * lane;
                         if (std::fabs(px) < 13.5f && std::fabs(pz) < 13.5f) continue;
                         const float ph2 = 0.5f + 0.5f * std::sin(ph * kPi);
                         const float sy = surf(a.y) + (surf(b.y) - surf(a.y)) * u;
-                        renderBox(r, {px, sy + 0.26f, pz}, {2.0f, 0.5f, 2.0f}, col * (0.4f + 1.2f * ph2), 0.3f, 5, 1, 0, 0);
+                        renderBox(r, {px, sy + 0.26f, pz}, {1.1f, 0.5f, 1.1f}, col * (0.4f + 1.2f * ph2), 0.3f, 5, 1, 0, 0);
                     }
                 };
                 const float loads[3] = {shownCpu_, shownRam_, shownGpu_};
@@ -470,12 +486,15 @@ void City::render(Renderer& r, Vec3 eye) {
                         if (coreGrow_[m] <= 0.9f) continue;
                         std::vector<Vec3> pts;
                         for (const Vec3& v : rs[idx++]) pts.push_back({v.x, v.y - kRoadY, v.z});
-                        packets(pts, cols[m], 0.08f + 0.35f * loads[m], 4, 0.0f);
+                        packets(pts, cols[m], 0.08f + 0.35f * loads[m], 4, 0.0f, false);
+                        packets(pts, cols[m] * 0.8f, 0.06f + 0.2f * loads[m], 3, 0.5f, true);
                     }
                     for (const NetRoute& nr : net_) {
                         if (platforms_[nr.plat].grow < 0.9f) continue;
                         if (std::fabs(eye.x - nr.pts.back().x) > 400.0f && std::fabs(eye.z - nr.pts.back().z) > 400.0f) continue;
-                        packets(nr.pts, tintColor(platforms_[nr.plat].tint), 0.05f + 0.1f * (nr.plat % 3), 5, nr.plat * 0.37f);
+                        const Vec3 pc = tintColor(platforms_[nr.plat].tint);
+                        packets(nr.pts, pc, 0.05f + 0.1f * (nr.plat % 3), 5, nr.plat * 0.37f, false);
+                        packets(nr.pts, pc * 0.8f, 0.05f + 0.1f * ((nr.plat + 1) % 3), 4, nr.plat * 0.61f + 0.5f, true);
                     }
                 }                const float beat = 0.5f + 0.5f * std::sin(float(clock_) * 3.0f);
                 renderBox(r, {0, kSlabH + 0.8f + 0.5f * beat, 0}, {5.0f, 0.3f, 5.0f}, th.accent * (0.5f + beat), 0.3f, 5, 1, 0, 0);
@@ -496,10 +515,11 @@ void City::render(Renderer& r, Vec3 eye) {
             zRoad(0, 0, -55 + plinth * 0.5f, coreGrow_[0]);
             double gb = s.ramTotal / 1073741824.0;
             int K = std::clamp<int>((int)(gb / 4.0 + 0.5), 2, 16);
-            zRoad(0, 0, 30, coreGrow_[1]);
-            xRoad(30, 0, -52 + (K * 3.4f + 6.0f) * 0.5f, coreGrow_[1]);
-            zRoad(0.0f, 0, 30, coreGrow_[2]);
-            xRoad(30, 0, 52 - 23.0f, coreGrow_[2]);
+            // Each spoke stops at the edge of the 3 m corner square so the bend is one solid 90 degree piece.
+            zRoad(0, 0, 28.5f, coreGrow_[1]);
+            xRoad(30, -1.5f, -52 + (K * 3.4f + 6.0f) * 0.5f, coreGrow_[1]);
+            zRoad(0.0f, 0, 28.5f, coreGrow_[2]);
+            xRoad(30, 1.5f, 52 - 23.0f, coreGrow_[2]);
         }
     }
     {
@@ -902,7 +922,17 @@ void City::buildNetwork() const {
             const Vec3 a = pts[k], b = pts[k + 1];
             const float L = std::fabs(b.x - a.x) + std::fabs(b.z - a.z);
             if (std::fabs(a.y - b.y) < 1e-3f) {
-                if (a.y < 0.01f) rect(a.x, a.z, b.x, b.z, kRoadY, 0.15f, (run + L) / total, true);
+                if (a.y < 0.01f) {
+                    // Pull each end back by half a road width where the lane turns; the corner square fills the bend.
+                    const float ux = (b.x - a.x) / std::max(L, 1e-3f), uz = (b.z - a.z) / std::max(L, 1e-3f);
+                    auto turnAt = [&](const Vec3& p, const Vec3& q, const Vec3& s) {
+                        return (std::fabs(q.x - p.x) > 1e-3f) != (std::fabs(s.x - q.x) > 1e-3f);
+                    };
+                    const float t0 = (k > 0 && pts[k - 1].y < 0.01f && turnAt(pts[k - 1], a, b)) ? 1.5f : 0.0f;
+                    const float t1 = (k + 2 < pts.size() && pts[k + 2].y < 0.01f && turnAt(a, b, pts[k + 2])) ? 1.5f : 0.0f;
+                    if (L - t0 - t1 > 0.05f)
+                        rect(a.x + ux * t0, a.z + uz * t0, b.x - ux * t1, b.z - uz * t1, kRoadY, 0.15f, (run + L) / total, true);
+                }
                 else rect(a.x, a.z, b.x, b.z, surf(a.y) - 0.15f, 0.3f, (run + L) / total, true);
             } else {
                 Piece pc{std::min(a.x, b.x) - 1.5f, std::max(a.x, b.x) + 1.5f, std::min(a.z, b.z) - 1.5f, std::max(a.z, b.z) + 1.5f, 0, 0.3f, (run + L) / total, net_[ri].plat};

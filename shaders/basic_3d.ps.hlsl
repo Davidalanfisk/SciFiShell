@@ -212,10 +212,13 @@ float3 buildingColor(PSInput In)
     // The tops flare while a building is still rising out of the grid.
     if (grow > 0.001 && kind != 7 && (top || rim > 0.0)) col += neon * grow * 1.2 * (top ? 1.0 : rim);
 
-    float mist = smoothstep(150.0, 1000.0, dist);
-    // Low volumetric-style fog: thick and glowing near the ground, thinning with height and distance.
-    float fog = saturate((1.0 - exp(-dist * 0.005)) * (0.25 + 0.75 * exp(-max(In.WPos.y, 0.0) * 0.07)));
-    col = lerp(col, neon * 0.10 + g_Accent.rgb * 0.05, fog * 0.55);
+    float mist = smoothstep(120.0, 750.0, dist);
+    // Dense low fog: barely there up close, building to a thick glowing bank with distance, deepest near the ground and
+    // lit by the neon of whatever is inside it.
+    float fogD = 1.0 - exp(-pow(dist * 0.0085, 1.5));
+    float fog = saturate(fogD * (0.35 + 0.65 * exp(-max(In.WPos.y, 0.0) * 0.045)));
+    float3 fogCol = neon * 0.16 + g_Accent.rgb * 0.07 + float3(0.01, 0.02, 0.035);
+    col = lerp(col, fogCol, fog * 0.92) + neon * 0.05 * fog * (1.0 - fog);
     return col * (1.0 - mist) + mistColor(g_Accent.rgb) * mist;
 }
 

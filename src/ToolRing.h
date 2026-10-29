@@ -63,7 +63,7 @@ private:
     bool appsMode_ = false, appHot_ = false;
     int appSel_ = 0;
     float appsAnim_ = 0;  // 0 = single ring, 1 = both rings (the whole disc shrinks to make room)
-    static constexpr float kDiameter = 0.75f;
+    static constexpr float kDiameter = 0.975f;
     static constexpr float kOuter = 2.1f;  // outer ring diameter relative to the inner ring
 };
 

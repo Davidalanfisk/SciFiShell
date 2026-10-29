@@ -502,7 +502,7 @@ void WebBrowser::render(Renderer& renderer) {
     const float y = s_->worldH * 0.5f + s_->barH * 0.5f + gap;
     const float uvAll[4] = {0, 0, 1, 1}, white[3] = {1, 1, 1};
     renderer.drawWebRegion(*s_->toolbar, s_->base * Mat4::translate({0, y, 0}) * Mat4::scale({s_->worldW, s_->barH, 1}), uvAll,
-                           s_->worldW / s_->barH, 0.014f / s_->barH, 0.0f, 0.94f, white);
+                           s_->worldW / s_->barH, 0.004f / s_->barH, 0.0f, 0.94f, white);
 }
 
 bool WebBrowser::bounds(Vec3& centre, Vec3& normal, float& w, float& h) const {

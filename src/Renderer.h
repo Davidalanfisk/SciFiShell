@@ -38,6 +38,10 @@ public:
     // Resolves the multisampled target into the image passed to beginTarget (called by present() for the desktop).
     void endTarget();
     void resize();
+    // Full-screen finishing pass on the desktop view (bloom, light streaks, vignette, chromatic fringe, grain).
+    void setPostFx(bool on) { postFx_ = on; }
+    // Call once the 3D world is drawn and before any UI: applies the post effects to the world only, so UI stays crisp.
+    void postWorld();
     void beginDesktopFrame();
     void present(bool vsync);
 
@@ -107,7 +111,8 @@ private:
     };
 
     bool createPipeline(Pipeline& out, const char* name, const char* vsFile, const char* psFile, bool blend, bool premul = false,
-                        bool reflection = false);
+                        bool reflection = false, bool post = false, bool blit = false);
+    void runPost();
     void ensureReflection(uint32_t w, uint32_t h);
     Mesh createMesh(const std::vector<float>& vertices, const std::vector<uint32_t>& indices);
     void buildMeshes();
@@ -126,7 +131,14 @@ private:
     Diligent::RefCntAutoPtr<Diligent::ISwapChain> swapChain_;
     Diligent::RefCntAutoPtr<Diligent::IShaderSourceInputStreamFactory> shaderFactory_;
     Diligent::RefCntAutoPtr<Diligent::IBuffer> constants_;
-    Pipeline panelPipeline_, solidPipeline_, webPipeline_, floorPipeline_;
+    Pipeline panelPipeline_, solidPipeline_, webPipeline_, floorPipeline_, postPipeline_, blitPipeline_;
+    Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> postSRB_;
+    Diligent::RefCntAutoPtr<Diligent::ITexture> postTex_;
+    uint32_t postW_ = 0, postH_ = 0;
+    bool desktopActive_ = false;
+    bool postFx_ = true;
+    bool worldPosted_ = false;
+    Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> blitSRB_;
     bool mirror_ = false;
     void bindLabel(GpuLabel& label);
     uint32_t samples_ = 1;

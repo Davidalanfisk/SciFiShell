@@ -235,7 +235,7 @@ public:
     std::shared_ptr<GpuLabel> label;
     float brightness = 1.0f;
     bool glass = false;
-    float radius = 0.014f;
+    float radius = 0.004f;
     float uv[4] = {0, 0, 1, 1};
 };
 

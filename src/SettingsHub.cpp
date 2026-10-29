@@ -75,7 +75,7 @@ void SettingsHub::rebuild() {
     bm.h = kH;
     bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 0);
     rects_.clear();
-    fillRoundRect(bm, 0, 0, kW, kH, 36, Color8{10, 14, 26, 240});
+    fillRoundRect(bm, 0, 0, kW, kH, 0, Color8{10, 14, 26, 240});
 
     const bool home = page_ < 0 || page_ >= static_cast<int>(cats_.size());
     const std::string title = home ? "SETTINGS" : cats_[static_cast<size_t>(page_)].name;
@@ -317,7 +317,7 @@ void SettingsHub::render() {
         const float fw = worldW_ + pad * 2, fh = h + pad * 2;
         renderer_.drawGlass(base_ * Mat4::translate({0, 0, -0.01f}) * Mat4::scale({fw, fh, 1}), fw / fh, 0.03f / fh);
     }
-    renderer_.drawWebRegion(*label_, base_ * Mat4::scale({worldW_, h, 1}), uv, aspect_, fullscreen_ ? 0.0f : 0.02f / h, 0.0f,
+    renderer_.drawWebRegion(*label_, base_ * Mat4::scale({worldW_, h, 1}), uv, aspect_, fullscreen_ ? 0.0f : 0.004f / h, 0.0f,
                             fullscreen_ ? 1.0f : 0.94f, white);
 }
 
