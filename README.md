@@ -148,3 +148,22 @@ Clicking a file frame opens a panel with details and actions (open, copy, send, 
 - Build prerequisites for source builds: the CEF binary distribution must be extracted to `third_party\cef` (not committed - it is ~420 MB); Diligent and OpenXR are fetched by CMake.
 
 City extras: stepped ramps at the end of every road and hub spoke let you walk on and off the slabs without jumping; the storage regions sit closer to the central components; the central hub streams data packets to the CPU / RAM / GPU monuments (faster when they are busier) and pulses a beacon.
+
+## Scripting
+
+The app runs commands from a script file: set SCIFI_SCRIPT=<file> at launch, or drop a file at %LOCALAPPDATA%\SciFiShell\control.txt while it runs (it is picked up within 0.5 s and deleted). One command per line, # for comments. Output (`where`, `log`, errors) goes to control.log in the same folder.
+
+| Command | Effect |
+|---|---|
+| `wait S` | pause |
+| `goto X Y Z [S]` | move to a position (optional duration) |
+| `walk M [S]` / `strafe M [S]` | move relative to facing |
+| `turn DEG [S]` / `look YAW PITCH [S]` | rotate |
+| `fly on/off` | creative flight |
+| `city` / `enter PATH` / `room N` / `leave` | navigate city, buildings, rooms |
+| `ring [apps/windows/close]` / `tool files/settings/theme/apps` | command ring |
+| `shot FILE` | save a screenshot to FILE |
+| `where` / `log TEXT` / `quit` | diagnostics |
+
+Set SCIFI_NO_SCRIPT=1 to disable. Mouse clicks cannot be injected yet.
+

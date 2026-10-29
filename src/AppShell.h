@@ -66,7 +66,7 @@ private:
     std::unique_ptr<LCARSMenu> menu_;
     std::unique_ptr<FileRoom> room_;
     std::unique_ptr<City> city_;
-    bool cityMode_ = false;
+    bool cityMode_ = false, clearRoomPending_ = false;
     Camera savedCam_;
     bool cityCamSet_ = false;
     int powerArmed_ = 0;  // 1 restart / 2 shutdown awaiting a confirming second click
@@ -97,6 +97,20 @@ private:
     void runTool(Tool tool);
     void saveScreenshot();
     bool shotPending_ = false;
+    // Scripting: line-based commands read from a file (SCIFI_SCRIPT at start, or %LOCALAPPDATA%\SciFiShell\control.txt at any time).
+    void scriptTick(double dt);
+    bool scriptExec(const std::string& line);
+    void scriptLog(const std::string& s);
+    std::vector<std::string> script_;
+    size_t scriptPc_ = 0;
+    double scriptWait_ = 0, scriptPoll_ = 0;
+    std::string shotPath_;
+    struct ScriptMove {
+        bool on = false, pos = false, ang = false, hasY = false;
+        Vec3 from{}, to{};
+        float yaw0 = 0, yaw1 = 0, pitch0 = 0, pitch1 = 0;
+        double t = 0, dur = 0;
+    } mv_;
 #ifdef SCIFI_HAS_CEF
     std::unique_ptr<WebBrowser> browser_;
 #endif

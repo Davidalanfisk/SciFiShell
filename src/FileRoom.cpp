@@ -119,7 +119,7 @@ void CardNode::ensureLabel() {
         bm.w = 520;
         bm.h = 650;
         bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 0);
-        drawDoorOutline(bm);
+        if (!isParentLink) drawDoorOutline(bm);  // the exit is framed by its own neon posts
         const std::vector<std::string> title = wrapText(text_, 50.0f, FontFace::UI, 400.0f, 2);
         float y = 70.0f;
         for (const std::string& l : title) {
@@ -354,7 +354,7 @@ void FileRoom::buildCorridor() {
     exitCard->tall = true;  // the portrait door body fills the whole doorway
     exitCard->position = {0, 2.55f, kFrontZ - 0.24f};
     exitCard->yaw = kPi;
-    exitCard->scale = {4.1f, 5.1f, 0.06f};
+    exitCard->scale = {3.9f, 5.0f, 0.06f};
     addCard(std::move(exitCard));
     {
         const Vec3 neon{0.85f, 0.92f, 1.0f};

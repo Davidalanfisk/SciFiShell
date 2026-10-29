@@ -14,6 +14,7 @@ namespace {
 constexpr float kRoadY = 0.08f;
 constexpr float kSlabH = 1.0f;
 constexpr float kPlateH = 0.3f;
+constexpr float kPadSlope = 1.4f;  // width of the sloped rim round each block pad
 constexpr float kGrowSeconds = 4.5f;
 
 float rnd01(uint32_t s) {
@@ -531,7 +532,11 @@ void City::render(Renderer& r, Vec3 eye) {
             if (bd2 > (mirror ? 450.0f * 450.0f : maxD2)) continue;
             // The block plate: a lighter raised pad the buildings stand on.
             const float plateH = (kSlabH + kPlateH) * pg;
-            renderBox(r, {b.cx, plateH * 0.5f, b.cz}, {b.side - 2.0f, plateH, b.side - 2.0f}, tint, 0.5f, 6, p.grow, 1.0f, 0);
+            // The pad's rim is a three-step slope (matching blockPadHeight) so streets run up onto it smoothly.
+            for (int st = 0; st < 3; ++st) {
+                const float sd = b.side - 2.0f - 2.0f * kPadSlope * st / 3.0f, hh = (kSlabH + kPlateH * (st + 1) / 3.0f) * pg;
+                renderBox(r, {b.cx, hh * 0.5f, b.cz}, {sd, hh, sd}, tint, 0.5f, 6, p.grow, 1.0f, 0);
+            }
             if (bd2 < 220.0f * 220.0f && p.grow > 0.95f) {
                 // Street grid: lane markings down the middle of every street between rows and columns of buildings.
                 const float y = kSlabH + kPlateH + 0.04f, len = b.side - 4.0f;
@@ -695,7 +700,6 @@ void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const 
         const float base = kSlabH + kPlateH;
         for (const auto& b : pl.blocks) {
             if (std::fabs(p.x - b.cx) > b.side * 0.5f + 20.0f || std::fabs(p.z - b.cz) > b.side * 0.5f + 20.0f) continue;
-            boxes.push_back({b.cx - b.side * 0.5f + 1.0f, b.cx + b.side * 0.5f - 1.0f, base, b.cz - b.side * 0.5f + 1.0f, b.cz + b.side * 0.5f - 1.0f});
             for (const auto& t : b.towers) {
                 if (t.grow < 0.3f) continue;
                 float hw = std::max(1.5f, t.curW) * 0.5f;
@@ -715,6 +719,14 @@ float City::floorAt(const Vec3& p, float rad, float eyeH) const {
     for (const auto& b : boxes) {
         if (p.x < b.x0 - rad * 0.5f || p.x > b.x1 + rad * 0.5f || p.z < b.z0 - rad * 0.5f || p.z > b.z1 + rad * 0.5f) continue;
         if (b.y1 <= feet + 0.6f) best = std::max(best, b.y1);
+    }
+    for (const auto& pl : platforms_) {
+        if (pl.grow < 0.3f || std::fabs(p.x - pl.cx) > pl.side * 0.5f || std::fabs(p.z - pl.cz) > pl.side * 0.5f) continue;
+        for (const auto& b : pl.blocks) {
+            const float inside = std::min(b.side * 0.5f - 1.0f - std::fabs(p.x - b.cx), b.side * 0.5f - 1.0f - std::fabs(p.z - b.cz));
+            if (inside < 0.0f) continue;
+            best = std::max(best, kSlabH + kPlateH * std::min(1.0f, inside / kPadSlope));
+        }
     }
     return best;
 }

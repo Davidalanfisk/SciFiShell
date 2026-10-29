@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include "TextRender.h"
 #include "Theme.h"
@@ -363,8 +365,10 @@ void AppShell::saveScreenshot() {
             GetLocalTime(&t);
             char name[64];
             std::snprintf(name, sizeof(name), "SciFiShell-%04d%02d%02d-%02d%02d%02d.png", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
-            ok = stbi_write_png((dir / name).string().c_str(), w, h, 4, bits, w * 4) != 0;
-            if (ok) std::fprintf(stderr, "Screenshot saved: %s\n", (dir / name).string().c_str());
+            const std::filesystem::path out = shotPath_.empty() ? dir / name : std::filesystem::path(shotPath_);
+            shotPath_.clear();
+            ok = stbi_write_png(out.string().c_str(), w, h, 4, bits, w * 4) != 0;
+            if (ok) std::fprintf(stderr, "Screenshot saved: %s\n", out.string().c_str());
         }
     }
     if (dib) DeleteObject(dib);
@@ -443,10 +447,174 @@ void AppShell::runTool(Tool tool) {
     if (tool != Tool::Theme) ring_->close();
 }
 
+// ---- Scripting -----------------------------------------------------------------------------------------------
+// One command per line, # starts a comment. Durations [s] are optional (default 0 = instant).
+//   wait S | goto X Y Z [S] | walk M [S] | strafe M [S] | turn DEG [S] | look YAW PITCH [S] | fly on|off
+//   city | leave | enter PATH | room N | ring [apps|windows|close] | tool files|settings|theme|apps
+//   shot FILE | where | log TEXT | quit
+// Output (where / log / errors) is appended to control.log next to the control file.
+void AppShell::scriptLog(const std::string& s) {
+    const char* la = std::getenv("LOCALAPPDATA");
+    std::filesystem::path dir = std::filesystem::path(la ? la : ".") / "SciFiShell";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (FILE* f = std::fopen((dir / "control.log").string().c_str(), "a")) {
+        std::fprintf(f, "%s\n", s.c_str());
+        std::fclose(f);
+    }
+}
+
+bool AppShell::scriptExec(const std::string& line) {
+    std::istringstream is(line);
+    std::string cmd;
+    is >> cmd;
+    for (auto& c : cmd) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    auto num = [&](float def) { float v = def; if (!(is >> v)) { is.clear(); v = def; } return v; };
+    const float deg = kPi / 180.0f;
+    auto startMove = [&](bool pos, bool ang, bool hasY, Vec3 to, float yaw, float pitch, double dur) {
+        mv_ = ScriptMove{};
+        mv_.on = true; mv_.pos = pos; mv_.ang = ang; mv_.hasY = hasY;
+        mv_.from = camera_.position; mv_.to = to;
+        mv_.yaw0 = camera_.yaw; mv_.yaw1 = yaw; mv_.pitch0 = camera_.pitch; mv_.pitch1 = pitch;
+        mv_.dur = dur;
+        scriptWait_ = dur;
+    };
+    const Vec3 fwd{-std::sin(camera_.yaw), 0, -std::cos(camera_.yaw)}, right{std::cos(camera_.yaw), 0, -std::sin(camera_.yaw)};
+    if (cmd.empty() || cmd[0] == '#') return true;
+    if (cmd == "wait") scriptWait_ = num(1);
+    else if (cmd == "goto") {
+        const float x = num(0), y = num(camera_.position.y), z = num(0), s = num(0);
+        startMove(true, false, true, {x, y, z}, 0, 0, s);
+    } else if (cmd == "walk" || cmd == "strafe") {
+        const float m = num(1), s = num(0);
+        const Vec3 d = (cmd == "walk" ? fwd : right) * m;
+        startMove(true, false, false, camera_.position + d, 0, 0, s);
+    } else if (cmd == "turn") {
+        const float a = num(0), s = num(0);
+        startMove(false, true, false, {}, camera_.yaw + a * deg, camera_.pitch, s);
+    } else if (cmd == "look") {
+        const float yw = num(0), p = num(0), s = num(0);
+        startMove(false, true, false, {}, yw * deg, p * deg, s);
+    } else if (cmd == "fly") {
+        std::string v;
+        is >> v;
+        flying_ = (v != "off");
+        vy_ = 0;
+    } else if (cmd == "city") {
+        if (!cityMode_) toggleCity(true);
+    } else if (cmd == "leave") {
+        if (room_->onExitBuilding) room_->onExitBuilding();
+    } else if (cmd == "enter") {
+        std::string path;
+        std::getline(is, path);
+        while (!path.empty() && path.front() == ' ') path.erase(path.begin());
+        if (cityMode_) toggleCity(false);
+        room_->load(path);
+        scriptWait_ = 1.5;
+    } else if (cmd == "room") {
+        room_->debugEnter(static_cast<int>(num(0)));
+        scriptWait_ = 1.0;
+    } else if (cmd == "ring") {
+        std::string v;
+        is >> v;
+        if (v == "close") ring_->close();
+        else {
+            if (!ring_->isOpen()) ring_->open(head_.eye, head_.forward);
+            if (v == "apps" || v == "windows") {
+                runTool(Tool::Apps);
+                if (v == "windows") ring_->enterLevel(1);
+            }
+        }
+    } else if (cmd == "tool") {
+        std::string v;
+        is >> v;
+        if (v == "files") runTool(Tool::Files);
+        else if (v == "settings") runTool(Tool::Settings);
+        else if (v == "theme") runTool(Tool::Theme);
+        else if (v == "apps") { if (!ring_->isOpen()) ring_->open(head_.eye, head_.forward); runTool(Tool::Apps); }
+        else scriptLog("unknown tool: " + v);
+    } else if (cmd == "shot") {
+        std::string p;
+        std::getline(is, p);
+        while (!p.empty() && p.front() == ' ') p.erase(p.begin());
+        shotPath_ = p;
+        shotPending_ = true;
+        scriptWait_ = 0.3;
+    } else if (cmd == "where") {
+        char b[200];
+        std::snprintf(b, sizeof b, "pos %.2f %.2f %.2f yaw %.1f pitch %.1f city=%d building=%d flying=%d", camera_.position.x, camera_.position.y,
+                      camera_.position.z, camera_.yaw / deg, camera_.pitch / deg, cityMode_ ? 1 : 0, room_->building() ? 1 : 0, flying_ ? 1 : 0);
+        scriptLog(b);
+    } else if (cmd == "log") {
+        std::string t;
+        std::getline(is, t);
+        scriptLog(t);
+    } else if (cmd == "quit") running_ = false;
+    else {
+        scriptLog("unknown command: " + line);
+        return false;
+    }
+    return true;
+}
+
+void AppShell::scriptTick(double dt) {
+    static const bool enabled = !std::getenv("SCIFI_NO_SCRIPT");
+    if (!enabled) return;
+    if (script_.empty() && scriptPc_ == 0) {
+        static bool first = true;
+        if (first) {
+            first = false;
+            if (const char* sf = std::getenv("SCIFI_SCRIPT")) {
+                std::ifstream in(sf);
+                for (std::string l; std::getline(in, l);) script_.push_back(l);
+            }
+        }
+    }
+    if (mv_.on) {  // eased interpolation of the current scripted motion
+        mv_.t += dt;
+        const float k = mv_.dur <= 0 ? 1.0f : static_cast<float>(std::min(1.0, mv_.t / mv_.dur));
+        const float e = k * k * (3.0f - 2.0f * k);
+        if (mv_.pos) {
+            camera_.position.x = mv_.from.x + (mv_.to.x - mv_.from.x) * e;
+            camera_.position.z = mv_.from.z + (mv_.to.z - mv_.from.z) * e;
+            if (mv_.hasY) { camera_.position.y = mv_.from.y + (mv_.to.y - mv_.from.y) * e; vy_ = 0; }
+        }
+        if (mv_.ang) {
+            camera_.yaw = mv_.yaw0 + (mv_.yaw1 - mv_.yaw0) * e;
+            camera_.pitch = mv_.pitch0 + (mv_.pitch1 - mv_.pitch0) * e;
+        }
+        if (k >= 1.0f) mv_.on = false;
+        return;
+    }
+    if (scriptWait_ > 0) { scriptWait_ -= dt; return; }
+    if (shotPending_) return;
+    if (scriptPc_ >= script_.size()) {  // idle: look for a fresh control file twice a second
+        script_.clear();
+        scriptPc_ = 0;
+        scriptPoll_ -= dt;
+        if (scriptPoll_ > 0) return;
+        scriptPoll_ = 0.5;
+        const char* la = std::getenv("LOCALAPPDATA");
+        const std::filesystem::path cf = std::filesystem::path(la ? la : ".") / "SciFiShell" / "control.txt";
+        std::error_code ec;
+        if (!std::filesystem::exists(cf, ec)) return;
+        {
+            std::ifstream in(cf);
+            for (std::string l; std::getline(in, l);) script_.push_back(l);
+        }
+        std::filesystem::remove(cf, ec);
+        return;
+    }
+    // Run commands until one needs time.
+    for (int guard = 0; guard < 64 && scriptPc_ < script_.size() && scriptWait_ <= 0 && !mv_.on && !shotPending_; ++guard)
+        scriptExec(script_[scriptPc_++]);
+}
+
 void AppShell::toggleCity(bool on) {
     if (!city_ || on == cityMode_) return;
     cityMode_ = on;
     room_->setCardsVisible(!on);
+    if (on) clearRoomPending_ = true;  // drop the building's walls: they sit at the map's centre, on top of the hub
     if (on) {
         if (cityCamSet_) {
             camera_ = savedCam_;
@@ -1235,6 +1403,7 @@ void AppShell::tick(double dt) {
         settingsPanel_->update(dt, time_);
         appsPanel_->update(dt, time_);
     }
+    scriptTick(dt);
     if (state_ == State::FileRoom) {
         room_->pump();
         { Vec3 sp; float sy; if (room_->takeSpawn(sp, sy)) { camera_.position = sp; camera_.yaw = sy; camera_.pitch = 0; room_->setEye(sp); } }
@@ -1252,6 +1421,10 @@ void AppShell::tick(double dt) {
 #endif
     }
     if (city_) city_->update(dt, state_ == State::FileRoom, head_.eye);
+    if (clearRoomPending_) {
+        clearRoomPending_ = false;
+        if (cityMode_ && state_ == State::FileRoom) room_->loadEmpty();
+    }
     activeRoot().updateTree(dt, time_);
 }
 

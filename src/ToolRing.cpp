@@ -139,7 +139,7 @@ void ToolRing::render(Renderer& renderer) {
         const Vec3 tw{std::sin(yaw_), 0.0f, std::cos(yaw_)};
         const float rad = od * 0.5f * 0.75f;
         const float arc = kTau * rad / n;
-        const float isz = std::min(0.26f * sc * 1.0f, arc * 0.6f) * oa;
+        const float isz = std::min(0.13f * sc, arc * 0.6f) * oa;
         const bool clear = sets_[level_].transparent;
         if (oa > 0.6f)
             for (int i = 0; i < n; ++i) {
@@ -155,7 +155,7 @@ void ToolRing::render(Renderer& renderer) {
             auto& p = *sets_[level_].names[appSel_];
             p.position = center_ + rt * (std::sin(a) * rad) + Vec3{0, std::cos(a) * rad - isz * 0.8f, 0} + tw * 0.03f;
             p.yaw = yaw_;
-            p.scale = {0.4f * sc * 1.2f, 0.085f * sc * 1.2f, 1.0f};
+            p.scale = {0.24f * sc, 0.051f * sc, 1.0f};
             p.render(renderer);
         }
     }
@@ -169,7 +169,7 @@ void ToolRing::render(Renderer& renderer) {
         auto& p = *pills_[i];
         p.position = center_ + right * (dx * radius) + Vec3{0, dy * radius, 0} + toward * 0.02f;
         p.yaw = yaw_;
-        p.scale = {0.30f * anim_ * sc, 0.085f * anim_ * sc, 1.0f};
+        p.scale = {0.15f * anim_ * sc, 0.0425f * anim_ * sc, 1.0f};
         if (anim_ > 0.5f) p.render(renderer);
     }
 }
