@@ -79,11 +79,10 @@ Vec3 City::tintColor(int i) const {
     // Dark, moody palette (deep teals, steel blues, muted amber, violet, crimson, jade). Beyond 16 regions the hue stays
     // distinct by rotating the palette and dimming a little, so no two neighbouring regions or buses share a colour.
     static const Vec3 pal[16] = {
-        {0.04f, 0.62f, 0.78f}, {0.10f, 0.38f, 0.80f}, {0.62f, 0.38f, 0.10f}, {0.34f, 0.18f, 0.72f},
-        {0.05f, 0.58f, 0.40f}, {0.70f, 0.16f, 0.26f}, {0.30f, 0.62f, 0.70f}, {0.52f, 0.50f, 0.12f},
-        {0.58f, 0.22f, 0.62f}, {0.18f, 0.46f, 0.30f}, {0.74f, 0.30f, 0.12f}, {0.20f, 0.28f, 0.60f},
-        {0.12f, 0.70f, 0.60f}, {0.52f, 0.30f, 0.46f}, {0.40f, 0.52f, 0.78f}, {0.62f, 0.54f, 0.34f}};
-    if (i == 0) return currentTheme().accent * 0.8f;
+        {0.02f, 0.46f, 0.62f}, {0.05f, 0.22f, 0.58f}, {0.55f, 0.62f, 0.70f}, {0.10f, 0.58f, 0.66f},
+        {0.02f, 0.30f, 0.44f}, {0.70f, 0.78f, 0.84f}, {0.16f, 0.34f, 0.74f}, {0.04f, 0.52f, 0.50f},
+        {0.30f, 0.46f, 0.60f}, {0.08f, 0.40f, 0.80f}, {0.42f, 0.74f, 0.80f}, {0.20f, 0.20f, 0.52f},
+        {0.00f, 0.38f, 0.34f}, {0.62f, 0.68f, 0.76f}, {0.12f, 0.26f, 0.38f}, {0.26f, 0.66f, 0.74f}};    if (i == 0) return currentTheme().accent * 0.8f;
     const int round = i / 16;
     Vec3 c = pal[i % 16];
     if (round > 0) c = Vec3{c.z, c.x, c.y} * (1.0f - 0.12f * float(std::min(round, 4)));
@@ -389,20 +388,21 @@ void City::renderMonuments(Renderer& r, Vec3 eye) {
         float g = ease(coreGrow_[2]);
         if (coreGrow_[2] > 0) {
             const Vec3 c{52, 0, 30};
+            const Vec3 gpuCol{0.12f, 0.85f, 0.42f};
             float sizes[4] = {40, 30, 20, 11};
-            renderBox(r, {c.x, kSlabH * 0.5f * g, c.z}, {46, kSlabH * g, 46}, th.accent, 0.6f, 6, coreGrow_[2], 1.0f, 0);
+            renderBox(r, {c.x, kSlabH * 0.5f * g, c.z}, {46, kSlabH * g, 46}, gpuCol, 0.6f, 6, coreGrow_[2], 1.0f, 0);
             for (int i = 0; i < 4; ++i) {
                 float fill = clampf(shownGpu_ * 4.0f - i, 0.0f, 1.0f);
-                renderBox(r, {c.x, kSlabH + (i * 6.0f + 3.0f) * g, c.z}, {sizes[i], 6.0f * g, sizes[i]}, th.accent, 0.7f, 4,
+                renderBox(r, {c.x, kSlabH + (i * 6.0f + 3.0f) * g, c.z}, {sizes[i], 6.0f * g, sizes[i]}, gpuCol, 0.7f, 4,
                           coreGrow_[2], std::max(0.03f, fill), 0);
             }
             float vgb = float(s.vramTotal / 1073741824.0);
             float ph = std::clamp(20.0f + vgb * 6.0f, 24.0f, 110.0f);
-            renderBox(r, {c.x, kSlabH + 24.0f * g + ph * 0.5f * g, c.z}, {4, ph * g, 4}, th.accent, 0.8f, 4, coreGrow_[2],
+            renderBox(r, {c.x, kSlabH + 24.0f * g + ph * 0.5f * g, c.z}, {4, ph * g, 4}, gpuCol, 0.8f, 4, coreGrow_[2],
                       std::max(0.03f, vramUsed_), 0);
             char b[160];
             std::snprintf(b, sizeof b, "GPU  %s  %.0f GB VRAM  %s", upper(s.gpuName).c_str(), vgb, s.gpuLoad >= 0 ? pct(shownGpu_).c_str() : "--");
-            labelFor(mon_[2], b, {c.x, kSlabH + 24.0f + ph + 8.0f, c.z}, 5.0f, th.accent);
+            labelFor(mon_[2], b, {c.x, kSlabH + 24.0f + ph + 8.0f, c.z}, 5.0f, gpuCol);
         }
     }
 }
@@ -461,7 +461,7 @@ void City::render(Renderer& r, Vec3 eye) {
                     }
                 };
                 const float loads[3] = {shownCpu_, shownRam_, shownGpu_};
-                const Vec3 cols[3] = {th.accent, th.alt, th.accent};
+                const Vec3 cols[3] = {th.accent, th.alt, Vec3{0.12f, 0.85f, 0.42f}};
                 {
                     std::vector<std::vector<Vec3>> rs;
                     routes(rs);

@@ -57,7 +57,7 @@ float3 cloudHue(float h, float3 accent, float3 alt)
 // Colour of the distant haze; the floor fades into it and the sky meets it at the horizon.
 float3 mistColor(float3 accent)
 {
-    return float3(0.001, 0.0015, 0.003) + accent * 0.006;
+    return float3(0.002, 0.003, 0.006) + accent * 0.016;
 }
 
 // Sky: drifting soft puffs ("particles") on two layers, slowly shifting colour, plus twinkling motes.
@@ -213,6 +213,9 @@ float3 buildingColor(PSInput In)
     if (grow > 0.001 && kind != 7 && (top || rim > 0.0)) col += neon * grow * 1.2 * (top ? 1.0 : rim);
 
     float mist = smoothstep(150.0, 1000.0, dist);
+    // Low volumetric-style fog: thick and glowing near the ground, thinning with height and distance.
+    float fog = saturate((1.0 - exp(-dist * 0.005)) * (0.25 + 0.75 * exp(-max(In.WPos.y, 0.0) * 0.07)));
+    col = lerp(col, neon * 0.10 + g_Accent.rgb * 0.05, fog * 0.55);
     return col * (1.0 - mist) + mistColor(g_Accent.rgb) * mist;
 }
 
