@@ -46,6 +46,21 @@ std::string upper(std::string s) {
     return s;
 }
 }  // namespace
+namespace {
+constexpr int kRampSteps = 8;
+constexpr float kRampStep = 0.8f, kRampW = 7.0f;
+struct RampStep { float cx, cz, sx, sz, top; };
+// Step k=0 is the lowest and furthest from the slab edge; the last step is flush with the slab top.
+RampStep rampStep(float x, float z, int dir, int k) {
+    const float dist = (kRampSteps - 1 - k) * kRampStep + kRampStep * 0.5f, top = kSlabH * float(k + 1) / kRampSteps;
+    switch (dir) {
+        case 0: return {x + dist, z, kRampStep, kRampW, top};
+        case 1: return {x - dist, z, kRampStep, kRampW, top};
+        case 2: return {x, z + dist, kRampW, kRampStep, top};
+        default: return {x, z - dist, kRampW, kRampStep, top};
+    }
+}
+}  // namespace
 
 City::City(Renderer& renderer) : renderer_(renderer) {
     Bitmap b;
@@ -123,7 +138,7 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap) {
         sum += p.side + 30.0f;
         platforms_.push_back(std::move(p));
     }
-    float R = std::max(110.0f + maxSide * 0.75f + 30.0f, 1.25f * sum / (2.0f * kPi));
+    float R = std::max(90.0f + maxSide * 0.62f, 1.1f * sum / (2.0f * kPi));
     extent_ = R + maxSide * 0.75f + 100.0f;
 
     // Pass 2: place the platforms on a ring around the monuments and move the blocks into world space.
@@ -412,6 +427,26 @@ void City::render(Renderer& r, Vec3 eye) {
         if (g > 0) {
             renderBox(r, {0, kSlabH * 0.5f * g, 0}, {26, kSlabH * g, 26}, th.accent, 0.35f, 6, coreGrow_[0], 1.0f, 0);
             renderBox(r, {0, (kSlabH + 0.6f) * 0.5f * g, 0}, {8, (kSlabH + 0.6f) * g, 8}, th.alt, 0.35f, 6, coreGrow_[0], 1.0f, 0);
+            // Activity: data packets stream from the hub to the CPU / RAM / GPU, faster and denser the busier each is.
+            if (!r.mirror() && g > 0.99f) {
+                const float loads[3] = {shownCpu_, shownRam_, shownGpu_};
+                const Vec3 ends[3] = {{0, 0, -55}, {-52, 0, 30}, {52, 0, 30}};
+                const Vec3 cols[3] = {th.accent, th.alt, th.accent};
+                for (int m = 0; m < 3; ++m) {
+                    const float dx = std::fabs(ends[m].x), dz = std::fabs(ends[m].z), len = dx + dz;
+                    const float sx = ends[m].x < 0 ? -1.0f : 1.0f, sz = ends[m].z < 0 ? -1.0f : 1.0f;
+                    const int P = 4;
+                    for (int k = 0; k < P; ++k) {
+                        const float ph = float(std::fmod(clock_ * (0.08 + 0.35 * loads[m]) + k / float(P), 1.0));
+                        const float d = ph * len;
+                        const Vec3 at = d < dx ? Vec3{sx * d, kRoadY + 0.4f, 0} : Vec3{sx * dx, kRoadY + 0.4f, sz * (d - dx)};
+                        const float fade = std::sin(ph * kPi);
+                        renderBox(r, at, {2.2f, 0.5f, 2.2f}, cols[m] * (0.4f + 1.2f * fade), 0.3f, 5, 1, 0, 0);
+                    }
+                }
+                const float beat = 0.5f + 0.5f * std::sin(float(clock_) * 3.0f);
+                renderBox(r, {0, kSlabH + 0.8f + 0.5f * beat, 0}, {5.0f, 0.3f, 5.0f}, th.accent * (0.5f + beat), 0.3f, 5, 1, 0, 0);
+            }
             const float y = kRoadY + 0.02f;
             int N = std::clamp<int>(s.cores, 1, 32);
             float plinth = std::max(14.0f, N * 4.2f / (2.0f * kPi)) * 2.0f + 10.0f;
@@ -430,6 +465,18 @@ void City::render(Renderer& r, Vec3 eye) {
             xRoad(30, 0, -52 + (K * 3.4f + 6.0f) * 0.5f, coreGrow_[1]);
             zRoad(0.0f, 0, 30, coreGrow_[2]);
             xRoad(30, 0, 52 - 23.0f, coreGrow_[2]);
+        }
+    }
+    {
+        std::vector<Ramp> ramps;
+        rampList(ramps);
+        for (const Ramp& rp : ramps) {
+            if (r.mirror() || std::fabs(eye.x - rp.x) > 160.0f || std::fabs(eye.z - rp.z) > 160.0f) continue;
+            const Vec3 col = rp.plat >= 0 ? tintColor(platforms_[rp.plat].tint) : currentTheme().accent;
+            for (int k = 0; k < kRampSteps; ++k) {
+                const RampStep st = rampStep(rp.x, rp.z, rp.dir, k);
+                renderBox(r, {st.cx, st.top * 0.5f, st.cz}, {st.sx, st.top, st.sz}, col, 0.5f, 6, 1.0f, 0, 0);
+            }
         }
     }
     if (!built_) return;
@@ -574,6 +621,32 @@ void City::render(Renderer& r, Vec3 eye) {
     }
 }
 
+
+void City::rampList(std::vector<Ramp>& out) const {
+    const SystemStats& s = data_.stats();
+    const int n = (int)platforms_.size();
+    for (int i = 0; i < n; ++i) {
+        const auto& p = platforms_[i];
+        if (p.grow < 0.3f) continue;
+        const float lane = (i - (n - 1) * 0.5f) * 3.5f;
+        const float sx = p.cx >= 0 ? 1.0f : -1.0f, sz = p.cz >= 0 ? 1.0f : -1.0f;
+        if (std::fabs(p.cz) < p.side * 0.5f + 2.0f) out.push_back({p.cx - sx * p.side * 0.5f, lane, sx > 0 ? 1 : 0, i});
+        else out.push_back({p.cx, p.cz - sz * p.side * 0.5f, sz > 0 ? 3 : 2, i});
+    }
+    if (coreGrow_[0] > 0.3f) {
+        out.push_back({0, -13.0f, 3, -1});
+        out.push_back({0, 13.0f, 2, -1});
+        const float ringR = std::max(14.0f, std::clamp<int>(s.cores, 1, 32) * 4.2f / (2.0f * kPi));
+        const float edge = -55.0f + (ringR * 2.0f + 10.0f) * 0.5f;
+        if (edge < -22.0f) out.push_back({0, edge, 2, -1});
+    }
+    if (coreGrow_[1] > 0.3f) {
+        const int K = std::clamp<int>((int)(s.ramTotal / 1073741824.0 / 4.0 + 0.5), 2, 16);
+        out.push_back({-52.0f + (K * 3.4f + 6.0f) * 0.5f, 30.0f, 0, -1});
+    }
+    if (coreGrow_[2] > 0.3f) out.push_back({29.0f, 30.0f, 1, -1});
+}
+
 void City::monumentBoxes(std::vector<Box>& out) const {
     const SystemStats& s = data_.stats();
     auto add = [&](float cx, float cz, float hx, float hz, float top) { out.push_back({cx - hx, cx + hx, top, cz - hz, cz + hz}); };
@@ -605,6 +678,15 @@ void City::monumentBoxes(std::vector<Box>& out) const {
 
 void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const {
     monumentBoxes(boxes);
+    std::vector<Ramp> ramps;
+    rampList(ramps);
+    for (const Ramp& rp : ramps) {
+        if (std::fabs(p.x - rp.x) > 12.0f || std::fabs(p.z - rp.z) > 12.0f) continue;
+        for (int k = 0; k < kRampSteps; ++k) {
+            const RampStep st = rampStep(rp.x, rp.z, rp.dir, k);
+            boxes.push_back({st.cx - st.sx * 0.5f, st.cx + st.sx * 0.5f, st.top, st.cz - st.sz * 0.5f, st.cz + st.sz * 0.5f});
+        }
+    }
     for (const auto& pl : platforms_) {
         if (pl.grow < 0.3f) continue;
         float dx = p.x - pl.cx, dz = p.z - pl.cz;

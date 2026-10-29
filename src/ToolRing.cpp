@@ -8,7 +8,7 @@
 namespace sf {
 
 namespace {
-const char* kNames[ToolRing::kCount] = {"WEB", "FILES", "EDITOR", "MEDIA", "SETTINGS", "THEME", "APPS", "POWER"};
+const char* kNames[ToolRing::kCount] = {"FILES", "SETTINGS", "THEME", "APPS", "POWER"};
 constexpr float kTau = 2.0f * kPi;
 }  // namespace
 
@@ -38,11 +38,12 @@ void ToolRing::open(Vec3 eye, Vec3 forward) {
 void ToolRing::close() {
     open_ = false;
     appsMode_ = false;
+    level_ = 0;
 }
 
 void ToolRing::cycle(int delta) {
-    if (appsMode_ && !appIcons_.empty()) {
-        const int n = static_cast<int>(appIcons_.size());
+    if (appsMode_ && !sets_[level_].icons.empty()) {
+        const int n = static_cast<int>(sets_[level_].icons.size());
         appSel_ = ((appSel_ + delta) % n + n) % n;
         appHot_ = true;
         return;
@@ -50,22 +51,31 @@ void ToolRing::cycle(int delta) {
     sel_ = ((sel_ + delta) % kCount + kCount) % kCount;
 }
 
-void ToolRing::setApps(const std::vector<std::string>& names, const std::vector<Bitmap>& icons) {
-    appIcons_.clear();
-    appNames_.clear();
+void ToolRing::setLevel(int level, const std::vector<std::string>& names, const std::vector<Bitmap>& icons, bool transparent) {
+    ItemSet& s = sets_[level];
+    s.icons.clear();
+    s.names.clear();
+    s.transparent = transparent;
     for (size_t i = 0; i < names.size(); ++i) {
-        appIcons_.push_back(renderer_.createLabel(icons[i], true));
-        appNames_.push_back(std::make_unique<PanelNode>(renderer_, names[i], Vec3{0.1f, 0.85f, 1.0f}, 0.4f, 0.085f, 0));
+        s.icons.push_back(renderer_.createLabel(icons[i], true));
+        s.names.push_back(std::make_shared<PanelNode>(renderer_, names[i], Vec3{0.1f, 0.85f, 1.0f}, 0.4f, 0.085f, 0));
     }
     appSel_ = 0;
 }
 
 void ToolRing::showApps(bool on) {
-    appsMode_ = on && !appIcons_.empty();
+    level_ = 0;
+    appsMode_ = on && !sets_[0].icons.empty();
     appHot_ = appsMode_;
     appSel_ = 0;
 }
 
+void ToolRing::enterLevel(int level) {
+    if (sets_[level].icons.empty()) return;
+    level_ = level;
+    appSel_ = 0;
+    appHot_ = true;
+}
 void ToolRing::pointer(Vec3 o, Vec3 d) {
     if (!open_) return;
     const Vec3 n{std::sin(yaw_), 0.0f, std::cos(yaw_)};
@@ -79,12 +89,12 @@ void ToolRing::pointer(Vec3 o, Vec3 d) {
     const float half = kDiameter * 0.5f * sc;
     const float u = dot(hit, right) / half, v = hit.y / half;
     const float r = std::sqrt(u * u + v * v);
-    if (appsMode_ && !appIcons_.empty()) {  // the outer ring is twice as wide
+    if (appsMode_ && !sets_[level_].icons.empty()) {  // the outer ring is twice as wide
         const float ro = r / kOuter;
         if (ro >= 0.5f && ro <= 0.97f) {
             float a = std::atan2(u, v);
             if (a < 0) a += kTau;
-            const int n = static_cast<int>(appIcons_.size());
+            const int n = static_cast<int>(sets_[level_].icons.size());
             appSel_ = std::min(n - 1, static_cast<int>(a / kTau * n));
             appHot_ = true;
             return;
@@ -104,7 +114,7 @@ void ToolRing::update(double dt, double time) {
     if (!open_ && anim_ < 0.01f) anim_ = 0;
     pulse_ = std::max(0.0f, pulse_ - static_cast<float>(dt) * 2.5f);
     appsAnim_ += ((appsMode_ ? 1.0f : 0.0f) - appsAnim_) * k;
-    if (appsMode_ && appSel_ < static_cast<int>(appNames_.size())) appNames_[appSel_]->update(dt, time);
+    if (appsMode_ && appSel_ < static_cast<int>(sets_[level_].names.size())) sets_[level_].names[appSel_]->update(dt, time);
     const Theme& th = currentTheme();
     for (int i = 0; i < kCount; ++i) {
         pills_[i]->setSelected(i == sel_);
@@ -120,8 +130,8 @@ void ToolRing::render(Renderer& renderer) {
     const float dia = kDiameter * sc;
     const Mat4 world = Mat4::translate(center_) * Mat4::rotateY(yaw_) * Mat4::scale({dia, dia, 1.0f});
     renderer.drawRing(*dummy_, world, kCount, static_cast<float>(sel_), spin, anim_, pulse_);
-    if (appsAnim_ > 0.02f && !appIcons_.empty()) {
-        const int n = static_cast<int>(appIcons_.size());
+    if (appsAnim_ > 0.02f && !sets_[level_].icons.empty()) {
+        const int n = static_cast<int>(sets_[level_].icons.size());
         const float od = dia * kOuter, oa = std::min(anim_, appsAnim_);
         const Mat4 ow = Mat4::translate(center_ + Vec3{std::sin(yaw_), 0, std::cos(yaw_)} * -0.01f) * Mat4::rotateY(yaw_) * Mat4::scale({od, od, 1.0f});
         renderer.drawRing(*dummy_, ow, n, static_cast<float>(appSel_), -spin, oa, appHot_ ? pulse_ : 0.0f);
@@ -129,17 +139,20 @@ void ToolRing::render(Renderer& renderer) {
         const Vec3 tw{std::sin(yaw_), 0.0f, std::cos(yaw_)};
         const float rad = od * 0.5f * 0.75f;
         const float arc = kTau * rad / n;
-        const float isz = std::min(0.26f * sc * 1.6f, arc * 0.8f) * oa;
+        const float isz = std::min(0.26f * sc * 1.0f, arc * 0.6f) * oa;
+        const bool clear = sets_[level_].transparent;
         if (oa > 0.6f)
             for (int i = 0; i < n; ++i) {
                 const float a = (i + 0.5f) / n * kTau;
                 const Vec3 pos = center_ + rt * (std::sin(a) * rad) + Vec3{0, std::cos(a) * rad, 0} + tw * 0.012f;
                 const float s = isz * (i == appSel_ ? 1.18f : 1.0f);
-                renderer.drawCube(*appIcons_[i], Mat4::translate(pos) * Mat4::rotateY(yaw_) * Mat4::scale({s, s, 0.01f}), {1, 1, 1}, false, true, -1.0f);
+                const float uv[4] = {0, 0, 1, 1}, tint[3] = {0, 0, 0};
+                renderer.drawWebRegion(*sets_[level_].icons[i], Mat4::translate(pos) * Mat4::rotateY(yaw_) * Mat4::scale({s, s, 1.0f}), uv, 1.0f,
+                                       clear ? 0.0f : 0.1f, clear ? -1.0f : 0.0f, i == appSel_ ? 1.0f : (clear ? 0.62f : 1.0f), tint);
             }
-        if (oa > 0.6f && appSel_ < static_cast<int>(appNames_.size())) {
+        if (oa > 0.6f && appSel_ < static_cast<int>(sets_[level_].names.size())) {
             const float a = (appSel_ + 0.5f) / n * kTau;
-            auto& p = *appNames_[appSel_];
+            auto& p = *sets_[level_].names[appSel_];
             p.position = center_ + rt * (std::sin(a) * rad) + Vec3{0, std::cos(a) * rad - isz * 0.8f, 0} + tw * 0.03f;
             p.yaw = yaw_;
             p.scale = {0.4f * sc * 1.2f, 0.085f * sc * 1.2f, 1.0f};

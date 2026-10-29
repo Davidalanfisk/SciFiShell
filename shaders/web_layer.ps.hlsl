@@ -129,6 +129,8 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
     // Rim light: a thin bright band along the edge, stronger on the upper-left like a bevel.
     float rimBand = 1.0 - smoothstep(0.0, 0.02, -sd);
     float bias = saturate(0.55 + 0.45 * dot(normalize(pp + 1e-5), float2(-0.7, -0.7)));
-    float3 rgb = tex.rgb + g_Color.rgb * g_Params.w * rimBand * bias;
-    Color = float4(rgb, cover * g_Color.a);
+    // A negative rim strength marks a transparent icon: no rim, and the texture's own alpha shapes it.
+    float ua = g_Params.w < 0.0 ? tex.a : 1.0;
+    float3 rgb = tex.rgb + g_Color.rgb * max(g_Params.w, 0.0) * rimBand * bias;
+    Color = float4(rgb, cover * g_Color.a * ua);
 }

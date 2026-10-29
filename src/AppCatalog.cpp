@@ -39,7 +39,7 @@ std::vector<AppEntry> loadTaskbarApps() {
     return out;
 }
 
-bool loadAppIcon(const std::string& path, int px, Bitmap& out) {
+bool loadAppIcon(const std::string& path, int px, Bitmap& out, bool transparent) {
 #ifdef _WIN32
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     const int wl = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
@@ -73,6 +73,12 @@ bool loadAppIcon(const std::string& path, int px, Bitmap& out) {
     const float tile[3] = {10.0f, 16.0f, 26.0f};
     for (size_t i = 0; i < bgra.size(); i += 4) {
         const float a = bgra[i + 3] / 255.0f;  // shell icons carry premultiplied alpha
+        if (transparent) {  // keep the alpha, undo the premultiply
+            const float inv = a > 0.001f ? 1.0f / a : 0.0f;
+            for (int k = 0; k < 3; ++k) out.rgba[i + k] = static_cast<uint8_t>(std::min(255.0f, bgra[i + 2 - k] * inv));
+            out.rgba[i + 3] = bgra[i + 3];
+            continue;
+        }
         out.rgba[i + 0] = static_cast<uint8_t>(std::min(255.0f, bgra[i + 2] + tile[0] * (1 - a)));
         out.rgba[i + 1] = static_cast<uint8_t>(std::min(255.0f, bgra[i + 1] + tile[1] * (1 - a)));
         out.rgba[i + 2] = static_cast<uint8_t>(std::min(255.0f, bgra[i + 0] + tile[2] * (1 - a)));

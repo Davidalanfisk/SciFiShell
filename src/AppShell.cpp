@@ -154,7 +154,7 @@ bool AppShell::init() {
             ShellExecuteA(nullptr, "open", "powershell.exe", "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File update.ps1", nullptr, SW_HIDE);
 #endif
         if (std::getenv("SCIFI_OPEN_SETTINGS")) settingsPanel_->open(head_.eye, head_.forward);  // debugging aid
-        if (std::getenv("SCIFI_OPEN_APPS")) { ring_->open(head_.eye, head_.forward); runTool(Tool::Apps); }  // debugging aid
+        if (std::getenv("SCIFI_OPEN_APPS")) { ring_->open(head_.eye, head_.forward); runTool(Tool::Apps); if (const char* l = std::getenv("SCIFI_OPEN_APPS")) if (l[0] == '2') ring_->enterLevel(1); }  // debugging aid
         if (!std::getenv("SCIFI_START_ROOM") && !std::getenv("SCIFI_START_PATH")) toggleCity(true);  // the city is the home view
 #ifdef _WIN32
         if (const char* oa = std::getenv("SCIFI_OPEN_APP")) launchApp(std::max(0, std::atoi(oa) - 1));  // debugging aid: 1 = Notepad, 2 = next catalog entry...
@@ -424,13 +424,17 @@ void AppShell::runTool(Tool tool) {
                 std::vector<Bitmap> icons;
                 for (size_t i = 0; i < pinnedCount_; ++i) {
                     Bitmap bm;
-                    if (!loadAppIcon(catalog_[i].launch, 128, bm)) {  // no icon: a plain tile with the app's initial
+                    if (!loadAppIcon(catalog_[i].launch, 128, bm, true)) {  // no icon: a plain tile with the app's initial
                         bm = makeLabel(catalog_[i].name.substr(0, 1), 90.0f, FontFace::UI, Color8{}, 128, 128);
                     }
                     names.push_back(catalog_[i].name);
                     icons.push_back(std::move(bm));
                 }
-                ring_->setApps(names, icons);
+                ring_->setLevel(1, names, icons, true);
+                std::vector<std::string> top = {"WEB", "EDITOR", "MEDIA", "WINDOWS"};
+                std::vector<Bitmap> topIcons;
+                for (const auto& n : top) topIcons.push_back(makeLabel(n, 64.0f, FontFace::UI, Color8{}, 256, 128));
+                ring_->setLevel(0, top, topIcons, true);
             }
             ring_->showApps(!ring_->appsMode());
 #endif
@@ -991,14 +995,20 @@ void AppShell::tick(double dt) {
             if (down || in.right) ring_->cycle(1);
             if (ring_->appsMode() && (pointerSelect || keySelect) && (ring_->appHot() || keySelect)) {
                 const int idx = ring_->appSelected();
-                ring_->close();
+                if (ring_->appLevel() == 0) {
+                    if (idx == 3) ring_->enterLevel(1);
+                    else runTool(idx == 0 ? Tool::Browser : idx == 1 ? Tool::Editor : Tool::Media);
+                } else {
+                    ring_->close();
 #ifdef _WIN32
-                launchApp(idx);
+                    launchApp(idx);
 #endif
+                }
             } else if (pointerSelect || keySelect) runTool(ring_->selected());
             else if (ringWasOpen && ringToggle) ring_->close();
             else if (back || in.escape) {
-                if (ring_->appsMode()) ring_->showApps(false);
+                if (ring_->appsMode() && ring_->appLevel() == 1) ring_->enterLevel(0);
+                else if (ring_->appsMode()) ring_->showApps(false);
                 else ring_->close();
             }
         } else if (appOpen) {

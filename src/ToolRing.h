@@ -22,7 +22,7 @@ public:
 
     void pointer(Vec3 origin, Vec3 dir);  // ray -> hovered segment
     void cycle(int delta);                // wheel / stick / d-pad (moves through the apps while the app ring is out)
-    Tool selected() const { return static_cast<Tool>(sel_); }
+    Tool selected() const { return kMap[sel_]; }
     // Starts the "activated" pulse; the caller performs the tool action and closes the ring.
     void pulse() { pulse_ = 1.0f; }
 
@@ -30,13 +30,17 @@ public:
     void render(Renderer& renderer);
 
     // The app ring: a second, larger ring around the first with one selectable icon segment per app.
-    void setApps(const std::vector<std::string>& names, const std::vector<Bitmap>& icons);
+    // Level 0 holds the built-in tools (Web, Editor, Media, ...), level 1 the Windows apps; they replace each other in the outer ring.
+    void setLevel(int level, const std::vector<std::string>& names, const std::vector<Bitmap>& icons, bool transparent);
     void showApps(bool on);
+    void enterLevel(int level);  // switch the outer ring between the two item sets
+    int appLevel() const { return level_; }
+    bool appsReady(int level) const { return !sets_[level].icons.empty(); }
     bool appsMode() const { return appsMode_; }
     bool appHot() const { return appsMode_ && appHot_; }  // the pointer is over the outer ring
     int appSelected() const { return appSel_; }
 
-    static constexpr int kCount = 8;
+    static constexpr int kCount = 5;  // Files, Settings, Theme, Apps, Power
 
 private:
     Renderer& renderer_;
@@ -48,8 +52,14 @@ private:
     Vec3 center_{0, 1.6f, -1.5f};
     Vec3 fallbackFlat_{0, 0, -1};
     float yaw_ = 0;
-    std::vector<std::shared_ptr<GpuLabel>> appIcons_;
-    std::vector<std::unique_ptr<PanelNode>> appNames_;
+    struct ItemSet {
+        std::vector<std::shared_ptr<GpuLabel>> icons;
+        std::vector<std::shared_ptr<PanelNode>> names;
+        bool transparent = false;
+    };
+    ItemSet sets_[2];
+    int level_ = 0;
+    static constexpr Tool kMap[kCount] = {Tool::Files, Tool::Settings, Tool::Theme, Tool::Apps, Tool::Power};
     bool appsMode_ = false, appHot_ = false;
     int appSel_ = 0;
     float appsAnim_ = 0;  // 0 = single ring, 1 = both rings (the whole disc shrinks to make room)

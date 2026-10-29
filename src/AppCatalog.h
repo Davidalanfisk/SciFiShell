@@ -16,6 +16,6 @@ struct AppEntry {
 std::vector<AppEntry> loadTaskbarApps();
 
 // The shell icon of a program or shortcut, rendered onto a dark tile (opaque RGBA, px x px). False if unavailable.
-bool loadAppIcon(const std::string& path, int px, Bitmap& out);
+bool loadAppIcon(const std::string& path, int px, Bitmap& out, bool transparent = false);
 
 }  // namespace sf

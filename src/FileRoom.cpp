@@ -159,7 +159,8 @@ void CardNode::render(Renderer& renderer) {
     }
     ensureLabel();
     Vec3 base = tall ? Vec3{0.02f, 0.035f, 0.06f} : isParentLink ? Vec3{0.28f, 0.24f, 0.5f} : (entry.isDir ? Vec3{0.1f, 0.28f, 0.52f} : Vec3{0.14f, 0.17f, 0.23f});
-    Vec3 color = hover ? base * 1.6f : base;
+    if (tall && isParentLink) base = {0.55f, 0.95f, 1.0f};  // the exit glows
+    Vec3 color = hover ? base * 1.4f : base;
     renderer.drawCube(*label_, w, color, false, false, tall ? -1.0f : (hover ? 1.0f : 0.0f));  // doors draw their own outline
 }
 
@@ -316,16 +317,16 @@ void FileRoom::buildCorridor() {
     auto floorSlots = [&](float hw, float d) {
         std::vector<LobbySlot> v;
         for (float x = -hw + kStrip + kPitch * 0.5f; x <= hw - kStrip - kPitch * 0.5f + 0.01f; x += kPitch) {
-            if (multi && std::fabs(x) < kShaftHalf + 1.4f) continue;  // the lift shaft stands against the far wall
-            v.push_back({x, -d, 0.0f, 0});
-        }
-        for (float x = -hw + kStrip + kPitch * 0.5f; x <= hw - kStrip - kPitch * 0.5f + 0.01f; x += kPitch) {
             if (std::fabs(x) < 4.0f) continue;  // the grand exit stands here
             v.push_back({x, kFrontZ, kPi, 0});
         }
         for (float z = -d + kStrip + kPitch * 0.5f; z <= kFrontZ - kStrip - kPitch * 0.5f + 0.01f; z += kPitch) {
             v.push_back({-hw, z, kPi * 0.5f, 0});
             v.push_back({hw, z, -kPi * 0.5f, 0});
+        }
+        for (float x = -hw + kStrip + kPitch * 0.5f; x <= hw - kStrip - kPitch * 0.5f + 0.01f; x += kPitch) {  // the back wall fills last
+            if (multi && std::fabs(x) < kShaftHalf + 1.4f) continue;  // the lift shaft stands against the far wall
+            v.push_back({x, -d, 0.0f, 0});
         }
         return v;
     };
@@ -348,11 +349,12 @@ void FileRoom::buildCorridor() {
     auto add = [&](Vec3 c, Vec3 s, Vec3 col, float glow = 0.0f, bool always = false) { B.push_back({c, s, col, glow, always}); };
     const float zm = (kFrontZ - d) * 0.5f, zl = d + kFrontZ, H = multi ? L * kLevelH + 1.2f : 7.5f, fz = fountainZ(d);
 
-    auto exitCard = std::make_unique<CardNode>(renderer_, parentEntry_, parentEntry_.name);
+    auto exitCard = std::make_unique<CardNode>(renderer_, parentEntry_, "EXIT");
     exitCard->isParentLink = true;
-    exitCard->position = {0, 2.0f, kFrontZ - 0.24f};
+    exitCard->tall = true;  // the portrait door body fills the whole doorway
+    exitCard->position = {0, 2.55f, kFrontZ - 0.24f};
     exitCard->yaw = kPi;
-    exitCard->scale = {3.4f, 2.0f, 0.06f};
+    exitCard->scale = {4.1f, 5.1f, 0.06f};
     addCard(std::move(exitCard));
     {
         const Vec3 neon{0.85f, 0.92f, 1.0f};
@@ -445,8 +447,7 @@ void FileRoom::buildCorridor() {
         add({0, 3.55f, fz}, {0.5f, 0.3f, 0.5f}, rim * 0.8f, -1.0f, true);
     }
 
-    // Ceiling light bars and a skylight over the fountain.
-    for (float x = -hw + 8.0f; x < hw; x += 16.0f) add({x, H - 0.1f, zm}, {0.5f, 0.06f, zl - 2.0f}, light * 0.7f, -1.0f, true);
+    // A skylight over the fountain.
     add({0, H - 0.04f, fz}, {9.0f, 0.06f, 9.0f}, light * 0.9f, -1.0f, true);
 
     // Doors, one per room, on every floor.
@@ -570,6 +571,11 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     if (idx < 0 || idx >= static_cast<int>(rooms_.size())) return;
     const RoomInfo ri = rooms_[idx];
     std::vector<DirEntry> items = ri.loose ? looseItems_ : listDirectory(ri.path, kMaxEntries);
+    if (setSpawn && items.size() == 1 && items[0].isDir) {  // a room holding just one folder: go straight through
+        const std::string target = items[0].path;
+        load(target);
+        return;
+    }
     roomIdx_ = idx;
     inRoom_ = true;
     building_ = true;
@@ -609,7 +615,6 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     add({h + 0.2f, H * 0.5f, 0}, {0.4f, H, S + 0.8f}, wall);
     add({0, H + 0.1f, 0}, {S + 0.8f, 0.2f, S + 0.8f}, wall * 0.7f, -1.0f);
     add({0, 0.03f, 0}, {S - 0.2f, 0.04f, S - 0.2f}, Vec3{0.036f, 0.038f, 0.043f} + kc * 0.004f, -1.0f);
-    for (float x = -h + 4.0f; x < h - 1.0f; x += 8.0f) add({x, H - 0.05f, 0}, {0.5f, 0.06f, S - 2.0f}, light, -1.0f);
     for (int e : {-1, 1}) add({e * 1.5f, 1.55f, h - 0.1f}, {0.1f, 3.2f, 0.1f}, kc * 2.0f, -1.0f);
     add({0, 3.2f, h - 0.1f}, {3.1f, 0.1f, 0.1f}, kc * 2.0f, -1.0f);
     root_->add(std::move(shell));
