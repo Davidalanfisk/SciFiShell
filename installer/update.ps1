@@ -16,7 +16,6 @@ function Say($msg, $icon = 'Information') {
 
 try {
     $current = [version]((Get-Content (Join-Path $PSScriptRoot 'version.txt') -Raw).Trim())
-    if (Test-Path $file) { $token = (Get-Content $file -Raw).Trim() }
 
     $h = @{ 'User-Agent' = 'SciFiShell-Updater'; 'X-GitHub-Api-Version' = '2022-11-28' }
     $rel = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers ($h + @{ Accept = 'application/vnd.github+json' })
