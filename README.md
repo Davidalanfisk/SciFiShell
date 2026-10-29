@@ -177,3 +177,9 @@ Set SCIFI_NO_SCRIPT=1 to disable. Mouse clicks cannot be injected yet.
 
 ### Bus network routing
 Storage routes are planned so they never run under a platform or monument. Where a lane must cross another it rides over it on a ramped, walkable bridge. The idle tour is now one continuous, faster flight that swings between low runs through the city blocks and high sweeps.
+
+### Routing, tour and media player (v0.3.0)
+
+- **Bus routing**: routes are planned on a grid (Dijkstra) around platforms, plinths and the hub; crossings are bridged with straight sloped ramps, so lanes never run under a region or through the CPU.
+- **Idle tour**: a continuous Catmull-Rom spline flight that dives down between buildings and climbs out; it avoids rooftops by looking ahead and lifting. Any input stops it.
+- **Media player**: Ring > Apps > Media opens the player pages. Choose folders on MEDIA FOLDERS (presets, or the folder you are standing in); a background scan stores a database in `%LOCALAPPDATA%\SciFiShell\media\`. MEDIA TRACKS browses/filters and queues; MEDIA QUEUE shows, saves and loads the playlist (`playlist.m3u8`). Audio keeps playing with all panels closed and auto-advances (shuffle/repeat available); video opens in the media card.

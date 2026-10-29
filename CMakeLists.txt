@@ -68,6 +68,8 @@ set(SOURCES
     src/TextRender.cpp
     src/Thumbnails.cpp
     src/MediaPlayer.cpp
+    src/MediaLibrary.cpp
+    src/AppShellMedia.cpp
     src/CodeEditor.cpp
     src/Viewer.cpp
     src/VideoFrame.cpp

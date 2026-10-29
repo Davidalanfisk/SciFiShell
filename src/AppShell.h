@@ -10,6 +10,8 @@
 #include "LCARSUI.h"
 #include "Renderer.h"
 #include "Settings.h"
+#include "MediaLibrary.h"
+#include "MediaPlayer.h"
 #ifdef _WIN32
 #include "AppWindow.h"
 #include "AppCatalog.h"
@@ -92,6 +94,19 @@ private:
     bool browserFocus_ = false;  // browser (not a hosted program) has the pointer when both are open
     Camera savedCam_;
     bool cityCamSet_ = false;
+    // Media player (see AppShellMedia.cpp)
+    void mediaPlayAt(int index, int dir);
+    void mediaNext(int dir);
+    void mediaStep();
+    void mediaQueueSet(const std::vector<std::string>& paths, int start);
+    std::vector<SettingsCategory> mediaCategories();
+    std::unique_ptr<MediaLibrary> mediaLib_;
+    MediaPlayer mediaPlayer_;
+    std::vector<std::string> queue_;
+    int queueIndex_ = -1, repeat_ = 0, trackFilter_ = 0, trackPage_ = 0, queuePage_ = 0;
+    bool shuffle_ = false, nowVideo_ = false;
+    float mediaVol_ = 0.8f;
+    std::string nowTitle_, pendingMediaPage_;
     int powerArmed_ = 0;  // 1 restart / 2 shutdown awaiting a confirming second click
     std::unique_ptr<Viewer> viewer_;
     std::unique_ptr<ToolRing> ring_;

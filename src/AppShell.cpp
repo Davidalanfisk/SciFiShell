@@ -325,6 +325,7 @@ void AppShell::buildSettingsHub() {
         make("SYSTEM", "About this PC, memory and disks", std::move(sys));
     }
 #endif
+    for (SettingsCategory& c : mediaCategories()) cats.push_back(std::move(c));
     settingsPanel_->setCategories(std::move(cats));
 }
 
@@ -410,8 +411,10 @@ void AppShell::runTool(Tool tool) {
             menu_->setStatus(room_->openFirst(true));
             break;
         case Tool::Media:
-            if (cityMode_) toggleCity(false);
-            menu_->setStatus(room_->openFirst(false));
+            buildSettingsHub();
+            settingsPanel_->open(vrOn_ ? head_.eye : camera_.position,
+                                 vrOn_ ? head_.forward : Vec3{-std::sin(camera_.yaw), 0.0f, -std::cos(camera_.yaw)});
+            settingsPanel_->openPage("MEDIA PLAYER");
             break;
         case Tool::Settings:
             buildSettingsHub();
@@ -549,6 +552,15 @@ bool AppShell::scriptExec(const std::string& line) {
         if (v == "files") runTool(Tool::Files);
         else if (v == "settings") runTool(Tool::Settings);
         else if (v == "theme") runTool(Tool::Theme);
+        else if (v == "media") runTool(Tool::Media);
+        else if (v == "page") { std::string pg; std::getline(is >> std::ws, pg); settingsPanel_->openPage(pg); }
+        else if (v == "mediafolder") { std::string p; std::getline(is >> std::ws, p); mediaCategories(); mediaLib_->addFolder(p); }
+        else if (v == "mediaplay") {
+            mediaCategories();
+            std::vector<std::string> all;
+            for (const MediaTrack& t : mediaLib_->tracks()) all.push_back(t.path);
+            mediaQueueSet(all, 0);
+        }
         else if (v == "apps") { if (!ring_->isOpen()) ring_->open(head_.eye, head_.forward); runTool(Tool::Apps); }
         else scriptLog("unknown tool: " + v);
     } else if (cmd == "shot") {
@@ -1619,6 +1631,13 @@ void AppShell::tick(double dt) {
         room_->pump();
         { Vec3 sp; float sy; if (room_->takeSpawn(sp, sy)) { camera_.position = sp; camera_.yaw = sy; camera_.pitch = 0; room_->setEye(sp); } }
         viewer_->update(dt, head_);
+        mediaStep();
+        if (!pendingMediaPage_.empty()) {
+            const std::string page = pendingMediaPage_;
+            pendingMediaPage_.clear();
+            buildSettingsHub();
+            if (settingsPanel_->isOpen()) settingsPanel_->openPage(page);
+        }
         static bool autoFs = std::getenv("SCIFI_OPEN_FS") != nullptr;  // debugging aid: go fullscreen once settled
         if (autoFs && viewer_->active() && !viewer_->fullscreen() && time_ > 2.0) {
             viewer_->toggleFullscreen(head_);
