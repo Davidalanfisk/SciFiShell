@@ -715,36 +715,74 @@ void AppShell::rideStep(double dt) {
     }
 }
 
-// Fly the camera round the city's landmarks with the scripting system; any control input stops it (see tick).
+// Idle fly-through of the city: one continuous spline through the waypoints at a steady speed, with no stops. The altitude is
+// raised wherever a building is ahead so the camera dives between towers but never clips them. Any control input stops it.
 void AppShell::startTour() {
     std::vector<Vec3> pts;
     city_->tourPoints(pts);
-    if (pts.empty()) return;
-    script_.clear();
-    scriptPc_ = 0;
-    scriptWait_ = 0;
-    script_.push_back("fly on");
-    const float deg = 180.0f / kPi;
-    // One continuous journey: no pauses, a leg's length sets its time, and the altitude swings between low runs through the
-    // city blocks and high sweeps above them.
-    const float alts[] = {60.0f, 7.0f, 28.0f, 5.0f, 85.0f, 10.0f, 40.0f, 6.0f};
-    const size_t count = pts.size();
-    std::vector<Vec3> way(count);
-    for (size_t i = 0; i < count; ++i) way[i] = {pts[i].x, alts[i % 8], pts[i].z};
-    Vec3 prev = {0, 60.0f, 240.0f};
-    for (size_t i = 0; i < count; ++i) {
-        const Vec3 cur = way[i], nxt = way[(i + 1) % count];
-        const float lx = cur.x - prev.x, lz = cur.z - prev.z, leg = std::sqrt(lx * lx + lz * lz + (cur.y - prev.y) * (cur.y - prev.y));
-        const float fx = nxt.x - cur.x, fz = nxt.z - cur.z, hd = std::max(1.0f, std::sqrt(fx * fx + fz * fz));
-        const float yaw = std::atan2(-fx, -fz) * deg, pitch = std::atan2(nxt.y - cur.y, hd) * deg * 0.6f - 3.0f;
-        const float secs = std::clamp(leg / 38.0f, 3.0f, 9.0f);
-        char b[160];
-        std::snprintf(b, sizeof b, "cam %.1f %.1f %.1f %.1f %.1f %.1f", cur.x, cur.y, cur.z, yaw, pitch, secs);
-        script_.push_back(b);
-        prev = cur;
-    }    tourActive_ = true;
+    if (pts.size() < 3) return;
+    stopTour();
+    tourPts_.clear();
+    tourPts_.push_back(camera_.position);
+    for (const Vec3& p : pts) tourPts_.push_back(p);
+    tourSeg_ = 0;
+    tourU_ = 0;
+    tourY_ = camera_.position.y;
+    tourLog_ = 0;
+    flying_ = true;
+    vy_ = 0;
+    tourActive_ = true;
 }
 
+void AppShell::tourStep(double dt) {
+    const int n = (int)tourPts_.size();
+    auto cr = [&](int i, float u, Vec3& pos, Vec3& vel) {
+        const Vec3 p0 = tourPts_[std::max(0, i - 1)], p1 = tourPts_[i], p2 = tourPts_[std::min(n - 1, i + 1)], p3 = tourPts_[std::min(n - 1, i + 2)];
+        const float u2 = u * u, u3 = u2 * u;
+        auto f = [&](float a, float b, float c, float d, float& p, float& v) {
+            p = 0.5f * (2 * b + (-a + c) * u + (2 * a - 5 * b + 4 * c - d) * u2 + (-a + 3 * b - 3 * c + d) * u3);
+            v = 0.5f * ((-a + c) + 2 * (2 * a - 5 * b + 4 * c - d) * u + 3 * (-a + 3 * b - 3 * c + d) * u2);
+        };
+        f(p0.x, p1.x, p2.x, p3.x, pos.x, vel.x);
+        f(p0.y, p1.y, p2.y, p3.y, pos.y, vel.y);
+        f(p0.z, p1.z, p2.z, p3.z, pos.z, vel.z);
+    };
+    Vec3 pos, vel;
+    cr(tourSeg_, tourU_, pos, vel);
+    const float speed = 30.0f + 0.4f * std::max(0.0f, tourY_);
+    const float ds = std::max(1.0f, std::sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z));
+    tourU_ += speed * static_cast<float>(dt) / ds;
+    while (tourU_ >= 1.0f) {
+        tourU_ -= 1.0f;
+        if (++tourSeg_ >= n - 1) { tourActive_ = false; return; }
+    }
+    cr(tourSeg_, tourU_, pos, vel);
+    const float hl = std::max(0.01f, std::sqrt(vel.x * vel.x + vel.z * vel.z));
+    const float ux = vel.x / hl, uz = vel.z / hl;
+    // Look ahead for buildings and rise early enough to clear them.
+    float need = 0;
+    for (float s : {0.0f, 8.0f, 16.0f, 26.0f}) need = std::max(need, city_->clearHeight(pos.x + ux * s, pos.z + uz * s, 5.5f));
+    const float want = std::max(pos.y, need + 3.0f);
+    const float k = 1.0f - std::exp(-static_cast<float>(dt) * (want > tourY_ ? 7.0f : 2.5f));
+    tourY_ += (want - tourY_) * k;
+    camera_.position = {pos.x, tourY_, pos.z};
+    const float tyaw = std::atan2(-ux, -uz);
+    float dy = std::fmod(tyaw - camera_.yaw, 2.0f * kPi);
+    if (dy > kPi) dy -= 2.0f * kPi;
+    if (dy < -kPi) dy += 2.0f * kPi;
+    camera_.yaw += dy * (1.0f - std::exp(-static_cast<float>(dt) * 3.0f));
+    const float tp = clampf(std::atan2(vel.y, hl) * 0.8f - 0.08f, -0.6f, 0.4f);
+    camera_.pitch += (tp - camera_.pitch) * (1.0f - std::exp(-static_cast<float>(dt) * 2.5f));
+    vy_ = 0;
+    flying_ = true;
+    if (std::getenv("SCIFI_TOURLOG")) {
+        tourLog_ += dt;
+        if (tourLog_ > 0.5) {
+            tourLog_ = 0;
+            if (FILE* f = std::fopen("tour.log", "a")) { std::fprintf(f, "%.1f %.1f %.1f speed %.1f\n", camera_.position.x, camera_.position.y, camera_.position.z, speed); std::fclose(f); }
+        }
+    }
+}
 void AppShell::stopTour() {
     script_.clear();
     scriptPc_ = 0;
@@ -1076,7 +1114,7 @@ void AppShell::tick(double dt) {
                           deferred_ || riding_ || vrOn_;
         if (tourActive_ && (!cityMode_ || busy)) stopTour();
         if (tourAllowed && !tourActive_ && idleT_ > 10.0 && cityMode_ && city_ && city_->built() && !busy && script_.empty() && !mv_.on) startTour();
-        if (tourActive_ && scriptPc_ >= script_.size() && !mv_.on && scriptWait_ <= 0) tourActive_ = false;  // finished; restarts while idle
+        
         if (riding_ && (pointerSelect || in.escape || back || ringToggle || std::fabs(moveX) + std::fabs(moveY) + std::fabs(kbZ) > 0.1f)) riding_ = false;
         if (riding_) {
             moveX = moveY = kbZ = 0.0f;
@@ -1550,6 +1588,7 @@ void AppShell::tick(double dt) {
     }
 
     if (riding_) rideStep(dt);
+    if (tourActive_) tourStep(dt);
     {
         const bool want = deferred_ || loadingT_ > 0.0f || (cityMode_ && city_ && !city_->built());
         if (loadingT_ > 0.0f) loadingT_ -= static_cast<float>(dt);

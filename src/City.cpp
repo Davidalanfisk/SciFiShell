@@ -1,6 +1,7 @@
 #include "City.h"
 
 #include <algorithm>
+#include <queue>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -477,10 +478,9 @@ void City::render(Renderer& r, Vec3 eye) {
         for (const Ramp& rp : ramps) {
             if (r.mirror() || std::fabs(eye.x - rp.x) > 160.0f || std::fabs(eye.z - rp.z) > 160.0f) continue;
             const Vec3 col = rp.plat >= 0 ? tintColor(platforms_[rp.plat].tint) : currentTheme().accent;
-            for (int k = 0; k < kRampSteps; ++k) {
-                const RampStep st = rampStep(rp.x, rp.z, rp.dir, k);
-                renderBox(r, {st.cx, st.top * 0.5f, st.cz}, {st.sx, st.top, st.sz}, col, 0.5f, 6, 1.0f, 0, 0);
-            }
+            const float ex = rp.dir == 0 ? 1.0f : (rp.dir == 1 ? -1.0f : 0.0f), ez = rp.dir == 2 ? 1.0f : (rp.dir == 3 ? -1.0f : 0.0f);
+            const float rl = kRampSteps * kRampStep;
+            drawSlope(r, {rp.x + ex * rl, 0.0f, rp.z + ez * rl}, {rp.x, kSlabH, rp.z}, kRampW, 0.3f, col, 0.5f, 6, 1.0f);
         }
     }
     if (!built_) return;
@@ -497,7 +497,10 @@ void City::render(Renderer& r, Vec3 eye) {
         if (pc.f > rg + 0.001f) continue;
         const float ddx = std::max({pc.x0 - eye.x, 0.0f, eye.x - pc.x1}), ddz = std::max({pc.z0 - eye.z, 0.0f, eye.z - pc.z1});
         if (ddx * ddx + ddz * ddz > maxD2) continue;
-        renderBox(r, {(pc.x0 + pc.x1) * 0.5f, pc.yc, (pc.z0 + pc.z1) * 0.5f}, {pc.x1 - pc.x0, pc.th, pc.z1 - pc.z0}, tintColor(p.tint), (pc.plat % 2) ? 0.9f : 0.1f, 5, p.grow, 0, 0);
+        const Vec3 tc = tintColor(p.tint);
+        const float sd = (pc.plat % 2) ? 0.9f : 0.1f;
+        if (pc.slope) drawSlope(r, pc.a, pc.b, 3.0f, 0.3f, tc, sd, 5, p.grow);
+        else renderBox(r, {(pc.x0 + pc.x1) * 0.5f, pc.yc, (pc.z0 + pc.z1) * 0.5f}, {pc.x1 - pc.x0, pc.th, pc.z1 - pc.z0}, tc, sd, 5, p.grow, 0, 0);
     }
     for (int i = 0; i < n; ++i) {
         auto& p = platforms_[i];
@@ -700,62 +703,120 @@ void City::buildNetwork() const {
         for (const Poly& c : coreRoutes) for (size_t k = 0; k + 1 < c.size(); ++k) fn(segOf(c, k));
         for (int j = 0; j < self; ++j) for (size_t k = 0; k + 1 < chosen[j].size(); ++k) fn(segOf(chosen[j], k));
     };
-    auto score = [&](const Poly& pts, int self) {
-        float sc = 0;
-        const size_t last = pts.size() - 2;
+    // Routes are planned on a coarse grid with a Dijkstra search: platforms, monuments and the hub are walls, turns cost a little,
+    // and running over an existing lane (crossing it) costs more but is allowed, because the crossing becomes a bridge.
+    float minX = -90, maxX = 90, minZ = -130, maxZ = 90;
+    for (const auto& pl : platforms_) {
+        minX = std::min(minX, pl.cx - pl.side * 0.5f);
+        maxX = std::max(maxX, pl.cx + pl.side * 0.5f);
+        minZ = std::min(minZ, pl.cz - pl.side * 0.5f);
+        maxZ = std::max(maxZ, pl.cz + pl.side * 0.5f);
+    }
+    const float margin = 30.0f;
+    float cs = 4.0f;
+    while ((maxX - minX + 2 * margin) / cs > 380.0f || (maxZ - minZ + 2 * margin) / cs > 380.0f) cs += 1.0f;
+    const int gx0 = (int)std::floor((minX - margin) / cs), gz0 = (int)std::floor((minZ - margin) / cs);
+    const int W = (int)std::ceil((maxX + margin) / cs) - gx0 + 1, D = (int)std::ceil((maxZ + margin) / cs) - gz0 + 1;
+    std::vector<int> raw(W * D, -1), inf(W * D, -1);
+    std::vector<uint8_t> solid(W * D, 0), occ(W * D, 0);
+    auto stamp = [&](float x0, float x1, float z0, float z1, auto&& fn) {
+        const int i0 = std::max(0, (int)std::floor(x0 / cs) - gx0), i1 = std::min(W - 1, (int)std::ceil(x1 / cs) - gx0);
+        const int j0 = std::max(0, (int)std::floor(z0 / cs) - gz0), j1 = std::min(D - 1, (int)std::ceil(z1 / cs) - gz0);
+        for (int j = j0; j <= j1; ++j)
+            for (int i = i0; i <= i1; ++i) {
+                const float x = (gx0 + i) * cs, z = (gz0 + j) * cs;
+                if (x >= x0 && x <= x1 && z >= z0 && z <= z1) fn(j * W + i);
+            }
+    };
+    for (int j = 0; j < n; ++j) {
+        const auto& pl = platforms_[j];
+        const float h = pl.side * 0.5f;
+        stamp(pl.cx - h, pl.cx + h, pl.cz - h, pl.cz + h, [&](int c) { raw[c] = j; });
+        stamp(pl.cx - h - 3.5f, pl.cx + h + 3.5f, pl.cz - h - 3.5f, pl.cz + h + 3.5f, [&](int c) { inf[c] = (inf[c] == -1 || inf[c] == j) ? j : -3; });
+    }
+    for (const Rect& r : solids) stamp(r.x0 - 3.5f, r.x1 + 3.5f, r.z0 - 3.5f, r.z1 + 3.5f, [&](int c) { solid[c] = 1; });
+    stamp(-13, 13, -13, 13, [&](int c) { solid[c] = 1; });
+    auto markPoly = [&](const Poly& pts) {
+        const float hw = 1.5f + cs * 0.5f - 0.01f;
         for (size_t k = 0; k + 1 < pts.size(); ++k) {
             const Seg sg = segOf(pts, k);
-            for (const Rect& r : solids) if (hitsRect(sg, r, 0.5f)) sc += 1e4f;
-            for (int j = 0; j < n; ++j) {
-                const auto& pl = platforms_[j];
-                const Rect r{pl.cx - pl.side * 0.5f, pl.cx + pl.side * 0.5f, pl.cz - pl.side * 0.5f, pl.cz + pl.side * 0.5f};
-                if (j == self && k == last) continue;
-                if (hitsRect(sg, r, j == self ? -0.5f : 1.0f)) sc += 1e4f;
-            }
-            others(self, [&](const Seg& o) {
-                float cx, cz;
-                if (overlap(sg, o)) sc += 1e4f;
-                else if (cross(sg, o, cx, cz)) {
-                    const float d = horiz(sg) ? std::fabs(cx - sg.ax) : std::fabs(cz - sg.az), L = segLen(sg);
-                    sc += 60.0f + ((d < 12.5f || L - d < 12.5f) ? 300.0f : 0.0f);
-                }
-            });
-            sc += segLen(sg) * 0.1f + 5.0f;
+            if (horiz(sg)) stamp(std::min(sg.ax, sg.bx) - 0.01f, std::max(sg.ax, sg.bx) + 0.01f, sg.az - hw, sg.az + hw, [&](int c) { occ[c] |= 1; });
+            else stamp(sg.ax - hw, sg.ax + hw, std::min(sg.az, sg.bz) - 0.01f, std::max(sg.az, sg.bz) + 0.01f, [&](int c) { occ[c] |= 2; });
         }
-        return sc;
+    };
+    for (const Poly& c : coreRoutes) markPoly(c);
+
+    const int DX[4] = {1, -1, 0, 0}, DZ[4] = {0, 0, 1, -1};
+    const float ringD = cs * std::ceil(16.0f / cs);
+    auto planRoute = [&](int own, Poly& out) {
+        const auto& pl = platforms_[own];
+        const float h = pl.side * 0.5f;
+        std::vector<float> dist(size_t(W) * D * 4, 1e30f);
+        std::vector<int> prev(dist.size(), -1);
+        using QE = std::pair<float, int>;
+        std::priority_queue<QE, std::vector<QE>, std::greater<QE>> pq;
+        auto blocked = [&](int c) { return solid[c] || raw[c] >= 0 || inf[c] == -3 || (inf[c] >= 0 && inf[c] != own); };
+        auto cellAt = [&](float x, float z) { return (int)std::lround(z / cs - gz0) * W + (int)std::lround(x / cs - gx0); };
+        const int m = (int)std::floor(12.0f / cs);
+        for (int k = -m; k <= m; ++k)
+            for (int d = 0; d < 4; ++d) {
+                const float x = d < 2 ? DX[d] * ringD : k * cs, z = d < 2 ? k * cs : DZ[d] * ringD;
+                const int c = cellAt(x, z);
+                if (c < 0 || c >= W * D || blocked(c) || occ[c]) continue;
+                dist[c * 4 + d] = 0;
+                pq.push({0.0f, c * 4 + d});
+            }
+        int goal = -1;
+        while (!pq.empty()) {
+            const auto [dd, s] = pq.top();
+            pq.pop();
+            if (dd > dist[s]) continue;
+            const int c = s >> 2, d = s & 3, ix = c % W, iz = c / W;
+            const int nx = ix + DX[d], nz = iz + DZ[d];
+            const bool inside = nx >= 0 && nx < W && nz >= 0 && nz < D;
+            if (inside && raw[nz * W + nx] == own) { goal = s; break; }
+            auto relax = [&](int ns, float cost) {
+                if (dd + cost < dist[ns]) { dist[ns] = dd + cost; prev[ns] = s; pq.push({dd + cost, ns}); }
+            };
+            if (inside) {
+                const int nc = nz * W + nx;
+                const uint8_t bit = d < 2 ? 1 : 2;
+                if (!blocked(nc) && !(occ[nc] & bit)) relax(nc * 4 + d, 1.0f + (occ[nc] ? 14.0f : 0.0f));
+            }
+            if (!occ[c]) {
+                const int turn[2] = {d < 2 ? 2 : 0, d < 2 ? 3 : 1};
+                for (int d2 : turn) relax(c * 4 + d2, 3.0f);
+            }
+        }
+        if (goal < 0) return false;
+        std::vector<int> seq;
+        for (int s = goal; s >= 0; s = prev[s]) seq.push_back(s);
+        std::reverse(seq.begin(), seq.end());
+        auto cx = [&](int c) { return (gx0 + c % W) * cs; };
+        auto cz = [&](int c) { return (gz0 + c / W) * cs; };
+        const int s0 = seq.front(), c0 = s0 >> 2, d0 = s0 & 3;
+        out.clear();
+        out.push_back(d0 < 2 ? Vec3{DX[d0] * 13.0f, 0, cz(c0)} : Vec3{cx(c0), 0, DZ[d0] * 13.0f});
+        for (size_t k = 1; k < seq.size(); ++k)
+            if ((seq[k] & 3) != (seq[k - 1] & 3)) out.push_back({cx(seq[k] >> 2), 0, cz(seq[k] >> 2)});
+        const int cg = goal >> 2, dg = goal & 3;
+        if (dg == 0) out.push_back({pl.cx - h, 0, cz(cg)});
+        else if (dg == 1) out.push_back({pl.cx + h, 0, cz(cg)});
+        else if (dg == 2) out.push_back({cx(cg), 0, pl.cz - h});
+        else out.push_back({cx(cg), 0, pl.cz + h});
+        return out.size() >= 2;
     };
 
     for (int i = 0; i < n; ++i) {
         const auto& p = platforms_[i];
-        const float lane = (i - (n - 1) * 0.5f) * 3.5f, h = p.side * 0.5f;
-        const float sx = p.cx >= 0 ? 1.0f : -1.0f, sz = p.cz >= 0 ? 1.0f : -1.0f;
-        const float edgeX = p.cx - sx * h, edgeZ = p.cz - sz * h;
-        const float offs[5] = {0.0f, 0.25f, -0.25f, 0.4f, -0.4f};
-        std::vector<Poly> cands;
-        if (std::fabs(lane - p.cz) < h - 2.0f) cands.push_back({{0, 0, lane}, {edgeX, 0, lane}});
-        for (float o : offs) {
-            const float xv = p.cx + o * p.side, zh = p.cz + o * p.side;
-            if (std::fabs(xv) > 14.0f && (edgeZ - lane) * sz > 6.0f) cands.push_back({{0, 0, lane}, {xv, 0, lane}, {xv, 0, edgeZ}});
-            if (std::fabs(zh) > 14.0f && (edgeX - lane) * sx > 6.0f) cands.push_back({{0, 0, 0}, {lane, 0, 0}, {lane, 0, zh}, {edgeX, 0, zh}});
-            for (float f : {0.3f, 0.5f, 0.7f}) {
-                const float xm = edgeX * f;
-                if (std::fabs(xm) > 14.0f && std::fabs(zh - lane) > 6.0f)
-                    cands.push_back({{0, 0, lane}, {xm, 0, lane}, {xm, 0, zh}, {edgeX, 0, zh}});
-            }
-        }
-        // The VH candidates start at the hub centre with a zero-length hop; drop it.
-        for (Poly& c : cands) if (c.size() > 2 && std::fabs(c[0].x - c[1].x) < 1e-3f && std::fabs(c[0].z - c[1].z) < 1e-3f) c.erase(c.begin());
-        float best = 1e30f;
         Poly bp;
-        for (const Poly& c : cands) {
-            if (c.size() < 2) continue;
-            const float sc = score(c, i);
-            if (sc < best) { best = sc; bp = c; }
+        if (!planRoute(i, bp)) {
+            const float lane = (i - (n - 1) * 0.5f) * 3.5f, sz = p.cz >= 0 ? 1.0f : -1.0f;
+            bp = {{0, 0, lane}, {p.cx, 0, lane}, {p.cx, 0, p.cz - sz * p.side * 0.5f}};
         }
-        if (bp.empty()) bp = {{0, 0, lane}, {p.cx, 0, lane}, {p.cx, 0, edgeZ}};
+        markPoly(bp);
         chosen[i] = bp;
     }
-
     // Bridges: wherever a route crosses a core spoke or an earlier route it climbs over it.
     const float H = 4.0f, deckHalf = 3.5f, rampLen = 9.0f;
     for (int i = 0; i < n; ++i) {
@@ -794,30 +855,36 @@ void City::buildNetwork() const {
         net_.push_back(std::move(nr));
     }
 
-    // Turn each route into road pieces: flat boxes, stepped ramps and corner squares.
+    // Turn each route into road pieces: flat boxes, straight sloped slabs and corner squares.
+    auto surf = [](float h) { return kRoadY + 0.075f + h + (h > 0.01f ? 0.075f : 0.0f); };
     for (size_t ri = 0; ri < net_.size(); ++ri) {
         const auto& pts = net_[ri].pts;
         float total = 0, run = 0;
         for (size_t k = 0; k + 1 < pts.size(); ++k) total += std::fabs(pts[k + 1].x - pts[k].x) + std::fabs(pts[k + 1].z - pts[k].z);
         total = std::max(total, 1.0f);
-        auto rect = [&](float ax, float az, float bx, float bz, float yc, float th, float f) {
-            Piece pc{std::min(ax, bx) - (std::fabs(ax - bx) < 1e-3f ? 1.5f : 0.0f), std::max(ax, bx) + (std::fabs(ax - bx) < 1e-3f ? 1.5f : 0.0f),
-                     std::min(az, bz) - (std::fabs(az - bz) < 1e-3f ? 1.5f : 0.0f), std::max(az, bz) + (std::fabs(az - bz) < 1e-3f ? 1.5f : 0.0f), yc, th, f, net_[ri].plat};
-            pieces_.push_back(pc);
+        auto rect = [&](float ax, float az, float bx, float bz, float yc, float th, float f, bool draw) {
+            const float px = std::fabs(ax - bx) < 1e-3f ? 1.5f : 0.0f, pz = std::fabs(az - bz) < 1e-3f ? 1.5f : 0.0f;
+            Piece pc{std::min(ax, bx) - px, std::max(ax, bx) + px, std::min(az, bz) - pz, std::max(az, bz) + pz, yc, th, f, net_[ri].plat};
+            if (draw) pieces_.push_back(pc);
             if (yc > kRoadY + 0.1f) bridgeFloor_.push_back({pc.x0, pc.x1, yc + th * 0.5f, pc.z0, pc.z1});
         };
         for (size_t k = 0; k + 1 < pts.size(); ++k) {
             const Vec3 a = pts[k], b = pts[k + 1];
             const float L = std::fabs(b.x - a.x) + std::fabs(b.z - a.z);
             if (std::fabs(a.y - b.y) < 1e-3f) {
-                if (a.y < 0.01f) rect(a.x, a.z, b.x, b.z, kRoadY, 0.15f, (run + L) / total);
-                else rect(a.x, a.z, b.x, b.z, kRoadY + a.y, 0.3f, (run + L) / total);
+                if (a.y < 0.01f) rect(a.x, a.z, b.x, b.z, kRoadY, 0.15f, (run + L) / total, true);
+                else rect(a.x, a.z, b.x, b.z, surf(a.y) - 0.15f, 0.3f, (run + L) / total, true);
             } else {
-                const int steps = std::max(1, (int)std::ceil(L));
+                Piece pc{std::min(a.x, b.x) - 1.5f, std::max(a.x, b.x) + 1.5f, std::min(a.z, b.z) - 1.5f, std::max(a.z, b.z) + 1.5f, 0, 0.3f, (run + L) / total, net_[ri].plat};
+                pc.slope = true;
+                pc.a = {a.x, surf(a.y), a.z};
+                pc.b = {b.x, surf(b.y), b.z};
+                pieces_.push_back(pc);
+                const int steps = std::max(1, (int)std::ceil(L * 2.0f));
                 for (int m = 0; m < steps; ++m) {
-                    const float u0 = float(m) / steps, u1 = float(m + 1) / steps, um = (u0 + u1) * 0.5f;
-                    const float hgt = a.y + (b.y - a.y) * um;
-                    rect(a.x + (b.x - a.x) * u0, a.z + (b.z - a.z) * u0, a.x + (b.x - a.x) * u1, a.z + (b.z - a.z) * u1, kRoadY + hgt, 0.3f, (run + L * u1) / total);
+                    const float u0 = float(m) / steps, u1 = float(m + 1) / steps;
+                    const float top = surf(std::max(a.y + (b.y - a.y) * u0, a.y + (b.y - a.y) * u1));
+                    rect(a.x + (b.x - a.x) * u0, a.z + (b.z - a.z) * u0, a.x + (b.x - a.x) * u1, a.z + (b.z - a.z) * u1, top - 0.15f, 0.3f, 0, false);
                 }
             }
             run += L;
@@ -830,6 +897,14 @@ void City::buildNetwork() const {
     }
 }
 
+void City::drawSlope(Renderer& r, Vec3 a, Vec3 b, float width, float th, Vec3 neon, float seed, int kind, float emerge) {
+    const float dx = b.x - a.x, dz = b.z - a.z, dy = b.y - a.y, hl = std::sqrt(dx * dx + dz * dz);
+    const float len = std::sqrt(hl * hl + dy * dy);
+    if (len < 1e-3f) return;
+    const Vec3 c{(a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f - th * 0.5f, (a.z + b.z) * 0.5f};
+    const Mat4 w = Mat4::translate(c) * Mat4::rotateY(std::atan2(dx, dz)) * Mat4::rotateX(-std::atan2(dy, hl)) * Mat4::scale({width, th, len});
+    r.drawBuilding(*dummy_, w, neon, seed, kind, emerge, 0.0f, 0.0f);
+}
 void City::monumentBoxes(std::vector<Box>& out) const {
     const SystemStats& s = data_.stats();
     auto add = [&](float cx, float cz, float hx, float hz, float top) { out.push_back({cx - hx, cx + hx, top, cz - hz, cz + hz}); };
@@ -990,20 +1065,56 @@ bool City::pickRoute(Vec3 o, Vec3 d, std::vector<Vec3>& path) const {
     return false;
 }
 
-void City::tourPoints(std::vector<Vec3>& out) const {
-    out.clear();
-    out.push_back({0, 0, 0});
-    out.push_back({0, 0, -55});
-    out.push_back({-52, 0, 30});
-    out.push_back({52, 0, 30});
-    for (const auto& p : platforms_) {
-        if (p.grow < 0.9f) continue;
-        out.push_back({p.cx - p.side * 0.3f, 0, p.cz - p.side * 0.3f});
-        out.push_back({p.cx, 0, p.cz});
-        out.push_back({p.cx + p.side * 0.3f, 0, p.cz + p.side * 0.3f});
-    }
+// Highest solid surface within r of (x, z): towers, monuments and slabs.
+float City::clearHeight(float x, float z, float r) const {
+    std::vector<Box> boxes;
+    gatherBoxes({x, 0, z}, r, boxes);
+    float top = 0;
+    for (const Box& b : boxes)
+        if (x >= b.x0 - r && x <= b.x1 + r && z >= b.z0 - r && z <= b.z1 + r) top = std::max(top, b.y1);
+    return top;
 }
 
+// Fly-through waypoints (y is the wanted altitude): the monuments, then for every storage region a dive in, a low run along the
+// clearest street between the buildings, and a climb out.
+void City::tourPoints(std::vector<Vec3>& out) const {
+    out.clear();
+    out.push_back({0, 70, 130});
+    out.push_back({0, 7, 40});
+    out.push_back({40, 38, -30});
+    out.push_back({0, 12, -105});
+    out.push_back({-45, 55, -40});
+    out.push_back({-52, 9, 62});
+    out.push_back({10, 40, 70});
+    out.push_back({52, 8, 75});
+    out.push_back({50, 85, 20});
+    for (const auto& p : platforms_) {
+        if (p.grow < 0.9f) continue;
+        const float h = p.side * 0.5f;
+        const bool alongX = std::fabs(p.cx) >= std::fabs(p.cz);
+        const float dir = alongX ? (p.cx > 0 ? 1.0f : -1.0f) : (p.cz > 0 ? 1.0f : -1.0f);
+        float bestOff = 0, bestCost = 1e30f;
+        for (int k = -3; k <= 3; ++k) {
+            const float off = k * p.side * 0.11f;
+            float cost = 0;
+            for (float s = -h * 0.8f; s <= h * 0.8f; s += 6.0f) {
+                const float x = alongX ? p.cx + s : p.cx + off, z = alongX ? p.cz + off : p.cz + s;
+                cost += clearHeight(x, z, 4.0f);
+            }
+            if (cost < bestCost) { bestCost = cost; bestOff = off; }
+        }
+        auto at = [&](float s, float y) {
+            return alongX ? Vec3{p.cx + dir * s, y, p.cz + bestOff} : Vec3{p.cx + bestOff, y, p.cz + dir * s};
+        };
+        out.push_back(at(-h - 60.0f, 80.0f));
+        out.push_back(at(-h * 0.8f, 6.0f));
+        out.push_back(at(-h * 0.3f, 15.0f));
+        out.push_back(at(h * 0.3f, 5.5f));
+        out.push_back(at(h * 0.8f, 11.0f));
+        out.push_back(at(h + 40.0f, 60.0f));
+    }
+    out.push_back({0, 90, 160});
+}
 bool City::pick(Vec3 o, Vec3 d, std::string& path, std::string& name) {
     hoverP_ = hoverB_ = hoverT_ = -1;
     float best = 600.0f;

@@ -83,6 +83,11 @@ private:
     double idleT_ = 0;
     bool tourActive_ = false;
     void startTour();
+    void tourStep(double dt);
+    std::vector<Vec3> tourPts_;
+    int tourSeg_ = 0;
+    float tourU_ = 0, tourY_ = 0;
+    double tourLog_ = 0;
     void stopTour();
     bool browserFocus_ = false;  // browser (not a hosted program) has the pointer when both are open
     Camera savedCam_;

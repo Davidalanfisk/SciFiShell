@@ -32,6 +32,7 @@ public:
     // Click a bus lane: fills the points of the ride to the far end of that route.
     bool pickRoute(Vec3 origin, Vec3 dir, std::vector<Vec3>& path) const;
     void routes(std::vector<std::vector<Vec3>>& out) const;
+    float clearHeight(float x, float z, float r) const;
     void tourPoints(std::vector<Vec3>& out) const;  // monuments + storage regions for the idle fly-through
     void clearHover() { hoverP_ = hoverB_ = hoverT_ = -1; }
     // Remembers the hovered building as the one being entered; exitSpawn() is street level in front of its door.
@@ -93,9 +94,10 @@ private:
     void gatherBoxes(const Vec3& p, float rad, std::vector<Box>& out) const;
     // The bus network: every storage route is planned so it never runs under a platform or monument, and where it has to cross
     // another lane it rides over it on a ramped bridge. Heights are relative to the road surface.
-    struct Piece { float x0, x1, z0, z1, yc, th, f; int plat; };
+    struct Piece { float x0, x1, z0, z1, yc, th, f; int plat; bool slope = false; Vec3 a{}, b{}; };
     struct NetRoute { int plat; std::vector<Vec3> pts; };  // pts: x, height above road, z
     void buildNetwork() const;
+    void drawSlope(Renderer& r, Vec3 a, Vec3 b, float width, float th, Vec3 neon, float seed, int kind, float emerge);
     mutable bool netBuilt_ = false;
     mutable std::vector<NetRoute> net_;
     mutable std::vector<Piece> pieces_;
