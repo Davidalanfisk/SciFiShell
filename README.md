@@ -66,6 +66,37 @@ around it are your drives. **Walk** with WASD, or **double-tap Space to fly** an
 ![The command ring](docs/command-ring.jpg)
 ![Settings](docs/settings.jpg)
 
+## Built-in tools
+
+Everything below lives on the **command ring** (middle-click or `F2`). Windows open in front of you, the camera
+gently turns to face them and stays put until you move.
+
+| Tool | What it does |
+|---|---|
+| **Web** | A real Chromium browser floating in your world. |
+| **Media** | Winamp-style audio and video player with a scanned library, playlists and background playback. |
+| **System Monitor** | Live CPU, memory, GPU, per-thread load, top processes, network and drives. Also opens when you click the **CPU building**. |
+| **File Browser** | A classic 2D file manager: places, drives, search, sorting, copy / cut / paste, rename, delete (to the Recycle Bin), and **Open in 3D Room**. |
+| **Editor** | A text editor that always starts with a blank document: New, Open, Save, Save As. |
+| **Terminal** | PowerShell, CMD or WSL in a window (Windows 10 1809+). |
+| **Windows Apps** | The apps and windows already open on your PC, ready to switch to. |
+| **Settings** | Shell preferences plus Windows controls: display, sound, network, mouse, themes, power, and the media player. |
+
+### System Monitor
+![System Monitor](docs/tool-monitor.jpg)
+
+### File Browser
+![File Browser](docs/tool-files.jpg)
+
+### Terminal
+![Terminal](docs/tool-terminal.jpg)
+
+### Editor
+![Editor](docs/tool-editor.jpg)
+
+### Settings
+![Settings](docs/tool-settings.jpg)
+
 ## What's coming
 
 *"I tried to picture clusters of information as they moved through the computer."*
