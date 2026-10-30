@@ -42,6 +42,13 @@ public:
             if (cats_[i].name == name) { page_ = static_cast<int>(i); sel_ = 0; dirty_ = true; }
     }
     bool isOpen() const { return open_; }
+    void hide();  // minimise: keeps the current page; open() brings it back
+    bool hidden() const { return hidden_; }
+    bool exists() const { return open_ || hidden_; }
+    void leave() { hoverBtn_ = 0; }
+    void releaseButton() { dragging_ = false; }
+    bool busy() const { return dragging_; }
+    bool overTitle() const { return open_ && !fullscreen_ && hoverTitle_; }
     bool fullscreen() const { return fullscreen_; }
     void toggleFullscreen();
     void setView(float tanHalf, float aspect) { viewTan_ = tanHalf; viewAspect_ = aspect; }
@@ -71,7 +78,9 @@ public:
     void applyFullscreen();
     int W_ = 1832, H_ = 960;  // bitmap size: fullscreen widens it to the screen's shape
 
-    Rect fsRect_{0, 0, 0, 0}, closeRect_{0, 0, 0, 0};
+    Rect fsRect_{0, 0, 0, 0}, closeRect_{0, 0, 0, 0}, hideRect_{0, 0, 0, 0};
+    bool hidden_ = false, dragging_ = false, hoverTitle_ = false;
+    float grabX_ = 0, grabY_ = 0, grabDist_ = 2.0f;
     int hoverBtn_ = 0;
     int drawnHover_ = 0;
     bool fullscreen_ = false;

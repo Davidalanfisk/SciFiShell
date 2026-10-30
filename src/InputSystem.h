@@ -30,6 +30,7 @@ struct FrameInput {
     bool depthSite = false;         // F4: toggle depth effects for the current site
     bool reload = false;            // F5
     bool ring = false;              // middle click / F2: summon the tool ring
+    bool pin = false;               // right click: pin the view to the window under the aim (or release it)
     bool themeCycle = false;        // F6: next colour theme
     bool navBack = false, navForward = false;  // Alt+Left / Alt+Right
     int tabStep = 0;                // Alt+Tab / Ctrl+Tab: +1 next task, -1 previous (with Shift)

@@ -97,7 +97,6 @@ private:
     float tourU_ = 0, tourY_ = 0;
     double tourLog_ = 0;
     void stopTour();
-    bool browserFocus_ = false;  // browser (not a hosted program) has the pointer when both are open
     Camera savedCam_;
     bool cityCamSet_ = false;
     // Media player (see AppShellMedia.cpp)
@@ -122,10 +121,43 @@ private:
     std::unique_ptr<Terminal> terminal_;
     std::unique_ptr<FileBrowser> files2d_;
     std::unique_ptr<TextEditor> editor2d_;
-    bool faceWasOpen_ = false;
-    float faceT_ = 0;  // seconds left of the gentle turn that squares the camera up to a freshly opened window
-    PanelApp* panel_ = nullptr;  // the open floating app panel (only one at a time)
+    PanelApp* panel_ = nullptr;  // the most recently opened floating app panel (any number can be open)
     void openPanel(PanelApp* p);
+    void openSettingsWin();
+    // Window manager: every browser / program / panel / settings window is persistent, stacked back to front in winOrder_.
+    enum { kWinBrowser, kWinApp, kWinPanel, kWinSettings };
+    struct WinRef {
+        int kind = -1;
+        void* p = nullptr;
+        bool operator==(const WinRef& o) const { return kind == o.kind && p == o.p; }
+        bool operator!=(const WinRef& o) const { return !(*this == o); }
+    };
+    std::vector<WinRef> winOrder_;  // open windows, back to front
+    WinRef focus_;                  // the window that owns the keyboard
+    std::vector<WinRef> allWins();
+    void syncWins();
+    void raiseFocus(WinRef w);
+    void setFocus(WinRef w);
+    WinRef topWinAt(const Vec3& o, const Vec3& d);
+    bool winOpen(WinRef w);
+    float winHit(WinRef w, const Vec3& o, const Vec3& d);
+    bool winFull(WinRef w);
+    bool winBusy(WinRef w);
+    bool winTyping(WinRef w);
+    bool winBoundsOf(WinRef w, Vec3& c, Vec3& n, float& bw, float& bh);
+    void winPointer(WinRef w, const Vec3& o, const Vec3& d);
+    void winLeave(WinRef w, const Vec3& o, const Vec3& d);
+    void winPress(WinRef w, const Vec3& o, const Vec3& d, bool autoRelease);
+    void winRelease(WinRef w);
+    void winWheel(WinRef w, float notches);
+    void winKey(WinRef w, EditKey k);
+    void winText(WinRef w, const std::string& s);
+    void winHide(WinRef w);
+    void winToggleFull(WinRef w);
+    void winRender(WinRef w);
+    bool winEscape(WinRef w);  // the window's own Escape action (leave address bar / fullscreen / sub-page); false if it had none
+    bool winBack(WinRef w);    // gamepad B / VR back: step back inside the window, else minimise it
+    Vec3 winForward() const;   // where a new window should appear (cascaded so windows do not stack exactly)
     std::unique_ptr<SettingsPanel> appsPanel_;
 #ifdef _WIN32
     std::vector<std::unique_ptr<AppWindow>> apps_;  // one per catalog entry, created on first launch
@@ -137,7 +169,6 @@ private:
     size_t pinnedCount_ = 0;  // catalog_ entries shown in the Applications panel; later ones are launched from settings
     void buildAppsPanel();
     void launchApp(int index);
-    void pickApp(const Vec3& o, const Vec3& d);
 #endif
     Settings settings_;
     void refreshSettings();
@@ -169,13 +200,10 @@ private:
     HeadPose head_{{0, 1.6f, 0}, {0, 0, -1}, false, 16.0f / 9.0f};  // last rendered head position (camera or headset)
     std::shared_ptr<GpuLabel> crosshair_;
     float cursorX_ = 0, cursorY_ = 0;  // virtual cursor (NDC): fullscreen media, and the aim while a window has focus
-    bool winFocus_ = false, wasWindowed_ = false;
+    bool winFocus_ = false;  // view pinned to a window: the camera is frozen and the mouse drives a cursor (right click toggles)
     bool flying_ = false;                        // in a building: flying until a floor is touched, then walking with gravity
     float vy_ = 0.0f;
-    bool lockedWin_ = false;                     // the view is pinned to a window by a long click
-    float notOverT_ = 0.0f;
-    bool holding_ = false;                       // mouse held on a window: a long press re-centres the view on it
-    float holdT_ = 0, holdMove_ = 0, recT_ = -1;  // recT_ >= 0 while the view eases onto a window
+    float recT_ = -1;                            // recT_ >= 0 while the view eases onto a pinned window
     Vec3 recFromPos_{}, recToPos_{};
     float recFromYaw_ = 0, recToYaw_ = 0, recFromPitch_ = 0, recToPitch_ = 0;
     Vec3 aimDir_{0, 0, -1};

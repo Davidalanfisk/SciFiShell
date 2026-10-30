@@ -144,12 +144,10 @@ bool AppShell::init() {
         const Vec3 f = camera_.forward();
         req.cardPos = camera_.position + f * 2.0f;
         req.cardYaw = camera_.yaw;
-        if (panel_) { panel_->close(); panel_ = nullptr; }
         viewer_->open(req, head_);
     };
     files2d_->openRoom = [this](const std::string& folder) {
         if (deferred_) return;
-        if (panel_) { panel_->close(); panel_ = nullptr; }
         if (city_) { city_->markEntered(); city_->clearHover(); }
         deferred_ = [this, folder] {
             room_->load(folder);
@@ -432,29 +430,343 @@ void AppShell::saveScreenshot() {
 #endif
 }
 
-void AppShell::openPanel(PanelApp* p) {
-    if (panel_ && panel_ != p) panel_->close();
-    panel_ = p;
-    ring_->close();
-    const bool vr = vrOn_;
-    p->open(vr ? head_.eye : camera_.position, vr ? head_.forward : camera_.forward());
+std::vector<AppShell::WinRef> AppShell::allWins() {
+    std::vector<WinRef> v;
+#ifdef SCIFI_HAS_CEF
+    if (browser_) v.push_back({kWinBrowser, browser_.get()});
+#endif
+#ifdef _WIN32
+    for (auto& a : apps_) v.push_back({kWinApp, a.get()});
+#endif
+    for (PanelApp* p : {static_cast<PanelApp*>(monitor_.get()), static_cast<PanelApp*>(terminal_.get()),
+                        static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get())})
+        if (p) v.push_back({kWinPanel, p});
+    v.push_back({kWinSettings, settingsPanel_.get()});
+    return v;
 }
 
+bool AppShell::winOpen(WinRef w) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: return static_cast<WebBrowser*>(w.p)->active();
+#endif
+#ifdef _WIN32
+        case kWinApp: return static_cast<AppWindow*>(w.p)->active();
+#endif
+        case kWinPanel: return static_cast<PanelApp*>(w.p)->isOpen();
+        case kWinSettings: return static_cast<SettingsHub*>(w.p)->isOpen();
+        default: return false;
+    }
+}
+
+// Keeps winOrder_ equal to the set of open windows: a window that has just opened goes to the front with focus.
+void AppShell::syncWins() {
+    winOrder_.erase(std::remove_if(winOrder_.begin(), winOrder_.end(), [&](const WinRef& w) { return !winOpen(w); }), winOrder_.end());
+    for (const WinRef& w : allWins())
+        if (winOpen(w) && std::find(winOrder_.begin(), winOrder_.end(), w) == winOrder_.end()) {
+            winOrder_.push_back(w);
+            setFocus(w);
+        }
+    if (focus_.p && std::find(winOrder_.begin(), winOrder_.end(), focus_) == winOrder_.end()) focus_ = {};
+}
+
+void AppShell::setFocus(WinRef w) {
+    if (focus_ == w) return;
+#ifdef _WIN32
+    if (focus_.kind == kWinApp) static_cast<AppWindow*>(focus_.p)->blur();
+    if (w.kind == kWinApp) app_ = static_cast<AppWindow*>(w.p);
+#endif
+    focus_ = w;
+}
+
+void AppShell::raiseFocus(WinRef w) {
+    auto it = std::find(winOrder_.begin(), winOrder_.end(), w);
+    if (it != winOrder_.end()) {
+        winOrder_.erase(it);
+        winOrder_.push_back(w);
+    }
+    setFocus(w);
+}
+
+float AppShell::winHit(WinRef w, const Vec3& o, const Vec3& d) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: return static_cast<WebBrowser*>(w.p)->hitDistance(o, d);
+#endif
+#ifdef _WIN32
+        case kWinApp: return static_cast<AppWindow*>(w.p)->hitDistance(o, d);
+#endif
+        case kWinPanel: return static_cast<PanelApp*>(w.p)->hitDistance(o, d);
+        case kWinSettings: return static_cast<SettingsHub*>(w.p)->hitDistance(o, d);
+        default: return -1.0f;
+    }
+}
+
+// The window drawn in front wins, however near or far it is.
+AppShell::WinRef AppShell::topWinAt(const Vec3& o, const Vec3& d) {
+    for (size_t i = winOrder_.size(); i-- > 0;)
+        if (winHit(winOrder_[i], o, d) >= 0) return winOrder_[i];
+    return {};
+}
+
+bool AppShell::winFull(WinRef w) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: return static_cast<WebBrowser*>(w.p)->fullscreen();
+#endif
+#ifdef _WIN32
+        case kWinApp: return static_cast<AppWindow*>(w.p)->fullscreen();
+#endif
+        case kWinPanel: return static_cast<PanelApp*>(w.p)->fullscreen();
+        case kWinSettings: return static_cast<SettingsHub*>(w.p)->fullscreen();
+        default: return false;
+    }
+}
+
+bool AppShell::winBusy(WinRef w) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: return static_cast<WebBrowser*>(w.p)->busy();
+#endif
+#ifdef _WIN32
+        case kWinApp: return static_cast<AppWindow*>(w.p)->busy();
+#endif
+        case kWinPanel: return static_cast<PanelApp*>(w.p)->busy();
+        case kWinSettings: return static_cast<SettingsHub*>(w.p)->busy();
+        default: return false;
+    }
+}
+
+bool AppShell::winTyping(WinRef w) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: return static_cast<WebBrowser*>(w.p)->wantsKeyboard();
+#endif
+#ifdef _WIN32
+        case kWinApp: return static_cast<AppWindow*>(w.p)->wantsKeyboard();
+#endif
+        case kWinPanel: return static_cast<PanelApp*>(w.p)->wantsText();
+        default: return false;
+    }
+}
+
+bool AppShell::winBoundsOf(WinRef w, Vec3& c, Vec3& n, float& bw, float& bh) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: return static_cast<WebBrowser*>(w.p)->bounds(c, n, bw, bh);
+#endif
+#ifdef _WIN32
+        case kWinApp: return static_cast<AppWindow*>(w.p)->bounds(c, n, bw, bh);
+#endif
+        case kWinPanel: return static_cast<PanelApp*>(w.p)->bounds(c, n, bw, bh);
+        case kWinSettings: return static_cast<SettingsHub*>(w.p)->bounds(c, n, bw, bh);
+        default: return false;
+    }
+}
+
+void AppShell::winPointer(WinRef w, const Vec3& o, const Vec3& d) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: static_cast<WebBrowser*>(w.p)->pointer(o, d); break;
+#endif
+#ifdef _WIN32
+        case kWinApp: static_cast<AppWindow*>(w.p)->pointer(o, d); break;
+#endif
+        case kWinPanel: static_cast<PanelApp*>(w.p)->pointer(o, d); break;
+        case kWinSettings: static_cast<SettingsHub*>(w.p)->pointer(o, d); break;
+        default: break;
+    }
+}
+
+// The aim is on another window: clear this one's hover. A ray pointing backwards hits nothing.
+void AppShell::winLeave(WinRef w, const Vec3& o, const Vec3& d) {
+    switch (w.kind) {
+        case kWinPanel: static_cast<PanelApp*>(w.p)->leave(); break;
+        case kWinSettings: static_cast<SettingsHub*>(w.p)->leave(); break;
+        default: winPointer(w, o, d * -1.0f); break;
+    }
+}
+
+void AppShell::winPress(WinRef w, const Vec3& o, const Vec3& d, bool autoRelease) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: static_cast<WebBrowser*>(w.p)->press(autoRelease); break;
+#endif
+#ifdef _WIN32
+        case kWinApp: static_cast<AppWindow*>(w.p)->press(autoRelease); break;
+#endif
+        case kWinPanel: static_cast<PanelApp*>(w.p)->click(o, d); break;
+        case kWinSettings: static_cast<SettingsHub*>(w.p)->activateHit(o, d); break;
+        default: break;
+    }
+}
+
+void AppShell::winRelease(WinRef w) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: static_cast<WebBrowser*>(w.p)->release(); break;
+#endif
+#ifdef _WIN32
+        case kWinApp: static_cast<AppWindow*>(w.p)->releaseButton(); break;
+#endif
+        case kWinPanel: static_cast<PanelApp*>(w.p)->releaseButton(); break;
+        case kWinSettings: static_cast<SettingsHub*>(w.p)->releaseButton(); break;
+        default: break;
+    }
+}
+
+void AppShell::winWheel(WinRef w, float notches) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: static_cast<WebBrowser*>(w.p)->scrollNotches(notches); break;
+#endif
+#ifdef _WIN32
+        case kWinApp: static_cast<AppWindow*>(w.p)->scrollNotches(notches); break;
+#endif
+        case kWinPanel: static_cast<PanelApp*>(w.p)->wheel(notches); break;
+        case kWinSettings: static_cast<SettingsHub*>(w.p)->step(notches > 0 ? -1 : 1); break;
+        default: break;
+    }
+}
+
+void AppShell::winKey(WinRef w, EditKey k) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: static_cast<WebBrowser*>(w.p)->key(k); break;
+#endif
+#ifdef _WIN32
+        case kWinApp: static_cast<AppWindow*>(w.p)->key(k); break;
+#endif
+        case kWinPanel: static_cast<PanelApp*>(w.p)->key(k); break;
+        default: break;
+    }
+}
+
+void AppShell::winText(WinRef w, const std::string& s) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: static_cast<WebBrowser*>(w.p)->text(s); break;
+#endif
+#ifdef _WIN32
+        case kWinApp: static_cast<AppWindow*>(w.p)->text(s); break;
+#endif
+        case kWinPanel: static_cast<PanelApp*>(w.p)->text(s); break;
+        default: break;
+    }
+}
+
+void AppShell::winHide(WinRef w) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: static_cast<WebBrowser*>(w.p)->close(); break;
+#endif
+#ifdef _WIN32
+        case kWinApp: static_cast<AppWindow*>(w.p)->hide(); break;
+#endif
+        case kWinPanel: static_cast<PanelApp*>(w.p)->hide(); break;
+        case kWinSettings: static_cast<SettingsHub*>(w.p)->hide(); break;
+        default: break;
+    }
+}
+
+void AppShell::winToggleFull(WinRef w) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: static_cast<WebBrowser*>(w.p)->toggleFullscreen(); break;
+#endif
+#ifdef _WIN32
+        case kWinApp: static_cast<AppWindow*>(w.p)->toggleFullscreen(); break;
+#endif
+        case kWinPanel: static_cast<PanelApp*>(w.p)->toggleFullscreen(); break;
+        case kWinSettings: static_cast<SettingsHub*>(w.p)->toggleFullscreen(); break;
+        default: break;
+    }
+}
+
+void AppShell::winRender(WinRef w) {
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: static_cast<WebBrowser*>(w.p)->render(renderer_); break;
+#endif
+#ifdef _WIN32
+        case kWinApp: static_cast<AppWindow*>(w.p)->render(renderer_); break;
+#endif
+        case kWinPanel: static_cast<PanelApp*>(w.p)->render(); break;
+        case kWinSettings: static_cast<SettingsHub*>(w.p)->render(); break;
+        default: break;
+    }
+}
+
+bool AppShell::winEscape(WinRef w) {
+    if (winFull(w)) {
+        winToggleFull(w);
+        return true;
+    }
+    switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+        case kWinBrowser: {
+            WebBrowser* b = static_cast<WebBrowser*>(w.p);
+            if (!b->addressFocused()) return false;
+            b->escape();
+            return true;
+        }
+#endif
+        case kWinPanel: {
+            PanelApp* p = static_cast<PanelApp*>(w.p);
+            if (p->wantsText()) {
+                p->ctrl("esc");
+                return true;
+            }
+            return p->back();
+        }
+        case kWinSettings: return static_cast<SettingsHub*>(w.p)->back();
+        default: return false;
+    }
+}
+
+bool AppShell::winBack(WinRef w) {
+    if (winEscape(w)) return true;
+    winHide(w);
+    return true;
+}
+
+Vec3 AppShell::winForward() const {
+    Vec3 f = vrOn_ ? head_.forward : camera_.forward();
+    const int n = static_cast<int>(winOrder_.size());
+    if (n == 0) return f;
+    const float a = (n % 2 ? 1.0f : -1.0f) * 0.5f * static_cast<float>((n + 1) / 2);
+    const float c = std::cos(a), s = std::sin(a);
+    return {f.x * c + f.z * s, f.y, -f.x * s + f.z * c};
+}
+
+void AppShell::openSettingsWin() {
+    settingsPanel_->open(vrOn_ ? head_.eye : camera_.position, winForward());
+    raiseFocus({kWinSettings, settingsPanel_.get()});
+}
+void AppShell::openPanel(PanelApp* p) {
+    panel_ = p;
+    ring_->close();
+    if (p->isOpen()) {
+        raiseFocus({kWinPanel, p});
+        return;
+    }
+    p->open(vrOn_ ? head_.eye : camera_.position, winForward());
+}
 void AppShell::runTool(Tool tool) {
     ring_->pulse();
     switch (tool) {
         case Tool::Browser:
 #ifdef SCIFI_HAS_CEF
-            if (browser_) browser_->open("", head_.eye, head_.forward, vrOn_);
+            if (browser_) {
+                if (browser_->active()) raiseFocus({kWinBrowser, browser_.get()});
+                else browser_->open("", head_.eye, head_.forward, vrOn_);
+            }
 #else
             menu_->setStatus("Browser not built in");
 #endif
             break;
         case Tool::Files:
             if (cityMode_) toggleCity(false);
-#ifdef SCIFI_HAS_CEF
-            if (browser_ && browser_->active()) browser_->close();
-#endif
             if (viewer_->active()) viewer_->close();
             if (!room_->loaded()) {
                 room_->load("");  // "" = the "This PC" drives room
@@ -466,21 +778,18 @@ void AppShell::runTool(Tool tool) {
         case Tool::FileBrowser: openPanel(files2d_.get()); break;
         case Tool::Terminal: openPanel(terminal_.get()); break;
         case Tool::Media:
-            buildSettingsHub();
-            settingsPanel_->open(vrOn_ ? head_.eye : camera_.position,
-                                 vrOn_ ? head_.forward : camera_.forward());
+            if (!settingsPanel_->isOpen()) buildSettingsHub();
+            openSettingsWin();
             settingsPanel_->openPage("MEDIA PLAYER");
             break;
         case Tool::Settings:
-            buildSettingsHub();
-            settingsPanel_->open(vrOn_ ? head_.eye : camera_.position,
-                                 vrOn_ ? head_.forward : camera_.forward());
+            if (!settingsPanel_->isOpen()) buildSettingsHub();
+            openSettingsWin();
             break;
         case Tool::Power:
             powerArmed_ = 0;
-            buildSettingsHub();
-            settingsPanel_->open(vrOn_ ? head_.eye : camera_.position,
-                                 vrOn_ ? head_.forward : camera_.forward());
+            if (!settingsPanel_->isOpen()) buildSettingsHub();
+            openSettingsWin();
             settingsPanel_->openPage("POWER");
             break;
         case Tool::Theme: cycleTheme(); break;
@@ -632,7 +941,7 @@ bool AppShell::scriptExec(const std::string& line) {
         else if (v == "edtype") { std::string s; std::getline(is >> std::ws, s); editor2d_->text(s); }
         else if (v == "edkey") { editor2d_->key(EditKey::Enter); }
         else if (v == "edsave") { editor2d_->key(EditKey::Save); }
-        else if (v == "fs") { if (panel_) panel_->toggleFullscreen(); }
+        else if (v == "fs") { if (focus_.p) winToggleFull(focus_); }
         else if (v == "termtype") { std::string s; std::getline(is >> std::ws, s); terminal_->text(s + "\r"); }
         else if (v == "media") runTool(Tool::Media);
         else if (v == "page") { std::string pg; std::getline(is >> std::ws, pg); settingsPanel_->openPage(pg); }
@@ -1021,60 +1330,47 @@ void AppShell::buildAppsPanel() {
 void AppShell::launchApp(int index) {
     if (index < 0 || index >= static_cast<int>(apps_.size())) return;
     AppWindow* a = apps_[index].get();
-    if (app_ && app_ != a) app_->blur();
     app_ = a;
     a->setView(renderer_.aspect(), std::tan(kFovY * 0.5f));
-    if (!a->active()) a->open(head_.eye, head_.forward, vrOn_);
-    browserFocus_ = false;
+    if (!a->active()) a->open(vrOn_ ? head_.eye : camera_.position, winForward(), vrOn_);
+    raiseFocus({kWinApp, a});
 }
 
-// With several panels up, the one nearest along the aim ray owns the pointer.
-void AppShell::pickApp(const Vec3& o, const Vec3& d) {
-    AppWindow* best = nullptr;
-    float bestDist = 1e9f;
-    for (auto& a : apps_) {
-        const float t = a->hitDistance(o, d);
-        if (t >= 0 && t < bestDist) { bestDist = t; best = a.get(); }
-    }
-    if (best && best != app_) {
-        if (app_) app_->blur();
-        app_ = best;
-    }
-}
 #endif
 
 void AppShell::switchTo(int id) {
-    // ids: 0 room, 1 hosted program, 2 browser, 3 Windows desktop
+    // ids: 0 room, 2 browser, 3 Windows desktop, 10+ programs, 30+ panels, 40 settings
     if (id == 3) {
         SDL_MinimizeWindow(window_);
         return;
     }
-#ifdef _WIN32
-    for (size_t i = 0; i < apps_.size(); ++i) {
-        AppWindow* a = apps_[i].get();
-        if (id == 10 + static_cast<int>(i)) {
-            if (!a->active()) a->open(head_.eye, head_.forward, vrOn_);
-            if (app_ && app_ != a) app_->blur();
-            app_ = a;
-        } else if (id != 0 && a->active()) {
-            // keep other panels open alongside
-        } else if (a->active()) {
-            a->hide();
-        }
+    if (id == 0) {
+        setFocus({});
+        return;
     }
+#ifdef _WIN32
     if (id >= 10 && id < 10 + static_cast<int>(apps_.size())) {
-        browserFocus_ = false;
+        launchApp(id - 10);
         return;
     }
 #endif
+    if (id == 40) {
+        if (!settingsPanel_->isOpen()) buildSettingsHub();
+        openSettingsWin();
+        return;
+    }
+    PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get()};
+    if (id >= 30 && id < 34) {
+        openPanel(panels[id - 30]);
+        return;
+    }
 #ifdef SCIFI_HAS_CEF
-    if (browser_) {
-        if (id == 2 && !browser_->active()) browser_->open("", head_.eye, head_.forward, vrOn_);
-        else if (id == 0 && browser_->active()) browser_->close();
+    if (id == 2 && browser_) {
+        if (!browser_->active()) browser_->open("", head_.eye, head_.forward, vrOn_);
+        raiseFocus({kWinBrowser, browser_.get()});
     }
 #endif
 }
-
 // Alt+Tab / Ctrl+Tab task switcher. While it is open it swallows the input that would otherwise reach the scene.
 void AppShell::handleSwitcher(FrameInput& in, PadState& pad) {
     if (state_ != State::FileRoom) return;
@@ -1083,17 +1379,30 @@ void AppShell::handleSwitcher(FrameInput& in, PadState& pad) {
         int current = 0;
         std::vector<TaskSwitcher::Item> items;
         items.push_back({0, "ROOM", "File room", false});
+        {
+            PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get()};
+            const char* names[] = {"MONITOR", "TERMINAL", "FILES", "EDITOR"};
+            for (int i = 0; i < 4; ++i)
+                if (panels[i]->exists()) {
+                    items.push_back({30 + i, names[i], panels[i]->hidden() ? "Minimised" : "Window", false});
+                    if (focus_ == WinRef{kWinPanel, panels[i]}) current = 30 + i;
+                }
+            if (settingsPanel_->exists()) {
+                items.push_back({40, "SETTINGS", settingsPanel_->hidden() ? "Minimised" : "Window", false});
+                if (focus_.kind == kWinSettings && focus_.p) current = 40;
+            }
+        }
 #ifdef _WIN32
         for (size_t i = 0; i < apps_.size(); ++i)
             if (apps_[i]->running()) {
                 items.push_back({10 + static_cast<int>(i), catalog_[i].name, "Program", false});
-                if (apps_[i]->active() && apps_[i].get() == app_) current = 10 + static_cast<int>(i);
+                if (focus_ == WinRef{kWinApp, apps_[i].get()}) current = 10 + static_cast<int>(i);
             }
 #endif
 #ifdef SCIFI_HAS_CEF
         if (browser_ && browser_->started()) {
             items.push_back({2, "BROWSER", "Web", false});
-            if (browser_->active()) current = 2;
+            if (focus_ == WinRef{kWinBrowser, browser_.get()}) current = 2;
         }
 #endif
         items.push_back({3, "DESKTOP", "Minimise shell", false});
@@ -1124,17 +1433,12 @@ void AppShell::handleSwitcher(FrameInput& in, PadState& pad) {
 }
 
 void AppShell::tick(double dt) {
-    // Windowed mode: with the cursor off every window the keyboard drives the camera, whatever has typing focus.
-    const bool kbOff = wasWindowed_ && !winFocus_;
+    syncWins();
 #ifdef SCIFI_HAS_CEF
     WebBrowser::pump();
     const bool browserOpen = browser_ && browser_->active();
-    const bool browserFs = browserOpen && browser_->fullscreen();
-    const bool browserTyping = browserOpen && !kbOff && browser_->wantsKeyboard();
 #else
     const bool browserOpen = false;
-    const bool browserFs = false;
-    const bool browserTyping = false;
 #endif
 #ifdef _WIN32
     if (appsRebuild_) {
@@ -1146,15 +1450,10 @@ void AppShell::tick(double dt) {
         for (auto& a : apps_)
             if (a->active()) { app_ = a.get(); break; }
     if (!app_ && !apps_.empty()) app_ = apps_[0].get();
-    const bool appOpen = app_ && app_->active();
-    const bool appTyping = appOpen && !kbOff && app_->wantsKeyboard();
-#else
-    const bool appOpen = false;
-    const bool appTyping = false;
 #endif
     FrameInput in = input_.poll();
-    const bool panelOpen = panel_ && panel_->isOpen();
-    const bool panelTyping = panelOpen && !kbOff && panel_->wantsText();
+    // Only the focused window can take typed text; otherwise the keyboard walks the camera.
+    const bool winTypingNow = focus_.p && winTyping(focus_);
     PadState pad = pad_.poll();
     if (in.quit) running_ = false;
     if (in.resized) renderer_.resize();
@@ -1166,6 +1465,10 @@ void AppShell::tick(double dt) {
 #ifdef SCIFI_HAS_CEF
         if (browser_) browser_->setView(asp, th);
 #endif
+        for (PanelApp* p : {static_cast<PanelApp*>(monitor_.get()), static_cast<PanelApp*>(terminal_.get()),
+                            static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get())})
+            p->setView(th, asp);
+        settingsPanel_->setView(th, asp);
     }
     handleSwitcher(in, pad);
     if (deferred_ && --deferDelay_ <= 0) {  // the loading ring has been on screen: do the heavy work now
@@ -1175,14 +1478,14 @@ void AppShell::tick(double dt) {
         loadingT_ = 0.5f;
     }
     if (renaming_ && !settingsPanel_->isOpen()) renaming_ = false;
-    const bool vEditing = viewer_->editing() && !kbOff;
-    if (in.toggleVR && !vEditing && !browserTyping && !appTyping && !panelTyping) toggleVR();
-    input_.setTextInput(vEditing || browserTyping || appTyping || panelTyping || renaming_);
+    const bool vEditing = viewer_->editing();
+    if (in.toggleVR && !vEditing && !winTypingNow) toggleVR();
+    input_.setTextInput(vEditing || winTypingNow || renaming_);
     if (renaming_) in.fullscreen = in.browser = in.toggleVR = in.space = in.up = in.down = in.left = in.right = in.back = false;
 
     const float fdt = static_cast<float>(dt);
     // Typing only captures the keyboard when a text field (page or address bar) has focus, so WASD walks otherwise.
-    const bool typing = vEditing || browserTyping || appTyping || panelTyping || renaming_;
+    const bool typing = vEditing || winTypingNow || renaming_;
     // While typing, WASD belong to the text field; hold Alt to walk with the keyboard anyway (pad / VR sticks always walk).
     const bool kbMove = !typing || (SDL_GetModState() & KMOD_ALT) != 0;
     float kbX = kbMove ? in.moveX : 0.0f, kbY = kbMove ? in.moveY : 0.0f, kbZ = kbMove ? in.moveZ : 0.0f;
@@ -1190,7 +1493,7 @@ void AppShell::tick(double dt) {
     kbZ = clampf(kbZ + pad.rt - pad.lt, -1, 1);  // right trigger = up, left trigger = down
     float moveX = clampf(kbX + pad.lx + vrInput_.moveX, -1, 1);
     float moveY = clampf(kbY + pad.ly + vrInput_.moveY, -1, 1);
-    const float freeSpeed = (in.shift ? 1.69f : 1.0f) * settings_.speedScale() * (cityMode_ ? 8.0f : 1.0f);
+    const float freeSpeed = (in.shift ? (cityMode_ ? 4.05f : 1.69f) : 1.0f) * settings_.speedScale() * (cityMode_ ? 4.0f : 1.0f);
     float lookX = in.lookX * 0.0025f * settings_.lookScale() + pad.rx * 2.2f * fdt * settings_.lookScale();
     float lookY = (in.lookY * 0.0025f - pad.ry * 2.2f * fdt) * settings_.lookScale() * (settings_.invertY ? -1.0f : 1.0f);
     bool up = in.up || pad.upPressed, down = in.down || pad.downPressed;
@@ -1200,30 +1503,7 @@ void AppShell::tick(double dt) {
     bool vrPointer = vrOn_ && vrInput_.valid;
     const bool ringToggle = in.ring || pad.yPressed || vrInput_.menuPressed;
     if (in.themeCycle) cycleTheme();
-    if (in.screenshot) shotPending_ = true;
-    const bool ringWasOpen = ring_->isOpen();
-    {
-        // A window that has just opened: ease the view round to face it, then leave the camera locked where it is.
-        PanelApp* wp = panel_ && panel_->isOpen() ? panel_ : nullptr;
-        const bool winOpen = wp || settingsPanel_->isOpen();
-        if (winOpen && !faceWasOpen_) faceT_ = 1.3f;
-        faceWasOpen_ = winOpen;
-        const bool userMoving = in.moveX != 0 || in.moveY != 0 || in.moveZ != 0 || std::fabs(pad.rx) + std::fabs(pad.ry) > 0.2f;
-        if (!winOpen || vrOn_ || riding_ || userMoving) faceT_ = 0;
-        if (faceT_ > 0) {
-            faceT_ -= static_cast<float>(dt);
-            Vec3 c, n;
-            float bw, bh;
-            if (wp ? wp->bounds(c, n, bw, bh) : settingsPanel_->bounds(c, n, bw, bh)) {
-                const Vec3 d = c - camera_.position;
-                const float ty = std::atan2(-d.x, -d.z), tp = std::atan2(d.y, std::sqrt(d.x * d.x + d.z * d.z));
-                float dy = std::fmod(ty - camera_.yaw + 3.0f * kPi, 2.0f * kPi) - kPi;
-                const float k = 1.0f - std::exp(-static_cast<float>(dt) * 4.0f);
-                camera_.yaw += dy * k;
-                camera_.pitch += (tp - camera_.pitch) * k;
-            }
-        }
-    }
+    if (in.screenshot) shotPending_ = true;    const bool ringWasOpen = ring_->isOpen();
     {
         const bool anyInput = in.moveX != 0 || in.moveY != 0 || in.moveZ != 0 || in.lookX != 0 || in.lookY != 0 || in.click || in.clickUp ||
                               in.wheel != 0 || in.escape || in.select || in.back || in.up || in.down || in.left || in.right || in.space ||
@@ -1238,7 +1518,7 @@ void AppShell::tick(double dt) {
         } else {
             idleT_ += dt;
         }
-        const bool busy = ring_->isOpen() || settingsPanel_->isOpen() || panelOpen || appsPanel_->isOpen() || appOpen || browserOpen || viewer_->active() ||
+        const bool busy = ring_->isOpen() || !winOrder_.empty() || appsPanel_->isOpen() || viewer_->active() ||
                           deferred_ || riding_ || vrOn_;
         if (tourActive_ && (!cityMode_ || busy)) stopTour();
         if (tourAllowed && !tourActive_ && idleT_ > 10.0 && cityMode_ && city_ && city_->built() && !busy && script_.empty() && !mv_.on) startTour();
@@ -1249,7 +1529,7 @@ void AppShell::tick(double dt) {
             if (rideT_ < 0.7f) lookX = lookY = 0.0f;
         }
     }
-    if (state_ == State::FileRoom && !viewer_->editing() && !ringWasOpen && !settingsPanel_->isOpen() && !panelOpen && !appsPanel_->isOpen() && !viewer_->overlay() && ringToggle) {
+    if (state_ == State::FileRoom && !viewer_->editing() && !ringWasOpen && !appsPanel_->isOpen() && !viewer_->overlay() && ringToggle) {
         // Desktop: use the live camera (head_ lags a frame); VR: the headset pose captured at render time.
         if (vrOn_) ring_->open(head_.eye, head_.forward);
         else ring_->open(camera_.position, Vec3{-std::sin(camera_.yaw), 0.0f, -std::cos(camera_.yaw)});
@@ -1274,204 +1554,106 @@ void AppShell::tick(double dt) {
             d = vrInput_.pointerDir;
         }
         aimDir_ = d;
-        // Desktop windows behave like fixed windows: while the aim is over one, the view and walking freeze and the mouse
-        // moves a cursor. Moving off it hands control back to the camera, which eases round to where the cursor was.
-        const bool windowed = !vrOn_ && !appsPanel_->isOpen() && !ring_->isOpen() &&
-                              ((settingsPanel_->isOpen() && !settingsPanel_->fullscreen()) || (panelOpen && !panel_->fullscreen()) || (appOpen && !app_->fullscreen()) || (browserOpen && !browserFs) ||
-                               (!appOpen && !browserOpen && viewer_->active() && !viewer_->overlay()));
-        if (!windowed) {
+        // Windows are persistent and stacked: the frontmost window under the aim takes the pointer, clicking raises and
+        // focuses it, and anything else (the world, a door, a bus lane) still works around them. The camera stays free;
+        // right click pins the view to a window (camera frozen, mouse drives a cursor) and releases it again.
+        const bool overlayBusy = appsPanel_->isOpen() || ring_->isOpen() || viewer_->overlay();
+        const float wth = std::tan(kFovY * 0.5f), wasp = renderer_.aspect();
+        int sw = 1, sh = 1;
+        SDL_GetWindowSize(window_, &sw, &sh);
+        WinRef fsw;
+        for (const WinRef& w : winOrder_)
+            if (winFull(w)) fsw = w;
+        if (fsw.p && vrOn_) {
+            winToggleFull(fsw);
+            fsw = {};
+        }
+        if (overlayBusy || winOrder_.empty() || vrOn_) {
             winFocus_ = false;
-            lockedWin_ = false;
-            wasWindowed_ = false;
-            holding_ = false;
-            recT_ = -1;
+            recT_ = -1.0f;
+        }
+        WinRef top;
+        bool winModal = false;
+        if (fsw.p && !overlayBusy) {
+            // A fullscreen window is modal: the world is frozen and the mouse / right stick drive a cursor over it.
+            winFocus_ = false;
+            recT_ = -1.0f;
+            updateCamera(dt, 0, 0, 0, 0, 0);
+            cursorX_ = clampf(cursorX_ + in.lookX * 2.0f / std::max(sw, 1) + pad.rx * 1.5f * fdt, -1.0f, 1.0f);
+            cursorY_ = clampf(cursorY_ - in.lookY * 2.0f / std::max(sh, 1) - pad.ry * 1.5f * fdt, -1.0f, 1.0f);
+            o = {0, 0, 0};
+            d = normalize({cursorX_ * wth * wasp, cursorY_ * wth, -1.0f});
+            winModal = true;
+            top = fsw;
         } else {
-            if (!wasWindowed_) {
-                wasWindowed_ = true;
-                winFocus_ = false;
-                cursorX_ = cursorY_ = 0;
-            }
-            const float th = std::tan(kFovY * 0.5f), asp = renderer_.aspect();
-            auto overWindow = [&](const Vec3& oo, const Vec3& dd) {
-                bool h = false;
-#ifdef _WIN32
-                for (auto& a : apps_) if (a->active() && a->hitDistance(oo, dd) >= 0) h = true;
-#endif
-#ifdef SCIFI_HAS_CEF
-                if (browserOpen && browser_->hitDistance(oo, dd) >= 0) h = true;
-#endif
-                if (viewer_->hits(oo, dd)) h = true;
-                if (settingsPanel_->isOpen() && settingsPanel_->hitDistance(oo, dd) >= 0) h = true;
-                if (panelOpen && panel_->hitDistance(oo, dd) >= 0) h = true;
-                return h;
-            };
-            auto winBounds = [&](const Vec3& oo, const Vec3& dd, Vec3& c, Vec3& n, float& w, float& h) {
-#ifdef _WIN32
-                for (auto& a : apps_) if (a->active() && a->hitDistance(oo, dd) >= 0 && a->bounds(c, n, w, h)) return true;
-#endif
-#ifdef SCIFI_HAS_CEF
-                if (browserOpen && browser_->hitDistance(oo, dd) >= 0 && browser_->bounds(c, n, w, h)) return true;
-#endif
-                if (viewer_->hits(oo, dd) && viewer_->bounds(c, n, w, h)) return true;
-                if (panelOpen && panel_->hitDistance(oo, dd) >= 0 && panel_->bounds(c, n, w, h)) return true;
-                return settingsPanel_->isOpen() && settingsPanel_->hitDistance(oo, dd) >= 0 && settingsPanel_->bounds(c, n, w, h);
-            };
-            bool dragging = viewer_->dragging();
-#ifdef _WIN32
-            if (appOpen && app_->busy()) dragging = true;
-#endif
-#ifdef SCIFI_HAS_CEF
-            if (browserOpen && browser_->busy()) dragging = true;
-#endif
-            // Long press on a window (without moving): ease the view round until the window is centred at 85% size again.
-            if (recT_ < 0.0f) {
-                if ((winFocus_ || overWindow(o, d)) && in.click) {
-                    holding_ = true;
-                    holdT_ = holdMove_ = 0.0f;
-                }
-                if (holding_) {
-                    holdT_ += fdt;
-                    holdMove_ += std::fabs(in.lookX) + std::fabs(in.lookY);
+            if (in.pin && !overlayBusy && !vrOn_ && recT_ < 0.0f) {
+                if (winFocus_) {
+                    winFocus_ = false;
+                } else {
+                    const WinRef t = topWinAt(o, d);
                     Vec3 c, n;
-                    float w, h;
-                    if (in.clickUp || holdMove_ > 30.0f) {
-                        holding_ = false;
-                    } else if (holdT_ > 0.6f) {
-                        holding_ = false;
-                        const Vec3 cd = normalize(camera_.world().transformDir({cursorX_ * th * asp, cursorY_ * th, -1.0f}));
-                        if (winBounds(o, cd, c, n, w, h)) {
-                            n.y = 0;
-                            n = length(n) > 1e-4f ? normalize(n) : Vec3{0, 0, 1};
-                            if (dot(n, camera_.position - c) < 0) n = n * -1.0f;
-                            const float dist = fitDistance(w, h, asp, th);
-                            const float eyeHi = cityMode_ ? 450.0f : (!cityMode_ && room_->building() ? room_->maxEye() : 24.0f);  // same ceiling as free movement
-                            const float eyeY = clampf(c.y, 0.35f, eyeHi);
-                            recFromPos_ = camera_.position;
-                            recToPos_ = {c.x + n.x * dist, eyeY, c.z + n.z * dist};
-                            if (cityMode_ && city_) city_->resolve(recToPos_, 0.8f, flying_ ? 0.35f : 1.7f);  // never end up inside a building
-                            recFromYaw_ = camera_.yaw;
-                            recToYaw_ = std::atan2(n.x, n.z);
-                            recFromPitch_ = camera_.pitch;
-                            recToPitch_ = std::atan2(c.y - eyeY, dist);  // aim straight at the window centre
-                            recT_ = 0.0f;
-                        }
+                    float bw, bh;
+                    if (t.p && winBoundsOf(t, c, n, bw, bh)) {
+                        raiseFocus(t);
+                        n.y = 0;
+                        n = length(n) > 1e-4f ? normalize(n) : Vec3{0, 0, 1};
+                        if (dot(n, camera_.position - c) < 0) n = n * -1.0f;
+                        const float dist = fitDistance(bw, bh, wasp, wth);
+                        const float eyeHi = cityMode_ ? 450.0f : (room_->building() ? room_->maxEye() : 24.0f);
+                        const float eyeY = clampf(c.y, 0.35f, eyeHi);
+                        recFromPos_ = camera_.position;
+                        recToPos_ = {c.x + n.x * dist, eyeY, c.z + n.z * dist};
+                        if (cityMode_ && city_) city_->resolve(recToPos_, 0.8f, flying_ ? 0.35f : 1.7f);  // never end up inside a building
+                        recFromYaw_ = camera_.yaw;
+                        recToYaw_ = std::atan2(n.x, n.z);
+                        recFromPitch_ = camera_.pitch;
+                        recToPitch_ = std::atan2(c.y - eyeY, dist);
+                        recT_ = 0.0f;
                     }
                 }
             }
             if (recT_ >= 0.0f) {
                 recT_ += fdt / 0.7f;
-                const float rt = std::min(recT_, 1.0f), e = rt * rt * (3.0f - 2.0f * rt);
-                camera_.position = {lerpf(recFromPos_.x, recToPos_.x, e), lerpf(recFromPos_.y, recToPos_.y, e),
-                                    lerpf(recFromPos_.z, recToPos_.z, e)};
+                const float rt = std::min(recT_, 1.0f), ez = rt * rt * (3.0f - 2.0f * rt);
+                camera_.position = {lerpf(recFromPos_.x, recToPos_.x, ez), lerpf(recFromPos_.y, recToPos_.y, ez),
+                                    lerpf(recFromPos_.z, recToPos_.z, ez)};
                 float dy = std::fmod(recToYaw_ - recFromYaw_ + 3.14159265f, 6.2831853f);
                 if (dy < 0) dy += 6.2831853f;
-                camera_.yaw = recFromYaw_ + (dy - 3.14159265f) * e;
-                camera_.pitch = lerpf(recFromPitch_, recToPitch_, e);
+                camera_.yaw = recFromYaw_ + (dy - 3.14159265f) * ez;
+                camera_.pitch = lerpf(recFromPitch_, recToPitch_, ez);
                 cursorX_ = cursorY_ = 0.0f;
                 lookX = lookY = moveX = moveY = kbZ = 0.0f;
                 if (recT_ >= 1.0f) {
                     recT_ = -1.0f;
-                    lockedWin_ = true;  // a long click pinned the view to this window
-                    notOverT_ = 0.0f;
+                    winFocus_ = true;
                 }
             } else if (winFocus_) {
-                int ww = 1, wh = 1;
-                SDL_GetWindowSize(window_, &ww, &wh);
-                cursorX_ = clampf(cursorX_ + in.lookX * 2.0f / std::max(ww, 1) + pad.rx * 1.5f * fdt, -1.0f, 1.0f);
-                cursorY_ = clampf(cursorY_ - in.lookY * 2.0f / std::max(wh, 1) - pad.ry * 1.5f * fdt, -1.0f, 1.0f);
+                cursorX_ = clampf(cursorX_ + in.lookX * 2.0f / std::max(sw, 1) + pad.rx * 1.5f * fdt, -1.0f, 1.0f);
+                cursorY_ = clampf(cursorY_ - in.lookY * 2.0f / std::max(sh, 1) - pad.ry * 1.5f * fdt, -1.0f, 1.0f);
                 lookX = lookY = moveX = moveY = kbZ = 0.0f;
-            } else if (cursorX_ != 0.0f || cursorY_ != 0.0f) {
-                // Ease the camera round to the cursor so the aim does not jump when control returns.
+            } else if (!viewer_->overlay() && (cursorX_ != 0.0f || cursorY_ != 0.0f)) {
+                // Ease the camera round to the cursor so the aim does not jump when the pin is released.
                 const float k = std::min(1.0f, fdt * 12.0f);
-                camera_.yaw -= std::atan(cursorX_ * th * asp) * k;
-                camera_.pitch = clampf(camera_.pitch + std::atan(cursorY_ * th) * k, -1.4f, 1.4f);
+                camera_.yaw -= std::atan(cursorX_ * wth * wasp) * k;
+                camera_.pitch = clampf(camera_.pitch + std::atan(cursorY_ * wth) * k, -1.4f, 1.4f);
                 cursorX_ *= 1.0f - k;
                 cursorY_ *= 1.0f - k;
                 if (std::fabs(cursorX_) < 0.002f && std::fabs(cursorY_) < 0.002f) cursorX_ = cursorY_ = 0.0f;
             }
-            d = normalize(camera_.world().transformDir({cursorX_ * th * asp, cursorY_ * th, -1.0f}));
+            if (!overlayBusy && !vrOn_) d = normalize(camera_.world().transformDir({cursorX_ * wth * wasp, cursorY_ * wth, -1.0f}));
             aimDir_ = d;
-            const bool over = overWindow(o, d);
-            // The view only locks to a window after a long click. Once locked it stays put while the window is briefly
-            // empty (e.g. the next image loading) and releases only after the aim has been off it for a moment.
-            if (over || dragging) notOverT_ = 0.0f;
-            else if (lockedWin_) notOverT_ += fdt;
-            if (winFocus_ && !over && !dragging && notOverT_ > 0.6f) {
-                winFocus_ = false;
-                lockedWin_ = false;
-            } else if (!winFocus_ && over && lockedWin_) winFocus_ = true;
+            if (!overlayBusy) top = topWinAt(o, d);
         }
-        // With a browser and programs open together, whichever the aim last touched (nearest along the ray) has focus.
-        bool browserFirst = browserOpen && !appOpen;
-#if defined(SCIFI_HAS_CEF) && defined(_WIN32)
-        if (browserOpen && appOpen) {
-            const float bt = browser_->hitDistance(o, d);
-            float at = 1e9f;
-            for (auto& a : apps_) {
-                const float t = a->active() ? a->hitDistance(o, d) : -1.0f;
-                if (t >= 0 && t < at) at = t;
+        if (!overlayBusy) {
+            for (const WinRef& w : winOrder_) {
+                if (fsw.p && w != fsw) winLeave(w, o, d);
+                else if (w == top || winBusy(w)) winPointer(w, o, d);
+                else winLeave(w, o, d);
             }
-            if (bt >= 0 && bt <= at) browserFocus_ = true;
-            else if (at < 1e9f) browserFocus_ = false;
-            browserFirst = browserFocus_;
-        }
-#endif
-        if (appsPanel_->isOpen()) {
-            updateCamera(dt, 0, 0, 0, lookX, lookY);
-            room_->setHover(nullptr);
-            appsPanel_->pointer(o, d);
-            if (in.wheel != 0.0f) appsPanel_->moveSelection(in.wheel > 0 ? -1 : 1);
-            if (up) appsPanel_->moveSelection(-1);
-            if (down) appsPanel_->moveSelection(1);
-            if (pointerSelect) {
-                if (!appsPanel_->activateHit(o, d)) appsPanel_->activateSelected();
-            } else if (keySelect) appsPanel_->activateSelected();
-            else if (back || in.escape || ringToggle) appsPanel_->close();
-        } else if (panelOpen) {
-            // Floating app panel (system monitor, files, terminal): movement frozen, cursor drives it like a window.
-            const float stan = std::tan(kFovY * 0.5f);
-            if (vrOn_ && panel_->fullscreen()) panel_->toggleFullscreen();
-            panel_->setView(stan, renderer_.aspect());
-            if (panel_->fullscreen()) {
-                int ww = 1, wh = 1;
-                SDL_GetWindowSize(window_, &ww, &wh);
-                updateCamera(dt, 0, 0, 0, 0, 0);
-                cursorX_ = clampf(cursorX_ + in.lookX * 2.0f / std::max(ww, 1) + pad.rx * 1.5f * fdt, -1.0f, 1.0f);
-                cursorY_ = clampf(cursorY_ - in.lookY * 2.0f / std::max(wh, 1) - pad.ry * 1.5f * fdt, -1.0f, 1.0f);
-                o = {0, 0, 0};
-                d = normalize({cursorX_ * stan * renderer_.aspect(), cursorY_ * stan, -1.0f});
-            } else {
-                updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed);
+            if (top.p) {
+                room_->setHover(nullptr);
+                if (city_) city_->clearHover();
             }
-            room_->setHover(nullptr);
-            panel_->pointer(o, d);
-            if (in.wheel != 0.0f) panel_->wheel(in.wheel);
-            if (panelTyping) {
-                for (EditKey k : in.keys) panel_->key(k);
-                if (!in.text.empty()) panel_->text(in.text);
-            }
-            if (pointerSelect) panel_->click(o, d);
-            else if (in.escape || back || ringToggle) {
-                if (panelTyping && in.escape && !ringToggle && !back) panel_->ctrl("esc");
-                else if (!panel_->back()) panel_->close();
-            }
-        } else if (settingsPanel_->isOpen()) {
-            // Settings panel: movement frozen, aim at a row and click / A / trigger to change it.
-            const float stan = std::tan(kFovY * 0.5f);
-            if (vrOn_ && settingsPanel_->fullscreen()) settingsPanel_->toggleFullscreen();
-            settingsPanel_->setView(stan, renderer_.aspect());
-            if (settingsPanel_->fullscreen()) {
-                int ww = 1, wh = 1;
-                SDL_GetWindowSize(window_, &ww, &wh);
-                updateCamera(dt, 0, 0, 0, 0, 0);
-                cursorX_ = clampf(cursorX_ + in.lookX * 2.0f / std::max(ww, 1) + pad.rx * 1.5f * fdt, -1.0f, 1.0f);
-                cursorY_ = clampf(cursorY_ - in.lookY * 2.0f / std::max(wh, 1) - pad.ry * 1.5f * fdt, -1.0f, 1.0f);
-                o = {0, 0, 0};
-                d = normalize({cursorX_ * stan * renderer_.aspect(), cursorY_ * stan, -1.0f});
-            } else {
-                updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed);
-            }
-            room_->setHover(nullptr);
             if (renaming_) {
                 for (EditKey k : in.keys) {
                     if (k == EditKey::Backspace) {
@@ -1493,16 +1675,98 @@ void AppShell::tick(double dt) {
                 if (in.escape) renaming_ = false;
                 in.escape = in.select = in.click = keySelect = pointerSelect = back = false;
             }
-            settingsPanel_->pointer(o, d);
-            if (in.wheel != 0.0f) settingsPanel_->step(in.wheel > 0 ? -1 : 1);
-            if (up && !kbOff) settingsPanel_->move(0, -1);
-            if (down && !kbOff) settingsPanel_->move(0, 1);
-            if ((in.left && !kbOff) || pad.leftPressed) settingsPanel_->move(-1, 0);
-            if ((in.right && !kbOff) || pad.rightPressed) settingsPanel_->move(1, 0);
+
+            // Escape and back act inside the focused window (leave the address bar or fullscreen, go up a page); a window is
+            // never closed by them, so a stray key cannot lose your layout. Back on a pad / VR controller minimises it.
+            const WinRef f = focus_;
+            if (in.escape && (f.p || winFocus_)) {
+                if (!(f.p && winEscape(f))) {
+                    if (winFocus_) winFocus_ = false;
+                    else setFocus({});
+                }
+                in.escape = false;
+            }
+            if ((pad.bPressed || vrInput_.backPressed) && f.p) {
+                winBack(f);
+                pad.bPressed = back = false;
+                vrInput_.backPressed = false;
+            }
+            if (f.p && !renaming_) {
+                if (winTypingNow) {
+                    for (EditKey k : in.keys) winKey(f, k);
+                    if (!in.text.empty()) winText(f, in.text);
+                    in.keys.clear();
+                    in.text.clear();
+                } else if (f.kind == kWinBrowser) {
+                    for (EditKey k : in.keys)
+                        if (k == EditKey::Up || k == EditKey::Down || k == EditKey::PageUp || k == EditKey::PageDown || k == EditKey::Home || k == EditKey::End)
+                            winKey(f, k);
+                } else if (f.kind == kWinSettings) {
+                    if (up) settingsPanel_->move(0, -1);
+                    if (down) settingsPanel_->move(0, 1);
+                    if (in.left || pad.leftPressed) settingsPanel_->move(-1, 0);
+                    if (in.right || pad.rightPressed) settingsPanel_->move(1, 0);
+                    if (in.select) settingsPanel_->activateSelected();
+                    up = down = in.left = in.right = in.select = pad.leftPressed = pad.rightPressed = false;
+                }
+            }
+            const bool clickEv = in.click || pad.aPressed || vrInput_.selectPressed;
+            if (clickEv) {
+                if (top.p) {
+                    raiseFocus(top);
+                    winPress(top, o, d, !in.click);
+                } else if (focus_.kind == kWinSettings && !in.click && pad.aPressed) {
+                    settingsPanel_->activateSelected();
+                } else if (!fsw.p) {
+                    winFocus_ = false;
+                    setFocus({});
+                }
+                if (top.p || (focus_.kind == kWinSettings && !in.click && pad.aPressed)) {
+                    in.click = pointerSelect = keySelect = false;
+                    pad.aPressed = false;
+                    vrInput_.selectPressed = false;
+                }
+            }
+            if (in.clickUp)
+                for (const WinRef& w : winOrder_) winRelease(w);
+            if (in.wheel != 0.0f && top.p) {
+                winWheel(top, in.wheel);
+                in.wheel = 0.0f;
+            }
+            if (top.kind == kWinBrowser) {
+                if (pad.upPressed) winWheel(top, 1.0f);
+                if (pad.downPressed) winWheel(top, -1.0f);
+            }
+            if (in.appFullscreen && !vrOn_) {
+                const WinRef t = fsw.p ? fsw : (focus_.kind == kWinApp ? focus_ : top);
+                if (t.kind == kWinApp) winToggleFull(t);
+            }
+#ifdef SCIFI_HAS_CEF
+            if (browser_ && browser_->active()) {
+                if (in.focusAddress) {
+                    raiseFocus({kWinBrowser, browser_.get()});
+                    browser_->focusAddress();
+                }
+                if (in.depthCycle) browser_->cycleDepth();
+                if (in.depthSite) browser_->toggleSite();
+                if (in.reload) browser_->reload();
+                if (in.navBack) browser_->goBack();
+                if (in.navForward) browser_->goForward();
+            }
+#endif
+        }
+        const bool overWin = top.p && !winModal;
+        if (appsPanel_->isOpen()) {
+            updateCamera(dt, 0, 0, 0, lookX, lookY);
+            room_->setHover(nullptr);
+            appsPanel_->pointer(o, d);
+            if (in.wheel != 0.0f) appsPanel_->moveSelection(in.wheel > 0 ? -1 : 1);
+            if (up) appsPanel_->moveSelection(-1);
+            if (down) appsPanel_->moveSelection(1);
             if (pointerSelect) {
-                settingsPanel_->activateHit(o, d);
-            } else if (keySelect) settingsPanel_->activateSelected();
-            else if (back || in.escape || ringToggle) { if (!settingsPanel_->back()) settingsPanel_->close(); }
+                if (!appsPanel_->activateHit(o, d)) appsPanel_->activateSelected();
+            } else if (keySelect) appsPanel_->activateSelected();
+            else if (back || in.escape || ringToggle) appsPanel_->close();
         } else if (ring_->isOpen()) {
             // Tool ring: movement is frozen, looking aims at a segment, click / A / trigger launches it.
             updateCamera(dt, 0, 0, 0, lookX, lookY);
@@ -1535,76 +1799,8 @@ void AppShell::tick(double dt) {
                 else if (ring_->appsMode()) ring_->showApps(false);
                 else ring_->close();
             }
-        } else if (appOpen && !browserFirst) {
-#ifdef _WIN32
-            const float tanHalf = std::tan(kFovY * 0.5f);
-            if (!app_->busy()) pickApp(o, d);
-            for (auto& a : apps_) if (a->active()) a->setView(renderer_.aspect(), tanHalf);
-            if (vrOn_ && app_->fullscreen()) app_->toggleFullscreen();
-            if (in.appFullscreen && !vrOn_) app_->toggleFullscreen();
-            if (app_->fullscreen()) {
-                // Fullscreen: the world is frozen; the mouse / right stick drive a cursor over the program.
-                int ww = 1, wh = 1;
-                SDL_GetWindowSize(window_, &ww, &wh);
-                updateCamera(dt, 0, 0, 0, 0, 0);
-                cursorX_ = clampf(cursorX_ + in.lookX * 2.0f / std::max(ww, 1) + pad.rx * 1.5f * fdt, -1.0f, 1.0f);
-                cursorY_ = clampf(cursorY_ - in.lookY * 2.0f / std::max(wh, 1) - pad.ry * 1.5f * fdt, -1.0f, 1.0f);
-                o = {0, 0, 0};
-                d = normalize({cursorX_ * tanHalf * renderer_.aspect(), cursorY_ * tanHalf, -1.0f});
-            } else {
-                updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed);
-            }
+        } else if (winModal) {
             room_->setHover(nullptr);
-            app_->pointer(o, d);
-            if (in.click) app_->press(false);
-            else if (pad.aPressed || vrInput_.selectPressed) app_->press(true);
-            if (in.clickUp) app_->releaseButton();
-            if (in.wheel != 0.0f) app_->scrollNotches(in.wheel);
-            if (appTyping) {
-                for (EditKey k : in.keys) app_->key(k);
-                if (!in.text.empty()) app_->text(in.text);
-            }
-            if (in.escape || pad.bPressed || vrInput_.backPressed) app_->escape();
-#endif
-        } else if (browserOpen) {
-#ifdef SCIFI_HAS_CEF
-            // Browser open: you can still walk around; input drives the page (or the address bar).
-            if (vrOn_ && browser_->fullscreen()) browser_->toggleFullscreen();
-            if (browser_->fullscreen()) {
-                int ww = 1, wh = 1;
-                SDL_GetWindowSize(window_, &ww, &wh);
-                const float bt = std::tan(kFovY * 0.5f);
-                updateCamera(dt, 0, 0, 0, 0, 0);
-                cursorX_ = clampf(cursorX_ + in.lookX * 2.0f / std::max(ww, 1) + pad.rx * 1.5f * fdt, -1.0f, 1.0f);
-                cursorY_ = clampf(cursorY_ - in.lookY * 2.0f / std::max(wh, 1) - pad.ry * 1.5f * fdt, -1.0f, 1.0f);
-                o = {0, 0, 0};
-                d = normalize({cursorX_ * bt * renderer_.aspect(), cursorY_ * bt, -1.0f});
-            } else {
-                updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed);
-            }
-            room_->setHover(nullptr);
-            browser_->pointer(o, d);
-            if (in.click) browser_->press(false);
-            else if (pad.aPressed || vrInput_.selectPressed) browser_->press(true);
-            if (in.clickUp) browser_->release();
-            if (in.wheel != 0.0f) browser_->scrollNotches(in.wheel);
-            if (pad.upPressed) browser_->scrollNotches(1.0f);
-            if (pad.downPressed) browser_->scrollNotches(-1.0f);
-            for (EditKey k : in.keys) {
-                const bool scrollKey = k == EditKey::Up || k == EditKey::Down || k == EditKey::PageUp ||
-                                       k == EditKey::PageDown || k == EditKey::Home || k == EditKey::End;
-                if (!kbOff && (browserTyping || scrollKey)) browser_->key(k);
-            }
-            if (!in.text.empty() && browserTyping) browser_->text(in.text);
-            if (in.focusAddress) browser_->focusAddress();
-            if (in.depthCycle) browser_->cycleDepth();
-            if (in.depthSite) browser_->toggleSite();
-            if (in.reload) browser_->reload();
-            if (in.navBack) browser_->goBack();
-            if (in.navForward) browser_->goForward();
-            if (in.escape) browser_->escape();
-            if (pad.bPressed || vrInput_.backPressed) browser_->close();
-#endif
         } else if (viewer_->active()) {
             const bool ov = viewer_->overlay();
             if (ov) {
@@ -1664,8 +1860,8 @@ void AppShell::tick(double dt) {
             if (!viewer_->closing() && viewer_->isText()) {
                 const bool editing = viewer_->editing();
                 if (pointerSelect) press();
-                for (EditKey k : in.keys) if (!kbOff) viewer_->editKey(k);
-                if (!in.text.empty() && !kbOff) viewer_->typeText(in.text);
+                for (EditKey k : in.keys) viewer_->editKey(k);
+                if (!in.text.empty()) viewer_->typeText(in.text);
                 if (in.wheel != 0.0f) viewer_->scrollText(-in.wheel * 3.0f);
                 if (!editing) {
                     if (pad.upPressed) viewer_->scrollText(-3.0f);
@@ -1685,10 +1881,10 @@ void AppShell::tick(double dt) {
                 if (ov && pad.aPressed) press();
                 else if (keySelect || in.space) viewer_->togglePause();
                 const bool image = !viewer_->isMedia();
-                if ((in.left && !kbOff) || pad.leftPressed) { if (image) viewer_->step(-1); else viewer_->seekBy(-5.0); }
-                if ((in.right && !kbOff) || pad.rightPressed) { if (image) viewer_->step(1); else viewer_->seekBy(5.0); }
-                if (up && !kbOff) viewer_->changeVolume(0.1f);
-                if (down && !kbOff) viewer_->changeVolume(-0.1f);
+                if (in.left || pad.leftPressed) { if (image) viewer_->step(-1); else viewer_->seekBy(-5.0); }
+                if (in.right || pad.rightPressed) { if (image) viewer_->step(1); else viewer_->seekBy(5.0); }
+                if (up) viewer_->changeVolume(0.1f);
+                if (down) viewer_->changeVolume(-0.1f);
                 if (in.fullscreen) viewer_->toggleFullscreen(head_);
                 if (back || in.escape) {
                     if (viewer_->fullscreen()) viewer_->toggleFullscreen(head_);
@@ -1710,7 +1906,7 @@ void AppShell::tick(double dt) {
                 room_->setHover(nullptr);
                 std::string path, name;
                 std::vector<Vec3> routePath;
-                if (city_ && city_->pick(o, d, path, name)) {
+                if (!overWin && city_ && city_->pick(o, d, path, name)) {
                     if ((pointerSelect || keySelect) && !deferred_) {
                         city_->markEntered();
                         city_->clearHover();
@@ -1729,15 +1925,15 @@ void AppShell::tick(double dt) {
                         };
                         deferDelay_ = 3;
                     }
-                } else if (city_ && (pointerSelect || keySelect) && !riding_ && city_->pickMonument(o, d) >= 0) {
+                } else if (!overWin && city_ && (pointerSelect || keySelect) && !riding_ && city_->pickMonument(o, d) >= 0) {
                     monitor_->setFocus(city_->pickMonument(o, d));
                     openPanel(monitor_.get());
-                } else if (pointerSelect && city_ && !riding_ && city_->pickRoute(o, d, routePath)) {
+                } else if (!overWin && pointerSelect && city_ && !riding_ && city_->pickRoute(o, d, routePath)) {
                     startRide(routePath);
                 }
             } else {
             if (city_) city_->clearHover();
-            Node* hit = pickNode(room_->root(), o, d);
+            Node* hit = overWin ? nullptr : pickNode(room_->root(), o, d);
             room_->setHover(hit);
             if ((pointerSelect || keySelect) && hit && !deferred_) {
                 if (room_->opensRoom(hit)) {
@@ -1751,7 +1947,10 @@ void AppShell::tick(double dt) {
             else if (in.escape) toggleCity(true);
             }
 #ifdef SCIFI_HAS_CEF
-            if (in.browser && browser_) browser_->open("", head_.eye, head_.forward, vrOn_);
+            if (in.browser && browser_ && !winTypingNow) {
+                if (browser_->active()) raiseFocus({kWinBrowser, browser_.get()});
+                else browser_->open("", head_.eye, head_.forward, vrOn_);
+            }
 #endif
         }
     }
@@ -1844,57 +2043,24 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
                     return;
                 }
     // Planar reflection: draw the room flipped under the floor first; the translucent floor then lets it show through.
-#ifdef _WIN32
-    if (state_ == State::FileRoom && desktopPass && !vrOn_ && app_ && app_->active() && app_->fullscreen()) {
-        // Fullscreen hosted program: it fills the view; the pointer is a virtual cursor over it.
-        renderer_.setView(Mat4::identity(), proj);
-        renderer_.clearDepth();
-        app_->render(renderer_);
-        if (crosshair_ && !switcher_->isOpen()) {
-            const float t = std::tan(kFovY * 0.5f), dist = 1.5f;
-            Vec3 p{cursorX_ * t * renderer_.aspect() * dist, cursorY_ * t * dist, -dist};
-            renderer_.drawPointer(*crosshair_, pointerMatrix(p, {0, 0, -1}, {0, 1, 0}, 0.1f), currentTheme().accent);
+    if (state_ == State::FileRoom && desktopPass && !vrOn_) {
+        // A fullscreen window fills the view; the pointer is a virtual cursor over it.
+        WinRef fw;
+        for (const WinRef& w : winOrder_)
+            if (winFull(w)) fw = w;
+        if (fw.p) {
+            renderer_.setView(Mat4::identity(), proj);
+            renderer_.clearDepth();
+            winRender(fw);
+            if (crosshair_ && !switcher_->isOpen()) {
+                const float t = std::tan(kFovY * 0.5f), dist = fw.kind == kWinApp ? 1.5f : 0.9f;
+                Vec3 p{cursorX_ * t * renderer_.aspect() * dist, cursorY_ * t * dist, -dist};
+                renderer_.drawPointer(*crosshair_, pointerMatrix(p, {0, 0, -1}, {0, 1, 0}, 0.1f), currentTheme().accent);
+            }
+            switcher_->render(Mat4::identity(), renderer_.aspect(), std::tan(kFovY * 0.5f), false);
+            return;
         }
-        switcher_->render(Mat4::identity(), renderer_.aspect(), std::tan(kFovY * 0.5f), false);
-        return;
-    }
-#endif
-    if (state_ == State::FileRoom && desktopPass && !vrOn_ && panel_ && panel_->isOpen() && panel_->fullscreen()) {
-        renderer_.setView(Mat4::identity(), proj);
-        renderer_.clearDepth();
-        panel_->render();
-        if (crosshair_) {
-            const float t = std::tan(kFovY * 0.5f), dist = 0.9f;
-            Vec3 p{cursorX_ * t * renderer_.aspect() * dist, cursorY_ * t * dist, -dist};
-            renderer_.drawPointer(*crosshair_, pointerMatrix(p, {0, 0, -1}, {0, 1, 0}, 0.1f), currentTheme().accent);
-        }
-        return;
-    }
-    if (state_ == State::FileRoom && desktopPass && !vrOn_ && settingsPanel_->isOpen() && settingsPanel_->fullscreen()) {
-        renderer_.setView(Mat4::identity(), proj);
-        renderer_.clearDepth();
-        settingsPanel_->render();
-        if (crosshair_) {
-            const float t = std::tan(kFovY * 0.5f), dist = 0.9f;
-            Vec3 p{cursorX_ * t * renderer_.aspect() * dist, cursorY_ * t * dist, -dist};
-            renderer_.drawPointer(*crosshair_, pointerMatrix(p, {0, 0, -1}, {0, 1, 0}, 0.1f), currentTheme().accent);
-        }
-        return;
-    }
-#ifdef SCIFI_HAS_CEF
-    if (state_ == State::FileRoom && desktopPass && !vrOn_ && browser_ && browser_->active() && browser_->fullscreen()) {
-        renderer_.setView(Mat4::identity(), proj);
-        renderer_.clearDepth();
-        browser_->render(renderer_);
-        if (crosshair_) {
-            const float t = std::tan(kFovY * 0.5f), dist = 0.9f;
-            Vec3 p{cursorX_ * t * renderer_.aspect() * dist, cursorY_ * t * dist, -dist};
-            renderer_.drawPointer(*crosshair_, pointerMatrix(p, {0, 0, -1}, {0, 1, 0}, 0.1f), currentTheme().accent);
-        }
-        return;
-    }
-#endif
-    if (state_ == State::FileRoom) {
+    }    if (state_ == State::FileRoom) {
         renderer_.beginReflection();
         renderer_.setMirror(true);
         activeRoot().renderTree(renderer_);
@@ -1915,29 +2081,15 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         renderer_.clearDepth();
         viewer_->root().renderTree(renderer_);
     }
-#ifdef SCIFI_HAS_CEF
-    if (state_ == State::FileRoom && browser_ && browser_->active()) {
-        renderer_.clearDepth();
-        browser_->render(renderer_);
-    }
-#endif
-#ifdef _WIN32
-    if (state_ == State::FileRoom) {
-        std::vector<AppWindow*> shown;
-        for (auto& a : apps_) if (a->active()) shown.push_back(a.get());
-        std::sort(shown.begin(), shown.end(), [&](AppWindow* x, AppWindow* y) { return x->distanceTo(realEye) > y->distanceTo(realEye); });
-        for (AppWindow* a : shown) {
+    if (state_ == State::FileRoom)
+        for (const WinRef& w : winOrder_) {
             renderer_.clearDepth();
-            a->render(renderer_);
+            winRender(w);
         }
-    }
-#endif
     if (state_ == State::FileRoom && ring_->active()) {
         renderer_.clearDepth();
         ring_->render(renderer_);
     }
-    if (state_ == State::FileRoom && settingsPanel_->isOpen()) settingsPanel_->render();
-    if (state_ == State::FileRoom && panel_ && panel_->isOpen()) panel_->render();
     if (state_ == State::FileRoom && appsPanel_->isOpen()) {
         renderer_.clearDepth();
         appsPanel_->root().renderTree(renderer_);

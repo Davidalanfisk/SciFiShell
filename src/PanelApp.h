@@ -20,8 +20,15 @@ public:
     virtual const char* name() const = 0;
 
     void open(Vec3 eye, Vec3 forward);
-    void close();
+    void close();  // closes for good (the app is reset next time)
+    void hide();   // minimise: the window disappears but keeps its state; open() brings it back
     bool isOpen() const { return open_; }
+    bool hidden() const { return hidden_; }
+    bool exists() const { return open_ || hidden_; }
+    void leave();                      // the pointer is on another window
+    void releaseButton() { dragging_ = false; }
+    bool busy() const { return dragging_; }
+    bool overTitle() const { return open_ && !fullscreen_ && mx_ >= 0 && my_ < 86 && hoverBtn_ == 0; }
     bool fullscreen() const { return fullscreen_; }
     void toggleFullscreen();
     void setView(float tanHalf, float aspect) { viewTan_ = tanHalf; viewAspect_ = aspect; }
@@ -74,12 +81,14 @@ private:
     int w_, h_;
     int savedW_ = 0, savedH_ = 0;
     float worldW_, baseWorldW_;
-    bool open_ = false, fullscreen_ = false, dirty_ = true;
+    bool open_ = false, hidden_ = false, fullscreen_ = false, dirty_ = true;
+    bool dragging_ = false;
+    float grabX_ = 0, grabY_ = 0, grabDist_ = 1.7f;
     float mx_ = -1, my_ = -1;
     int hoverBtn_ = 0;
     double sincePaint_ = 0, lastClick_ = -10, clock_ = 0;
     float lastClickX_ = 0, lastClickY_ = 0;
-    ui::Rect fs_, close_;
+    ui::Rect fs_, close_, hide_;
     Mat4 base_, savedBase_;
     Vec3 fallbackFlat_{0, 0, -1};
     float viewTan_ = 0.577f, viewAspect_ = 1.78f;

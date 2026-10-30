@@ -557,7 +557,7 @@ float WebBrowser::hitDistance(Vec3 origin, Vec3 dir) const {
 
 WebBrowser::Hit WebBrowser::toolbarHit(float px, float py) const {
     if (py < 0 || py > kBarH) return Hit::None;
-    if (py < 12 || py > 68) return Hit::Grip;
+    if (py < 20 || py > 60) return Hit::Grip;
     auto in = [&](Region r) { return px >= r.x0 && px <= r.x1; };
     if (in(kBack)) return Hit::Back;
     if (in(kForward)) return Hit::Forward;

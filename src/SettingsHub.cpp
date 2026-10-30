@@ -43,6 +43,10 @@ Color8 toColor8(Vec3 v, uint8_t a = 255) {
 }  // namespace
 
 void SettingsHub::open(Vec3 eye, Vec3 forward) {
+    if (open_) {
+        hidden_ = false;
+        return;
+    }
     Vec3 f = {forward.x, 0.0f, forward.z};
     if (length(f) < 0.25f) f = fallbackFlat_;
     f = normalize(f);
@@ -50,8 +54,11 @@ void SettingsHub::open(Vec3 eye, Vec3 forward) {
     Vec3 c = length(forward) < 0.5f ? eye + f * kDist : eye + normalize(forward) * kDist;
     c.y = std::max(c.y, eye.y - 1.0f);
     base_ = Mat4::translate(c) * Mat4::rotateY(std::atan2(-f.x, -f.z));
-    page_ = -1;
-    sel_ = homeSel_ = 0;
+    if (!hidden_) {
+        page_ = -1;
+        sel_ = homeSel_ = 0;
+    }
+    hidden_ = false;
     open_ = true;
     dirty_ = true;
 }
@@ -82,10 +89,11 @@ void SettingsHub::rebuild() {
     ui::panel(bm, title, "");
     drawText(bm, W_ - kPad - 8 - measureText(sub, 24, FontFace::UI) - 240, 56, sub, 24, FontFace::UI, tk.dim);
     {
-        ui::Rect fs, cl;
-        ui::windowButtons(bm, W_, hoverBtn_, fs, cl);
+        ui::Rect fs, cl, hd;
+        ui::windowButtons(bm, W_, hoverBtn_, fs, cl, &hd);
         fsRect_ = {fs.x0, fs.y0, fs.x1, fs.y1};
         closeRect_ = {cl.x0, cl.y0, cl.x1, cl.y1};
+        hideRect_ = {hd.x0, hd.y0, hd.x1, hd.y1};
     }
     auto card = [&](const Rect& r, bool sel) {
         ui::card(bm, ui::Rect{r.x0, r.y0, r.x1, r.y1}, sel ? ui::State::Selected : ui::State::Normal);
@@ -170,14 +178,26 @@ int SettingsHub::hitButton(Vec3 o, Vec3 d) const {
     auto in = [&](const Rect& r) { return px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1; };
     if (in(closeRect_)) return 2;
     if (in(fsRect_)) return 1;
+    if (in(hideRect_)) return 3;
     return 0;
 }
 
 void SettingsHub::pointer(Vec3 o, Vec3 d) {
     if (fullscreen_) applyFullscreen();
+    if (dragging_) {
+        const Vec3 p = o + d * grabDist_;
+        Vec3 f{p.x - o.x, 0, p.z - o.z};
+        if (length(f) > 0.05f) {
+            f = normalize(f);
+            base_ = Mat4::translate(p) * Mat4::rotateY(std::atan2(-f.x, -f.z)) * Mat4::translate({-grabX_, -grabY_, 0});
+        }
+        return;
+    }
     const int h = hitIndex(o, d);
     if (h >= 0 && h != sel_) sel_ = h;
     hoverBtn_ = hitButton(o, d);
+    float px, py, t;
+    hoverTitle_ = toPanel(o, d, px, py, t) && px >= 0 && px <= W_ && py >= 0 && py < 86 && hoverBtn_ == 0;
 }
 
 void SettingsHub::applyFullscreen() {
@@ -210,7 +230,17 @@ void SettingsHub::toggleFullscreen() {
 
 void SettingsHub::close() {
     if (fullscreen_) toggleFullscreen();
+    dragging_ = false;
     open_ = false;
+    hidden_ = false;
+}
+
+void SettingsHub::hide() {
+    if (!open_) return;
+    if (fullscreen_) toggleFullscreen();
+    dragging_ = false;
+    open_ = false;
+    hidden_ = true;
 }
 
 void SettingsHub::step(int delta) {
@@ -263,6 +293,18 @@ bool SettingsHub::activateHit(Vec3 o, Vec3 d) {
     }
     if (b == 2) {
         close();
+        return true;
+    }
+    if (b == 3) {
+        hide();
+        return true;
+    }
+    float px, py, t;
+    if (!fullscreen_ && toPanel(o, d, px, py, t) && py < 86) {
+        dragging_ = true;
+        grabX_ = (px / W_ - 0.5f) * worldW_;
+        grabY_ = (0.5f - py / H_) * worldW_ / aspect_;
+        grabDist_ = std::clamp(t, 0.8f, 8.0f);
         return true;
     }
     const int h = hitIndex(o, d);

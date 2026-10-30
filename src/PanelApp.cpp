@@ -30,15 +30,36 @@ void PanelApp::open(Vec3 eye, Vec3 forward) {
         c.y = std::max(c.y, eye.y - 1.0f);
         base_ = Mat4::translate(c) * Mat4::rotateY(std::atan2(-f.x, -f.z));
         open_ = true;
-        onOpen();
+        if (!hidden_) onOpen();
+        hidden_ = false;
     }
     dirty_ = true;
 }
 
 void PanelApp::close() {
     if (fullscreen_) toggleFullscreen();
-    if (open_) onClose();
+    dragging_ = false;
+    if (open_ || hidden_) onClose();
     open_ = false;
+    hidden_ = false;
+}
+
+void PanelApp::hide() {
+    if (!open_) return;
+    if (fullscreen_) toggleFullscreen();
+    dragging_ = false;
+    open_ = false;
+    hidden_ = true;
+    mx_ = my_ = -1;
+}
+
+void PanelApp::leave() {
+    if (mx_ >= 0 && onHover(-1, -1)) dirty_ = true;
+    mx_ = my_ = -1;
+    if (hoverBtn_) {
+        hoverBtn_ = 0;
+        dirty_ = true;
+    }
 }
 
 void PanelApp::applyFullscreen() {
@@ -99,6 +120,16 @@ bool PanelApp::toPanel(Vec3 o, Vec3 d, float& px, float& py, float& t) const {
 
 void PanelApp::pointer(Vec3 o, Vec3 d) {
     if (fullscreen_) applyFullscreen();
+    if (dragging_) {
+        // The grabbed point of the header follows the aim at a fixed distance from the viewer.
+        const Vec3 p = o + d * grabDist_;
+        Vec3 f{p.x - o.x, 0, p.z - o.z};
+        if (length(f) > 0.05f) {
+            f = normalize(f);
+            base_ = Mat4::translate(p) * Mat4::rotateY(std::atan2(-f.x, -f.z)) * Mat4::translate({-grabX_, -grabY_, 0});
+        }
+        return;
+    }
     float px, py, t;
     int hb = 0;
     if (toPanel(o, d, px, py, t) && px >= 0 && px <= w_ && py >= 0 && py <= h_) {
@@ -106,6 +137,7 @@ void PanelApp::pointer(Vec3 o, Vec3 d) {
         my_ = py;
         if (close_.contains(px, py)) hb = 2;
         else if (fs_.contains(px, py)) hb = 1;
+        else if (hide_.contains(px, py)) hb = 3;
         if (onHover(px, py)) dirty_ = true;
     } else {
         if (mx_ >= 0 && onHover(-1, -1)) dirty_ = true;
@@ -128,6 +160,17 @@ bool PanelApp::click(Vec3 o, Vec3 d) {
         toggleFullscreen();
         return true;
     }
+    if (hide_.contains(px, py)) {
+        hide();
+        return true;
+    }
+    if (!fullscreen_ && py < 86) {
+        dragging_ = true;
+        grabX_ = (px / w_ - 0.5f) * worldW_;
+        grabY_ = (0.5f - py / h_) * worldW_ * h_ / w_;
+        grabDist_ = clampf(t, 0.8f, 8.0f);
+        return true;
+    }
     const bool dbl = clock_ - lastClick_ < 0.4 && std::fabs(px - lastClickX_) < 14 && std::fabs(py - lastClickY_) < 14;
     lastClick_ = dbl ? -10 : clock_;
     lastClickX_ = px;
@@ -146,7 +189,7 @@ void PanelApp::wheel(float notches) {
 void PanelApp::repaint() {
     std::fill(bm_.rgba.begin(), bm_.rgba.end(), uint8_t(0));
     paint(bm_);
-    ui::windowButtons(bm_, w_, hoverBtn_, fs_, close_);
+    ui::windowButtons(bm_, w_, hoverBtn_, fs_, close_, &hide_);
     if (!label_) label_ = renderer_.createDynamicLabel(w_, h_);
     renderer_.updateLabel(*label_, bm_.rgba.data(), w_, h_);
     dirty_ = false;

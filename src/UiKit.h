@@ -50,7 +50,8 @@ void label(Bitmap& bm, float x, float baseline, const std::string& s, float px, 
 // Right aligned text ending at x.
 void labelRight(Bitmap& bm, float xRight, float baseline, const std::string& s, float px, FontFace f, Color8 c);
 // Close / fullscreen buttons used in every panel header; returns the two rects through the out parameters.
-void windowButtons(Bitmap& bm, int panelW, int hover, Rect& fs, Rect& close);
+// hide (optional, hover id 3) is the minimise button: the window goes away but keeps running.
+void windowButtons(Bitmap& bm, int panelW, int hover, Rect& fs, Rect& close, Rect* hide = nullptr);
 
 std::string bytesText(unsigned long long b);
 

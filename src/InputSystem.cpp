@@ -98,6 +98,7 @@ FrameInput InputSystem::poll() {
             case SDL_MOUSEBUTTONDOWN:
                 if (e.button.button == SDL_BUTTON_LEFT) in.click = true;
                 if (e.button.button == SDL_BUTTON_MIDDLE) in.ring = true;
+            if (e.button.button == SDL_BUTTON_RIGHT) in.pin = true;
                 break;
             case SDL_MOUSEBUTTONUP:
                 if (e.button.button == SDL_BUTTON_LEFT) in.clickUp = true;

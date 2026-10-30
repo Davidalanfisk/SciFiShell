@@ -218,7 +218,7 @@ void graph(Bitmap& bm, const Rect& r, const std::vector<float>& v, Color8 c) {
     }
 }
 
-void windowButtons(Bitmap& bm, int panelW, int hover, Rect& fs, Rect& close) {
+void windowButtons(Bitmap& bm, int panelW, int hover, Rect& fs, Rect& close, Rect* hide) {
     const Tokens t = tokens();
     close = {panelW - 112.0f, 14, panelW - 24.0f, 70};
     fs = {panelW - 214.0f, 14, panelW - 126.0f, 70};
@@ -231,6 +231,14 @@ void windowButtons(Bitmap& bm, int panelW, int hover, Rect& fs, Rect& close) {
     strokeRect(bm, fx - 16, cy - 11, fx + 16, cy + 11, 3.0f, hf ? t.text : t.dim);
     line(bm, mx - 12, cy - 12, mx + 12, cy + 12, 3.0f, hc ? t.text : t.dim);
     line(bm, mx - 12, cy + 12, mx + 12, cy - 12, 3.0f, hc ? t.text : t.dim);
+    if (hide) {
+        *hide = {panelW - 316.0f, 14, panelW - 228.0f, 70};
+        const bool hh = hover == 3;
+        fillRect(bm, hide->x0, hide->y0, hide->x1, hide->y1, hh ? t.panelHi : t.panel);
+        strokeRect(bm, hide->x0, hide->y0, hide->x1, hide->y1, hh ? 3.0f : 2.0f, hh ? t.accent : t.border);
+        const float hx = (hide->x0 + hide->x1) * 0.5f;
+        line(bm, hx - 16, cy + 8, hx + 16, cy + 8, 4.0f, hh ? t.text : t.dim);
+    }
 }
 
 std::string bytesText(unsigned long long b) {
