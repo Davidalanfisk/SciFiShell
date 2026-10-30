@@ -225,6 +225,87 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap) {
     clock_ = std::max(clock_, 0.0);
 }
 
+namespace {
+// Building silhouettes. Every style is a stack of axis-aligned boxes inside the w x d footprint; part 0 is always the full-footprint
+// base that carries the street door on its +z face.
+struct TPart { float cx, cz, sx, sz, y0, y1; bool glow; };
+constexpr int kStyles = 12;
+void towerParts(int style, float w, float d, float h, std::vector<TPart>& out) {
+    out.clear();
+    const float hb = std::min(h, 4.0f);
+    auto P = [&](float cx, float cz, float sx, float sz, float y0, float y1, bool g = false) { if (y1 > y0 + 0.01f) out.push_back({cx, cz, sx, sz, y0, y1, g}); };
+    switch (style) {
+    default:
+    case 0:  // monolith
+        P(0, 0, w, d, 0, h);
+        break;
+    case 1:  // ziggurat
+        P(0, 0, w, d, 0, std::max(hb, h * 0.45f));
+        P(0, 0, w * 0.72f, d * 0.72f, h * 0.45f, h * 0.75f);
+        P(0, 0, w * 0.45f, d * 0.45f, h * 0.75f, h * 0.93f);
+        P(0, 0, w * 0.12f, d * 0.12f, h * 0.93f, h, true);
+        break;
+    case 2:  // podium and tower
+        P(0, 0, w, d, 0, std::max(hb, h * 0.16f));
+        P(0, -d * 0.05f, w * 0.58f, d * 0.58f, h * 0.16f, h);
+        P(0, -d * 0.05f, w * 0.66f, d * 0.66f, h * 0.9f, h * 0.94f, true);
+        break;
+    case 3:  // twin towers joined by a sky bridge
+        P(0, 0, w, d, 0, std::max(hb, h * 0.14f));
+        P(-w * 0.27f, 0, w * 0.42f, d * 0.7f, h * 0.14f, h);
+        P(w * 0.27f, 0, w * 0.42f, d * 0.7f, h * 0.14f, h * 0.8f);
+        P(0, 0, w * 0.2f, d * 0.4f, h * 0.55f, h * 0.62f, true);
+        break;
+    case 4:  // antenna spire
+        P(0, 0, w, d, 0, std::max(hb, h * 0.3f));
+        P(0, 0, w * 0.7f, d * 0.7f, h * 0.3f, h * 0.82f);
+        P(0, 0, w * 0.1f, d * 0.1f, h * 0.82f, h, true);
+        break;
+    case 5:  // slab with a low annex
+        P(0, 0, w, d, 0, std::max(hb, h * 0.22f));
+        P(0, -d * 0.2f, w, d * 0.5f, h * 0.22f, h);
+        P(0, -d * 0.2f, w * 0.9f, d * 0.5f + 0.1f, h * 0.7f, h * 0.73f, true);
+        break;
+    case 6:  // cantilever
+        P(0, 0, w, d, 0, std::max(hb, h * 0.2f));
+        P(-w * 0.18f, 0, w * 0.55f, d * 0.8f, h * 0.2f, h);
+        P(w * 0.12f, 0, w * 0.75f, d * 0.8f, h * 0.62f, h * 0.84f);
+        P(w * 0.12f, 0, w * 0.75f, d * 0.8f, h * 0.84f, h * 0.86f, true);
+        break;
+    case 7:  // terraces stepping down along x
+        P(0, 0, w, d, 0, std::max(hb, h * 0.2f));
+        for (int i = 0; i < 4; ++i) P(-w * 0.375f + i * w * 0.25f, 0, w * 0.25f, d * 0.9f, h * 0.2f, h * (1.0f - i * 0.2f));
+        break;
+    case 8:  // tower cluster
+        P(0, 0, w, d, 0, std::max(hb, h * 0.1f));
+        P(-w * 0.26f, -d * 0.26f, w * 0.44f, d * 0.44f, h * 0.1f, h);
+        P(w * 0.26f, -d * 0.26f, w * 0.44f, d * 0.44f, h * 0.1f, h * 0.68f);
+        P(-w * 0.26f, d * 0.26f, w * 0.44f, d * 0.44f, h * 0.1f, h * 0.55f);
+        P(w * 0.26f, d * 0.26f, w * 0.44f, d * 0.44f, h * 0.1f, h * 0.85f);
+        break;
+    case 9:  // sail: layers shrinking along x
+        P(0, 0, w, d, 0, std::max(hb, h * 0.12f));
+        for (int i = 0; i < 5; ++i) {
+            const float lw = w * (1.0f - i * 0.16f);
+            P(-w * 0.5f + lw * 0.5f, 0, lw, d * 0.5f, h * 0.12f + h * 0.88f * i / 5.0f, h * 0.12f + h * 0.88f * (i + 1) / 5.0f);
+        }
+        break;
+    case 10:  // hammerhead
+        P(0, 0, w, d, 0, std::max(hb, h * 0.1f));
+        P(0, 0, w * 0.5f, d * 0.5f, h * 0.1f, h * 0.84f);
+        P(0, 0, w, d, h * 0.84f, h);
+        P(0, 0, w + 0.1f, d + 0.1f, h * 0.88f, h * 0.9f, true);
+        break;
+    case 11:  // gate: two pylons and a bridge
+        P(0, 0, w, d, 0, std::max(hb, h * 0.08f));
+        P(-w * 0.36f, 0, w * 0.28f, d * 0.8f, h * 0.08f, h);
+        P(w * 0.36f, 0, w * 0.28f, d * 0.8f, h * 0.08f, h);
+        P(0, 0, w * 0.5f, d * 0.8f, h * 0.7f, h * 0.9f);
+        P(0, 0, w * 0.5f, d * 0.8f + 0.1f, h * 0.9f, h * 0.92f, true);
+        break;
+    }
+}
+}  // namespace
 void City::refreshTargets(const std::vector<CityDrive>& snap) {
     for (size_t i = 0; i < snap.size() && i < platforms_.size(); ++i) {
         const auto& d = snap[i];
@@ -249,9 +330,19 @@ void City::refreshTargets(const std::vector<CityDrive>& snap) {
                 auto& t = b.towers[si];
                 t.files = subs[si].files;
                 t.bytes = subs[si].bytes;
-                t.tgtH = clampf(3.0f + 12.0f * std::log10(1.0f + float(t.files)), 3.0f, 95.0f);
+                // Size and silhouette come from the folder's contents plus a stable per-name hash, so every building is distinct but
+                // never changes between runs.
+                const uint32_t hs = uint32_t(std::hash<std::string>{}(t.name) & 0x7FFFFFFF);
+                const float h1 = rnd01(hs + 11), h2 = rnd01(hs + 23), h3 = rnd01(hs + 37), h4 = rnd01(hs + 51);
+                t.tgtH = clampf((3.0f + 12.0f * std::log10(1.0f + float(t.files))) * (0.78f + 0.5f * h3), 3.0f, 110.0f);
                 float share = p.total ? clampf(float(t.bytes) / (0.05f * float(p.total)), 0.0f, 1.0f) : 0.3f;
-                t.tgtW = p.pitch * (0.56f + 0.26f * std::sqrt(share));
+                const float maxF = p.pitch * 0.84f;
+                t.tgtW = clampf(p.pitch * (0.5f + 0.28f * std::sqrt(share)) * (0.8f + 0.34f * h1), 3.0f, maxF);
+                t.tgtD = clampf(t.tgtW * (0.58f + 0.6f * h2), 3.0f, maxF);
+                if (h2 > 0.8f) std::swap(t.tgtW, t.tgtD);
+                static const int smallStyles[3] = {0, 5, 7};
+                t.style = t.tgtH < 9.0f ? smallStyles[hs % 3] : int(hs % uint32_t(kStyles));
+                if (t.prop < 0 && t.tgtH >= 9.0f && h4 < 0.16f) t.prop = int(hs % 7u);
             }
         }
         if (p.done && !p.sorted) {
@@ -327,6 +418,7 @@ void City::update(double dt, bool active, Vec3 eye) {
                 if (clock_ > t.delay) t.grow = std::min(1.0f, t.grow + growStep);
                 t.curH += (t.tgtH - t.curH) * lerpK;
                 t.curW += (t.tgtW - t.curW) * lerpK;
+                t.curD += (t.tgtD - t.curD) * lerpK;
                 if (std::fabs(t.flash) > 0.001f) {
                     float dec = (float)dt * 1.4f;
                     t.flash = t.flash > 0 ? std::max(0.0f, t.flash - dec) : std::min(0.0f, t.flash + dec);
@@ -378,7 +470,7 @@ void City::markEntered() {
     hasEntered_ = false;
     if (hoverP_ < 0 || hoverB_ < 0 || hoverT_ < 0) return;
     const auto& t = platforms_[hoverP_].blocks[hoverB_].towers[hoverT_];
-    enteredDoor_ = {t.x, kSlabH + kPlateH, t.z + std::max(1.5f, t.curW) * 0.5f};
+    enteredDoor_ = {t.x, kSlabH + kPlateH, t.z + std::max(1.5f, t.curD) * 0.5f};
     hasEntered_ = true;
 }
 
@@ -393,7 +485,7 @@ bool City::debugStreet(Vec3& pos) const {
         for (const auto& b : pl.blocks)
             for (const auto& t : b.towers)
                 if (t.grow > 0.97f && t.curH > 8.0f) {
-                    pos = {t.x, kSlabH + kPlateH + 1.7f, t.z + std::max(1.5f, t.curW) * 0.5f + 5.0f};
+                    pos = {t.x, kSlabH + kPlateH + 1.7f, t.z + std::max(1.5f, t.curD) * 0.5f + 5.0f};
                     return true;
                 }
     return false;
@@ -432,6 +524,42 @@ void City::renderMonuments(Renderer& r, Vec3 eye) {
                 renderBox(r, {c.x + ringR * std::cos(a), kSlabH + 15.0f * g, c.z + ringR * std::sin(a)}, {2.6f, 30.0f * g, 2.6f},
                           th.accent, 0.3f, 4, coreGrow_[0], std::max(0.03f, load), 0);
             }
+            // Die package: stepped heat-spreader, corner towers, radial heatsink fins and a glowing socket ring.
+            {
+                const float top = kSlabH;
+                renderBox(r, {c.x, top + 1.0f * g, c.z}, {plinth * 0.86f, 2.0f * g, plinth * 0.86f}, th.accent * 0.5f, 0.2f, 3, coreGrow_[0], 1.0f, 0);
+                renderBox(r, {c.x, top + 3.0f * g, c.z}, {plinth * 0.62f, 2.0f * g, plinth * 0.62f}, th.accent, 0.3f, 3, coreGrow_[0], 1.0f, 0);
+                renderBox(r, {c.x, top + 5.5f * g, c.z}, {plinth * 0.36f, 3.0f * g, plinth * 0.36f}, th.accent, 0.4f, 4, coreGrow_[0], std::max(0.05f, shownCpu_), 0);
+                for (int i = 0; i < 12; ++i) {
+                    float a2 = 2.0f * kPi * i / 12 + 0.26f;
+                    float fr = 6.5f;
+                    renderBox(r, {c.x + fr * std::cos(a2), top + 18.0f * g, c.z + fr * std::sin(a2)}, {0.6f, 36.0f * g, 4.5f},
+                              th.accent * 0.7f, 0.25f, 3, coreGrow_[0], 1.0f, 0);
+                }
+                for (int sx = -1; sx <= 1; sx += 2)
+                    for (int sz = -1; sz <= 1; sz += 2) {
+                        float o = plinth * 0.5f - 2.5f;
+                        renderBox(r, {c.x + sx * o, top + 7.0f * g, c.z + sz * o}, {3.5f, 14.0f * g, 3.5f}, th.accent, 0.4f, 3, coreGrow_[0], 1.0f, 0);
+                        renderBox(r, {c.x + sx * o, top + 14.4f * g, c.z + sz * o}, {2.0f, 0.8f * g, 2.0f}, th.accent, 0.9f, 4, coreGrow_[0], 1.0f, 0);
+                    }
+                // Pin-grid strips along each edge of the plinth.
+                for (int e = 0; e < 4; ++e)
+                    for (int p = 0; p < 9; ++p) {
+                        float u = (p - 4) * (plinth * 0.09f);
+                        float ox = (e % 2 == 0) ? u : (e == 1 ? 1 : -1) * (plinth * 0.5f - 0.7f);
+                        float oz = (e % 2 == 1) ? u : (e == 0 ? 1 : -1) * (plinth * 0.5f - 0.7f);
+                        renderBox(r, {c.x + ox, top + 0.4f * g, c.z + oz}, {1.0f, 0.8f * g, 1.0f}, th.accent, 0.8f, 4, coreGrow_[0], 1.0f, 0);
+                    }
+                // Link ring joining the core pillars.
+                for (int i = 0; i < N; ++i) {
+                    float a1 = 2.0f * kPi * (i + 0.5f) / N;
+                    float seg = 2.0f * kPi * ringR / N;
+                    renderBox(r, {c.x + ringR * std::cos(a1), top + 6.0f * g, c.z + ringR * std::sin(a1)},
+                              {std::abs(std::sin(a1)) * seg * 0.9f + 0.4f, 0.5f * g, std::abs(std::cos(a1)) * seg * 0.9f + 0.4f},
+                              th.accent, 0.8f, 4, coreGrow_[0], 1.0f, 0);
+                }
+                renderBox(r, {c.x, kSlabH + 91.0f * g, c.z}, {2.0f, 6.0f * g, 2.0f}, th.accent, 1.0f, 4, coreGrow_[0], 1.0f, 0);
+            }
             labelFor(mon_[0], "CPU  " + upper(s.cpuName) + "  " + std::to_string(s.cores) + " THREADS  " + pct(shownCpu_),
                      {c.x, 108, c.z}, 6.0f, th.accent);
         }
@@ -450,6 +578,16 @@ void City::renderMonuments(Renderer& r, Vec3 eye) {
                 float x = c.x + (i - (K - 1) * 0.5f) * 3.4f;
                 renderBox(r, {x, kSlabH + 12.0f * g, c.z}, {2.4f, 24.0f * g, 9}, th.alt, 0.5f, 4, coreGrow_[1], std::max(0.02f, fill), 0);
             }
+            // DIMM detail: chip rows, gold contact strips, heat-spreader caps and a connector rail.
+            for (int i = 0; i < K; ++i) {
+                float x = c.x + (i - (K - 1) * 0.5f) * 3.4f;
+                for (int k = 0; k < 4; ++k)
+                    renderBox(r, {x, kSlabH + (4.0f + k * 5.0f) * g, c.z + 4.7f}, {2.0f, 3.2f * g, 0.5f}, th.alt * 0.6f, 0.3f, 3, coreGrow_[1], 1.0f, 0);
+                renderBox(r, {x, kSlabH + 0.6f * g, c.z}, {2.0f, 1.2f * g, 9.6f}, th.alt, 0.9f, 4, coreGrow_[1], 1.0f, 0);
+                renderBox(r, {x, kSlabH + 24.8f * g, c.z}, {2.8f, 1.6f * g, 9.6f}, th.alt, 0.7f, 4, coreGrow_[1], std::max(0.1f, shownRam_), 0);
+            }
+            renderBox(r, {c.x, kSlabH + 0.5f * g, c.z - 7.5f}, {width - 2.0f, 1.0f * g, 2.0f}, th.alt * 0.6f, 0.5f, 3, coreGrow_[1], 1.0f, 0);
+            renderBox(r, {c.x, kSlabH + 0.5f * g, c.z + 7.5f}, {width - 2.0f, 1.0f * g, 2.0f}, th.alt * 0.6f, 0.5f, 3, coreGrow_[1], 1.0f, 0);
             char b[96];
             std::snprintf(b, sizeof b, "RAM  %.0f GB  %s IN USE", gb, pct(shownRam_).c_str());
             labelFor(mon_[1], b, {c.x, 40, c.z}, 4.0f, th.alt);
@@ -468,7 +606,26 @@ void City::renderMonuments(Renderer& r, Vec3 eye) {
                 renderBox(r, {c.x, kSlabH + (i * 6.0f + 3.0f) * g, c.z}, {sizes[i], 6.0f * g, sizes[i]}, gpuCol, 0.7f, 4,
                           coreGrow_[2], std::max(0.03f, fill), 0);
             }
-            float vgb = float(s.vramTotal / 1073741824.0);
+            // Cooler shroud: twin fan rings, fin stack, power connectors and VRAM chip blocks around the base.
+            for (int fx = -1; fx <= 1; fx += 2) {
+                const float cx = c.x + fx * 11.0f;
+                renderBox(r, {cx, kSlabH + 1.5f * g, c.z - 18.0f}, {13.0f, 3.0f * g, 8.0f}, gpuCol * 0.6f, 0.3f, 3, coreGrow_[2], 1.0f, 0);
+                for (int k = 0; k < 8; ++k) {
+                    float a2 = kPi * k / 8 + (float)wall_ * (fx > 0 ? 1.5f : -1.5f);
+                    renderBox(r, {cx + 5.0f * std::cos(a2), kSlabH + 3.3f * g, c.z - 18.0f + 3.2f * std::sin(a2)},
+                              {0.5f + 4.0f * std::abs(std::sin(a2)), 0.3f * g, 0.5f + 4.0f * std::abs(std::cos(a2))}, gpuCol, 0.9f, 4,
+                              coreGrow_[2], 1.0f, 0);
+                }
+            }
+            for (int k = 0; k < 10; ++k)
+                renderBox(r, {c.x - 4.5f + k * 1.0f, kSlabH + 12.0f * g, c.z + 8.0f}, {0.4f, 24.0f * g, 8.0f}, gpuCol * 0.5f, 0.3f, 3, coreGrow_[2], 1.0f, 0);
+            for (int sx = -1; sx <= 1; sx += 2)
+                for (int sz = -1; sz <= 1; sz += 2) {
+                    renderBox(r, {c.x + sx * 19.5f, kSlabH + 3.0f * g, c.z + sz * 19.5f}, {5.0f, 6.0f * g, 5.0f}, gpuCol * 0.7f, 0.4f, 3, coreGrow_[2], 1.0f, 0);
+                    renderBox(r, {c.x + sx * 19.5f, kSlabH + 6.4f * g, c.z + sz * 19.5f}, {3.0f, 0.8f * g, 3.0f}, gpuCol, 1.0f, 4, coreGrow_[2], std::max(0.1f, shownGpu_), 0);
+                }
+            for (int k = 0; k < 3; ++k)
+                renderBox(r, {c.x + (k - 1) * 4.0f, kSlabH + 0.5f * g, c.z + 21.0f}, {3.0f, 1.0f * g, 1.6f}, gpuCol, 0.9f, 4, coreGrow_[2], 1.0f, 0);            float vgb = float(s.vramTotal / 1073741824.0);
             float ph = std::clamp(20.0f + vgb * 6.0f, 24.0f, 110.0f);
             renderBox(r, {c.x, kSlabH + 24.0f * g + ph * 0.5f * g, c.z}, {4, ph * g, 4}, gpuCol, 0.8f, 4, coreGrow_[2],
                       std::max(0.03f, vramUsed_), 0);
@@ -645,19 +802,38 @@ void City::render(Renderer& r, Vec3 eye) {
                     draws += 2;
                 }
             }
+            std::vector<TPart> parts;
             for (size_t ti = 0; ti < b.towers.size(); ++ti) {
                 auto& t = b.towers[ti];
                 if (t.grow <= 0 || draws > 3000) continue;
                 float h = t.curH * ease(t.grow);
-                float w = std::max(1.5f, t.curW);
+                float w = std::max(1.5f, t.curW), dd = std::max(1.5f, t.curD);
                 float tdx = eye.x - t.x, tdz = eye.z - t.z;
                 if (tdx * tdx + tdz * tdz > (mirror ? 350.0f * 350.0f : maxD2)) continue;
                 float seed = rnd01(uint32_t(std::hash<std::string>{}(t.name) & 0xFFFFFF));
                 const bool hovered = !mirror && hoverP_ == i && hoverB_ == (int)bi && hoverT_ == (int)ti;
                 if (!mirror && tdx * tdx + tdz * tdz < 180.0f * 180.0f)  // raised sidewalk around the building
-                    renderBox(r, {t.x, base + 0.07f, t.z}, {w + 4.0f, 0.14f, w + 4.0f}, tint, 0.5f, 6, t.grow, 1.0f, 0);
-                renderBox(r, {t.x, base + h * 0.5f, t.z}, {w, h, w}, tint, seed, 3, t.grow, 0, hovered ? 0.6f : t.flash);
-                ++draws;
+                    renderBox(r, {t.x, base + 0.07f, t.z}, {w + 4.0f, 0.14f, dd + 4.0f}, tint, 0.5f, 6, t.grow, 1.0f, 0);
+                towerParts(t.style, w, dd, h, parts);
+                for (const TPart& tp : parts) {
+                    renderBox(r, {t.x + tp.cx, base + (tp.y0 + tp.y1) * 0.5f, t.z + tp.cz}, {tp.sx, tp.y1 - tp.y0, tp.sz}, tp.glow ? Vec3{0.9f, 1.0f, 1.0f} : tint,
+                              seed, tp.glow ? 4 : 3, t.grow, tp.glow ? 1.0f : 0.0f, hovered ? 0.6f : t.flash);
+                    ++draws;
+                }
+                if (t.prop >= 0 && t.grow > 0.95f && tdx * tdx + tdz * tdz < 260.0f * 260.0f) {
+                    const TPart* top = &parts[0];
+                    for (const TPart& tp : parts)
+                        if (tp.y1 > top->y1 + 0.01f) top = &tp;
+                    static const char* names[7] = {"Duck", "CesiumMan", "CarConcept", "GlamVelvetSofa", "IridescenceLamp", "SheenChair", "CarbonFibre"};
+                    const int mid = r.model(names[t.prop]);
+                    if (mid >= 0) {
+                        const Vec3 ms = r.modelSize(mid);
+                        const float fit = std::min(top->sx, top->sz) * 0.85f / std::max(0.2f, std::max(ms.x, ms.z));
+                        const float ph = std::min(fit, 10.0f);
+                        r.drawModel(mid, *dummy_, Mat4::translate({t.x + top->cx, base + top->y1 + 0.25f, t.z + top->cz}) * Mat4::rotateY(float(wall_) * 0.5f + seed * 6.0f) * Mat4::scale({ph, ph, ph}), tint * 1.2f, seed);
+                        ++draws;
+                    }
+                }
                 if (!mirror && h > 3.4f && tdx * tdx + tdz * tdz < 70.0f * 70.0f && t.grow > 0.95f) {  // street door on the +z face
                     if (!t.doorLabel && labelBudget_ > 0) {
                         t.doorLabel = makeDoorLabel(t.name == "(FILES)" || t.name == "(MORE)" ? b.name + " " + t.name : t.name);
@@ -665,7 +841,14 @@ void City::render(Renderer& r, Vec3 eye) {
                     }
                     if (t.doorLabel) {
                         const float dh = std::min(3.2f, h * 0.8f), dw = std::min(dh * 0.714f, w * 0.85f);
-                        r.drawCube(*t.doorLabel, Mat4::translate({t.x, base + dh * 0.5f, t.z + w * 0.5f + 0.03f}) * Mat4::scale({dw, dh, 0.06f}),
+                        const float zf = t.z + dd * 0.5f;
+                        const Vec3 glowC = tint * 0.8f + Vec3{0.3f, 0.3f, 0.3f};
+                        for (float sg : {-1.0f, 1.0f}) renderBox(r, {t.x + sg * (dw * 0.5f + 0.12f), base + dh * 0.5f + 0.1f, zf + 0.1f}, {0.14f, dh + 0.2f, 0.22f}, glowC, 0.5f, 4, 1, 1.0f, 0);
+                        renderBox(r, {t.x, base + dh + 0.18f, zf + 0.1f}, {dw + 0.5f, 0.16f, 0.26f}, glowC, 0.5f, 4, 1, 1.0f, 0);
+                        renderBox(r, {t.x, base + dh + 0.6f, zf + 0.6f}, {dw + 1.6f, 0.1f, 1.3f}, tint, seed, 3, 1, 0, 0);
+                        renderBox(r, {t.x, base + 0.05f, zf + 1.5f}, {dw + 1.2f, 0.05f, 2.4f}, tint, 0.5f, 6, 1, 1.0f, 0);
+                        draws += 5;
+                        r.drawCube(*t.doorLabel, Mat4::translate({t.x, base + dh * 0.5f, zf + 0.03f}) * Mat4::scale({dw, dh, 0.06f}),
                                    {0.02f, 0.035f, 0.06f}, false, false, -1.0f);
                         ++draws;
                     }
@@ -1087,6 +1270,7 @@ void City::monumentBoxes(std::vector<Box>& out) const {
 
 void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const {
     monumentBoxes(boxes);
+    std::vector<TPart> tparts;
     std::vector<Ramp> ramps;
     rampList(ramps);
     for (const Ramp& rp : ramps) {
@@ -1106,9 +1290,11 @@ void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const 
             if (std::fabs(p.x - b.cx) > b.side * 0.5f + 20.0f || std::fabs(p.z - b.cz) > b.side * 0.5f + 20.0f) continue;
             for (const auto& t : b.towers) {
                 if (t.grow < 0.3f) continue;
-                float hw = std::max(1.5f, t.curW) * 0.5f;
-                if (std::fabs(p.x - t.x) > hw + rad + 1 || std::fabs(p.z - t.z) > hw + rad + 1) continue;
-                boxes.push_back({t.x - hw, t.x + hw, base + t.curH * ease(t.grow), t.z - hw, t.z + hw});
+                const float hw = std::max(1.5f, t.curW) * 0.5f, hd = std::max(1.5f, t.curD) * 0.5f;
+                if (std::fabs(p.x - t.x) > hw + rad + 1 || std::fabs(p.z - t.z) > hd + rad + 1) continue;
+                towerParts(t.style, hw * 2, hd * 2, t.curH * ease(t.grow), tparts);
+                for (const TPart& tp : tparts)
+                    boxes.push_back({t.x + tp.cx - tp.sx * 0.5f, t.x + tp.cx + tp.sx * 0.5f, base + tp.y1, t.z + tp.cz - tp.sz * 0.5f, t.z + tp.cz + tp.sz * 0.5f});
             }
         }
     }
@@ -1278,8 +1464,8 @@ bool City::pick(Vec3 o, Vec3 d, std::string& path, std::string& name) {
             for (size_t ti = 0; ti < b.towers.size(); ++ti) {
                 const auto& t = b.towers[ti];
                 if (t.grow < 0.9f) continue;
-                float hw = std::max(1.5f, t.curW) * 0.5f, top = base + t.curH;
-                float lo[3] = {t.x - hw, base, t.z - hw}, hi[3] = {t.x + hw, top, t.z + hw};
+                float hw = std::max(1.5f, t.curW) * 0.5f, hd = std::max(1.5f, t.curD) * 0.5f, top = base + t.curH;
+                float lo[3] = {t.x - hw, base, t.z - hd}, hi[3] = {t.x + hw, top, t.z + hd};
                 float oo[3] = {o.x, o.y, o.z}, dd[3] = {d.x, d.y, d.z};
                 float t0 = 0, t1 = best;
                 bool ok = true;

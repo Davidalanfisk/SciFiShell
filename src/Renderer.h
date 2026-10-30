@@ -64,6 +64,10 @@ public:
     // 6 platform, 7 beam. emerge 0..1 rise glow, fill 0..1 level, flash -1..1 change pulse.
     void drawBuilding(const GpuLabel& any, const Mat4& world, Vec3 neon, float seed, int kind, float emerge,
                       float fill, float flash);
+    // GLB models (assets/models/<name>.glb), loaded once, normalised to height 1 and sitting on y = 0. -1 if unavailable.
+    int model(const std::string& name);
+    Vec3 modelSize(int id) const;  // x/z extents relative to the unit height
+    void drawModel(int id, const GpuLabel& any, const Mat4& world, Vec3 neon, float seed, bool textured = false);
     // Theme colours used by the grid floor, card edge lights and the tool ring.
     void setTheme(Vec3 accent, Vec3 alt);
     void setTime(float t);
@@ -152,6 +156,10 @@ private:
     Diligent::ITextureView* currentDsv_ = nullptr;
     Diligent::ITexture* resolveSrc_ = nullptr;
     Mesh quad_, cube_, pyramid_;
+    std::vector<Mesh> models_;
+    std::vector<std::shared_ptr<GpuLabel>> modelTex_;
+    std::vector<Vec3> modelSizes_;
+    std::vector<std::pair<std::string, int>> modelIds_;
     std::shared_ptr<GpuLabel> glassLabel_;
     Mat4 view_ = Mat4::identity(), proj_ = Mat4::identity();
     float lightDir_[4] = {-0.4f, -1.0f, -0.6f, 0.0f};

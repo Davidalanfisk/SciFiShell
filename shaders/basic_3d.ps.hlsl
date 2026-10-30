@@ -198,6 +198,26 @@ float3 buildingColor(PSInput In)
         }
         col += neon * rim * (0.7 + 0.9 * fillF);
     }
+    else if (kind == 8)
+    {
+        // Hologram model: fresnel outline, slow scan bands, tinted by the neon colour.
+        float3 V = normalize(g_Light.xyz - In.WPos);
+        float fres = pow(1.0 - abs(dot(n, V)), 2.2);
+        float lit = 0.35 + 0.65 * saturate(n.y * 0.5 + 0.5);
+        float band = 0.5 + 0.5 * sin(In.WPos.y * 9.0 - tm * 2.5);
+        float sweepB = exp(-pow(frac(tm * 0.25 + seed) * 2.0 - 0.5 - frac(In.WPos.y * 0.07), 2.0) * 40.0);
+        col = neon * (0.10 * lit + fres * 1.5 + 0.12 * pow(band, 6.0) + sweepB * 0.25) + dark;
+    }
+    else if (kind == 9)
+    {
+        // Textured model: the glTF atlas, lit, with a faint neon rim.
+        float3 V = normalize(g_Light.xyz - In.WPos);
+        float fres = pow(1.0 - abs(dot(n, V)), 3.0);
+        float diff = saturate(dot(n, normalize(float3(0.4, 0.8, 0.5))));
+        float3 tex = g_Tex.Sample(g_Tex_sampler, In.UV).rgb;
+        col = tex * (0.3 + 0.7 * diff) + neon * fres * 0.25;
+        return col;  // skip the city haze: the model sits in lit rooms
+    }
     else
     {
         float sweep = 0.6 + 0.4 * sin(In.WPos.y * 0.7 - tm * 6.0);

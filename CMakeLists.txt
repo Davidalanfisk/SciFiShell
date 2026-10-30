@@ -79,6 +79,7 @@ set(SOURCES
     src/CodeEditor.cpp
     src/Viewer.cpp
     src/VideoFrame.cpp
+    src/ModelLoader.cpp
     src/StbImpl.cpp)
 if(WIN32)
     list(APPEND SOURCES src/AppWindow.cpp src/AppCatalog.cpp src/OsSettings.cpp)

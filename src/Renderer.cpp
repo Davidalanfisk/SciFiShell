@@ -1,4 +1,5 @@
 #include "Renderer.h"
+#include "ModelLoader.h"
 
 #include <SDL.h>
 #include <SDL_syswm.h>
@@ -677,6 +678,34 @@ void Renderer::drawBuilding(const GpuLabel& any, const Mat4& world, Vec3 neon, f
     Vec3 eye = view_.rigidInverse().transformPoint({0, 0, 0});
     const float eyeL[4] = {eye.x, eye.y, eye.z, 0};
     draw(solidPipeline_, any.solidSRB, cube_, world, color, params, eyeL);
+}
+
+int Renderer::model(const std::string& name) {
+    for (auto& e : modelIds_)
+        if (e.first == name) return e.second;
+    int id = -1;
+    const char* base = SDL_GetBasePath();
+    std::vector<float> v;
+    std::vector<uint32_t> idx;
+    Vec3 size;
+    Bitmap atlas;
+    if (loadGltfMesh(std::string(base ? base : "./") + "assets/models/" + name + ".glb", v, idx, size, &atlas)) {
+        models_.push_back(createMesh(v, idx));
+        modelTex_.push_back(createLabel(atlas, true));
+        modelSizes_.push_back(size);
+        id = static_cast<int>(models_.size()) - 1;
+    }
+    modelIds_.push_back({name, id});
+    return id;
+}
+Vec3 Renderer::modelSize(int id) const { return id >= 0 && id < static_cast<int>(modelSizes_.size()) ? modelSizes_[id] : Vec3{1, 1, 1}; }
+void Renderer::drawModel(int id, const GpuLabel& any, const Mat4& world, Vec3 neon, float seed, bool textured) {
+    if (id < 0 || id >= static_cast<int>(models_.size())) return;
+    const float color[4] = {neon.x, neon.y, neon.z, seed};
+    const float params[4] = {0, 0, 0, textured ? 9.0f : 8.0f};
+    Vec3 eye = view_.rigidInverse().transformPoint({0, 0, 0});
+    const float eyeL[4] = {eye.x, eye.y, eye.z, 0};
+    draw(solidPipeline_, textured ? modelTex_[id]->solidSRB : any.solidSRB, models_[id], world, color, params, eyeL);
 }
 
 void Renderer::drawPointer(const GpuLabel& label, const Mat4& world, Vec3 c) {

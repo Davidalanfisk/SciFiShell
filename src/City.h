@@ -51,6 +51,9 @@ private:
     struct Tower {
         std::string name;
         float curH = 0, curW = 0, tgtH = 3, tgtW = 3;
+        float curD = 0, tgtD = 3;  // depth (z); width is x
+        int style = 0;             // silhouette, see towerParts()
+        int prop = -1;             // rooftop hologram model (index into the city prop list), -1 = none
         float x = 0, z = 0;
         float delay = 0, grow = 0;
         float flash = 0;

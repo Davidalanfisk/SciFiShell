@@ -101,6 +101,31 @@ private:
     std::shared_ptr<GpuLabel> label_;
 };
 
+// A slowly turning hologram of a glTF model, used as lobby decor.
+class ModelNode : public Node {
+public:
+    ModelNode(Renderer& r, std::string file, float height, Vec3 neon) : file_(std::move(file)), height_(height), neon_(neon) {
+        label_ = r.createLabel(rasterizeLines({""}, 1, 4, 4));
+    }
+    void render(Renderer& r) override {
+        if (r.mirror()) return;
+        if (id_ == -2) id_ = r.model(file_);
+        if (id_ < 0) return;
+        const Vec3 sz = r.modelSize(id_);
+        const float fit = std::min(1.0f, 2.4f / std::max(0.01f, std::max(sz.x, sz.z) * height_));
+        const float hh = height_ * fit;
+        r.drawModel(id_, *label_, Mat4::translate(position) * Mat4::rotateY(spin_) * Mat4::scale({hh, hh, hh}), neon_, spin_, true);
+    }
+    void update(double dt, double) override { spin_ += float(dt) * 0.6f; }
+
+private:
+    std::string file_;
+    float height_, spin_ = 0.0f;
+    Vec3 neon_;
+    int id_ = -2;
+    std::shared_ptr<GpuLabel> label_;
+};
+
 std::string clip(const std::string& s, size_t n) { return s.size() <= n ? s : s.substr(0, n - 1) + "."; }
 const Vec3 kPalette[5] = {{0.1f, 0.35f, 0.7f}, {0.7f, 0.2f, 0.55f}, {0.75f, 0.45f, 0.1f}, {0.15f, 0.65f, 0.4f}, {0.45f, 0.6f, 0.25f}};
 }  // namespace
@@ -344,7 +369,25 @@ void FileRoom::buildCorridor() {
 
     auto shell = std::make_unique<ShellNode>(renderer_, &eye_);
     auto& B = shell->boxes;
-    const Vec3 wall{0.014f, 0.022f, 0.04f}, light{1.6f, 1.8f, 2.0f}, carpet{0.036f, 0.038f, 0.043f}, rim{0.3f, 0.8f, 1.2f};
+    // Each building gets one of twelve looks, picked from its path.
+    struct Look { Vec3 wall, carpet, rim; };
+    static const Look looks[12] = {
+        {{0.014f, 0.022f, 0.04f}, {0.036f, 0.038f, 0.043f}, {0.3f, 0.8f, 1.2f}},
+        {{0.03f, 0.014f, 0.034f}, {0.045f, 0.03f, 0.05f}, {1.1f, 0.3f, 0.95f}},
+        {{0.03f, 0.02f, 0.012f}, {0.05f, 0.04f, 0.03f}, {1.2f, 0.75f, 0.2f}},
+        {{0.012f, 0.03f, 0.02f}, {0.03f, 0.05f, 0.04f}, {0.25f, 1.1f, 0.6f}},
+        {{0.03f, 0.012f, 0.012f}, {0.05f, 0.03f, 0.03f}, {1.2f, 0.3f, 0.25f}},
+        {{0.02f, 0.02f, 0.04f}, {0.03f, 0.03f, 0.06f}, {0.5f, 0.5f, 1.3f}},
+        {{0.012f, 0.026f, 0.03f}, {0.02f, 0.045f, 0.05f}, {0.2f, 1.1f, 1.1f}},
+        {{0.026f, 0.026f, 0.03f}, {0.05f, 0.05f, 0.055f}, {1.0f, 1.0f, 1.1f}},
+        {{0.03f, 0.024f, 0.01f}, {0.045f, 0.045f, 0.02f}, {1.0f, 1.0f, 0.3f}},
+        {{0.024f, 0.012f, 0.03f}, {0.04f, 0.025f, 0.05f}, {0.7f, 0.35f, 1.3f}},
+        {{0.01f, 0.026f, 0.04f}, {0.02f, 0.04f, 0.06f}, {0.2f, 0.65f, 1.4f}},
+        {{0.03f, 0.016f, 0.02f}, {0.05f, 0.03f, 0.035f}, {1.2f, 0.4f, 0.6f}}};
+    const size_t pathHash = std::hash<std::string>{}(path_);
+    const int lookIdx = static_cast<int>(pathHash % 12);
+    const Look& lk = looks[lookIdx];
+    const Vec3 wall = lk.wall, light{1.6f, 1.8f, 2.0f}, carpet = lk.carpet, rim = lk.rim;
     const Vec3 stone{0.1f, 0.11f, 0.13f}, water{0.08f, 0.42f, 0.7f}, glass{0.5f, 0.8f, 1.0f};
     auto add = [&](Vec3 c, Vec3 s, Vec3 col, float glow = 0.0f, bool always = false) { B.push_back({c, s, col, glow, always}); };
     const float zm = (kFrontZ - d) * 0.5f, zl = d + kFrontZ, H = multi ? L * kLevelH + 1.2f : 7.5f, fz = fountainZ(d);
@@ -445,6 +488,75 @@ void FileRoom::buildCorridor() {
         add({0, 1.95f, fz}, {2.4f, 0.04f, 2.4f}, water, -1.0f, true);
         add({0, 2.7f, fz}, {0.25f, 1.5f, 0.25f}, rim, -1.0f, true);
         add({0, 3.55f, fz}, {0.5f, 0.3f, 0.5f}, rim * 0.8f, -1.0f, true);
+    }
+
+    // Decor: ceiling ribs, wall light bands and floor lanes, arranged differently per look.
+    {
+        const int pat = lookIdx % 4;
+        const float ribStep = pat == 0 ? 6.0f : pat == 1 ? 4.0f : pat == 2 ? 8.0f : 5.0f;
+        for (float z = kFrontZ - 3.0f; z > -d + 1.0f; z -= ribStep) {
+            add({0, H - 0.18f, z}, {hw * 2, 0.16f, 0.5f}, wall * 2.5f, 0.0f, true);
+            add({0, H - 0.28f, z}, {hw * 2 - 1.0f, 0.04f, 0.12f}, rim * 0.9f, -1.0f, true);
+        }
+        const float by = pat == 3 ? 1.1f : 3.4f;
+        for (float sgn : {-1.0f, 1.0f}) {
+            add({sgn * (hw - 0.04f), by, zm}, {0.06f, 0.1f, zl - 1.0f}, rim, -1.0f, true);
+            if (pat >= 2) add({sgn * (hw - 0.04f), by + 0.7f, zm}, {0.06f, 0.05f, zl - 1.0f}, rim * 0.5f, -1.0f, true);
+        }
+        add({0, 0.05f, zm}, {0.08f, 0.01f, zl - 1.0f}, rim * 0.8f, -1.0f, true);
+        if (pat == 1 || pat == 2)
+            for (float sgn : {-1.0f, 1.0f}) add({sgn * (hw - kStrip), 0.05f, zm}, {0.08f, 0.01f, zl - 1.0f}, rim * 0.5f, -1.0f, true);
+        if (pat == 0 || pat == 3)
+            for (float z = kFrontZ - 4.0f; z > -d + 2.0f; z -= 4.0f) add({0, 0.05f, z}, {hw * 1.2f, 0.01f, 0.06f}, rim * 0.35f, -1.0f, true);
+    }
+
+    // The exit: a layered frame, chevrons leading to it, a header bar and glowing steps.
+    {
+        const Vec3 neon{0.85f, 0.92f, 1.0f};
+        add({0, 5.6f, kFrontZ - 0.12f}, {5.6f, 0.12f, 0.3f}, rim * 1.6f, -1.0f, true);
+        for (float sgn : {-1.0f, 1.0f}) {
+            add({sgn * 2.8f, 2.8f, kFrontZ - 0.12f}, {0.12f, 5.6f, 0.3f}, rim * 1.6f, -1.0f, true);
+            add({sgn * 3.4f, 2.0f, kFrontZ - 0.3f}, {0.5f, 4.0f, 0.5f}, wall * 3.0f, 0.0f, true);
+            add({sgn * 3.4f, 4.1f, kFrontZ - 0.3f}, {0.3f, 0.12f, 0.3f}, neon * 2.0f, -1.0f, true);
+        }
+        for (int i = 0; i < 4; ++i) {
+            const float cz = kFrontZ - 1.6f - i * 1.1f, w = 3.0f - i * 0.3f;
+            add({0, 0.06f, cz}, {w, 0.02f, 0.14f}, neon * (1.6f - i * 0.3f), -1.0f, true);
+        }
+        add({0, 0.03f, kFrontZ - 0.5f}, {4.6f, 0.02f, 0.3f}, rim * 1.4f, -1.0f, true);
+    }
+
+    // Layout variants: some looks add colonnades or a central plinth so lobbies differ in shape, not just colour.
+    {
+        const int lay = (lookIdx / 4) % 3;
+        if (lay == 1 && L < 3) {
+            for (float z = kFrontZ - 8.0f; z > -d + 4.0f; z -= 7.0f)
+                for (float sgn : {-1.0f, 1.0f}) {
+                    const float cx = sgn * (hw * 0.5f);
+                    add({cx, H * 0.5f, z}, {0.7f, H, 0.7f}, wall * 3.0f, 0.0f, true);
+                    add({cx, 1.0f, z}, {0.8f, 0.08f, 0.8f}, rim * 1.5f, -1.0f, true);
+                    add({cx, H - 1.0f, z}, {0.8f, 0.08f, 0.8f}, rim * 1.5f, -1.0f, true);
+                }
+        } else if (lay == 2 && L < 3) {
+            add({0, 0.2f, fz}, {6.0f, 0.4f, 6.0f}, wall * 3.0f, 0.0f, true);
+            add({0, 0.42f, fz}, {5.6f, 0.04f, 5.6f}, rim, -1.0f, true);
+            add({0, H * 0.5f, fz}, {0.12f, H, 0.12f}, rim * 1.3f, -1.0f, true);
+            auto m = std::make_unique<ModelNode>(renderer_, "CarConcept", 2.2f, rim * 0.9f);
+            m->position = {0, 0.5f, fz};
+            root_->add(std::move(m));
+        }
+    }
+    // A pair of hologram pedestals showing a model, chosen per building.
+    if (L < 3 && hw >= 8.0f) {
+        static const char* props[7] = {"Duck", "CesiumMan", "CarConcept", "GlamVelvetSofa", "IridescenceLamp", "SheenChair", "CarbonFibre"};
+        for (int i = 0; i < 2; ++i) {
+            const float px = i == 0 ? -5.5f : 5.5f, pz = kFrontZ - 5.5f;
+            add({px, 0.25f, pz}, {1.6f, 0.5f, 1.6f}, wall * 3.0f, 0.0f, true);
+            add({px, 0.52f, pz}, {1.4f, 0.04f, 1.4f}, rim, -1.0f, true);
+            auto m = std::make_unique<ModelNode>(renderer_, props[(pathHash / 12 + i * 3 + lookIdx) % 7], 1.8f, rim * 0.8f);
+            m->position = {px, 0.6f, pz};
+            root_->add(std::move(m));
+        }
     }
 
     // A skylight over the fountain.
