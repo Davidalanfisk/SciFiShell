@@ -225,9 +225,15 @@ std::vector<std::string> wrapText(const std::string& s, float px, FontFace face,
             a = advanceOf(face, cp, px);
         }
         if (w + a > maxWidth && !cur.empty()) {
+            std::string carry;
+            const size_t sp = cur.find_last_of(' ');
+            if (sp != std::string::npos && sp > 0 && cp != ' ') {  // break at a word boundary when one exists
+                carry = cur.substr(sp + 1);
+                cur.resize(sp);
+            }
             lines.push_back(cur);
-            cur.clear();
-            w = 0;
+            cur = carry;
+            w = carry.empty() ? 0.0f : measureText(carry, px, face);
             if (static_cast<int>(lines.size()) == maxLines) {
                 lines.back() = ellipsize(s.substr(0, 0) + lines.back() + s.substr(start), px, face, maxWidth);
                 return lines;

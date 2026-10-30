@@ -151,13 +151,13 @@ float3 buildingColor(PSInput In)
             float tw = 0.75 + 0.25 * sin(tm * (0.6 + h * 2.0) + h * 40.0);
             float alias = saturate(1.0 - dist * 0.004);
             float3 wc = lerp(neon, float3(1, 0.95, 0.85), 0.35 * h);
-            col += wc * win * lit * tw * (0.45 + 0.6 * (1.0 - v / dim.y)) * alias;
+            col += wc * win * lit * tw * (0.3 + 0.4 * (1.0 - v / dim.y)) * alias;
             // a slow scan band climbs each tower, like data being read off it
             col += neon * 0.5 * exp(-pow((frac(tm * 0.07 + seed * 7.0) * 1.3 - 0.15 - v / dim.y) * 14.0, 2.0));
             col += neon * 0.04 * (1.0 - alias) * lit;
         }
-        col += neon * rim * 1.1;
-        if (top) col += neon * (0.10 + 0.5 * grow) + neon * rim * 0.6;
+        col += neon * rim * 0.8;
+        if (top) col += neon * (0.08 + 0.5 * grow) + neon * rim * 0.45;
     }
     else if (kind == 4)
     {
@@ -165,8 +165,8 @@ float3 buildingColor(PSInput In)
         float on = step(y01, fillF);
         float marker = 1.0 - smoothstep(0.0, 0.012 + dist * 0.00004, abs(y01 - fillF));
         float bands = 0.8 + 0.2 * sin(y01 * dim.y * 1.6 - tm * 2.0);
-        col += neon * on * 0.65 * bands + neon * 0.05;
-        col += neon * (rim * 1.2 + marker * 1.6);
+        col += neon * on * 0.5 * bands + neon * 0.04;
+        col += neon * (rim * 0.9 + marker * 1.2);
         if (top) col += neon * (0.08 + 0.6 * grow + (fillF > 0.99 ? 0.4 : 0.0));
     }
     else if (kind == 5)
@@ -181,7 +181,7 @@ float3 buildingColor(PSInput In)
             float centre = 1.0 - smoothstep(0.0, 0.12, across);
             col += neon * packet * centre * 2.0 + neon * centre * 0.08;
         }
-        col += neon * rim * 0.9;
+        col += neon * rim * 0.7;
     }
     else if (kind == 6)
     {
@@ -196,7 +196,7 @@ float3 buildingColor(PSInput In)
             col += neon * gl * (0.10 + 0.5 * fillF);
             col += neon * (0.03 + 0.10 * fillF);
         }
-        col += neon * rim * (0.7 + 0.9 * fillF);
+        col += neon * rim * (0.55 + 0.7 * fillF);
     }
     else if (kind == 8)
     {
@@ -239,7 +239,7 @@ float3 buildingColor(PSInput In)
     // lit by the neon of whatever is inside it.
     float fogD = 1.0 - exp(-pow(dist * 0.0042, 1.2));
     float fog = saturate(fogD * (0.35 + 0.65 * exp(-max(In.WPos.y, 0.0) * 0.045)));
-    float3 fogCol = float3(0.55, 0.70, 0.78) * 0.7 + neon * 0.10;  // pale atmospheric haze, kept thin so distant buildings stay readable
+    float3 fogCol = float3(0.55, 0.70, 0.78) * 0.4 + neon * 0.08;  // pale atmospheric haze, kept thin so distant buildings stay readable
     col = lerp(col, fogCol, fog * 0.62) + neon * 0.05 * fog * (1.0 - fog);
     return col * (1.0 - mist) + mistColor(g_Accent.rgb) * mist;
 }

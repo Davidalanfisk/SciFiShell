@@ -191,10 +191,10 @@ void drawPlayGlyph(Bitmap& bm) {
 }
 
 Bitmap composeCard(const Bitmap* src, FileKind kind, const std::string& path, const std::string& name,
-                   const std::vector<std::string>* textLines) {
+                   const std::vector<std::string>* textLines, bool plain) {
     Bitmap bm;
-    bm.w = kThumbW;
-    bm.h = kThumbH;
+    bm.w = plain ? kDoorArtW : kThumbW;
+    bm.h = plain ? kDoorArtH : kThumbH;
     bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 255);
     Color8 top{26, 32, 46, 255}, bottom{11, 14, 22, 255};
     if (kind == FileKind::Audio) { top = {40, 30, 66, 255}; bottom = {14, 12, 30, 255}; }
@@ -214,8 +214,10 @@ Bitmap composeCard(const Bitmap* src, FileKind kind, const std::string& path, co
         }
     }
     if (kind == FileKind::Video || kind == FileKind::Audio) drawPlayGlyph(bm);
-    drawScrimAndName(bm, name);
-    drawBadge(bm, fileExtensionUpper(path));
+    if (!plain) {
+        drawScrimAndName(bm, name);
+        drawBadge(bm, fileExtensionUpper(path));
+    }
     return bm;
 }
 
@@ -253,7 +255,7 @@ bool loadTextPreview(const std::string& path, std::vector<std::string>& lines) {
 }
 
 // ---- On-disk thumbnail cache: finished cards stored as PNG, keyed by path + size + mtime. ----
-constexpr const char* kCacheVersion = "v1";
+constexpr const char* kCacheVersion = "v3";
 
 std::filesystem::path cacheDir() {
     namespace fs = std::filesystem;
@@ -271,7 +273,7 @@ std::filesystem::path cacheDir() {
     return ec ? fs::path() : base;
 }
 
-std::filesystem::path cacheFileFor(const std::filesystem::path& dir, const std::string& path, FileKind kind) {
+std::filesystem::path cacheFileFor(const std::filesystem::path& dir, const std::string& path, FileKind kind, bool plain) {
     namespace fs = std::filesystem;
     if (dir.empty()) return {};
     std::error_code ec;
@@ -282,7 +284,7 @@ std::filesystem::path cacheFileFor(const std::filesystem::path& dir, const std::
     if (ec) return {};
     std::string key = std::string(kCacheVersion) + '|' + path + '|' + std::to_string(size) + '|' +
                       std::to_string(mtime) + '|' + std::to_string(static_cast<int>(kind)) + '|' +
-                      std::to_string(kThumbW) + 'x' + std::to_string(kThumbH);
+                      std::to_string(kThumbW) + 'x' + std::to_string(kThumbH) + (plain ? 'p' : 'n');
     uint64_t h = 1469598103934665603ull;  // FNV-1a
     for (unsigned char c : key) {
         h ^= c;
@@ -333,6 +335,145 @@ void writeCache(const std::filesystem::path& file, const Bitmap& bm) {
 
 }  // namespace
 
+// ---- Lobby door faces ---------------------------------------------------------------------------
+
+namespace {
+constexpr int kDoorArtX = 40, kDoorArtY = 40, kDoorTextY = 356, kDoorTextH = 252, kDoorTextX = 44, kDoorTextW = 432;
+
+float roundBoxSdf(float px, float py, float hx, float hy, float r) {
+    const float qx = std::fabs(px) - (hx - r), qy = std::fabs(py) - (hy - r);
+    return std::sqrt(std::max(qx, 0.0f) * std::max(qx, 0.0f) + std::max(qy, 0.0f) * std::max(qy, 0.0f)) + std::min(std::max(qx, qy), 0.0f) - r;
+}
+
+Color8 mixColor(Color8 a, Color8 b, float t) {
+    return Color8{static_cast<uint8_t>(a.r + (b.r - a.r) * t), static_cast<uint8_t>(a.g + (b.g - a.g) * t),
+                  static_cast<uint8_t>(a.b + (b.b - a.b) * t), 255};
+}
+
+float centredText(Bitmap& bm, const std::string& s, float cx, float baselineTop, float px, FontFace face, Color8 c) {
+    drawText(bm, cx - measureText(s, px, face) * 0.5f, baselineTop + textAscent(px, face), s, px, face, c);
+    return textLineHeight(px, face);
+}
+}  // namespace
+
+Bitmap composeDoorBase(const DoorFaceSpec& s) {
+    Bitmap bm;
+    bm.w = kDoorW;
+    bm.h = kDoorH;
+    bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 255);
+    fillBackground(bm, Color8{17, 24, 40, 255}, Color8{6, 9, 16, 255});
+    const Color8 ac = s.accent, hot = mixColor(ac, Color8{255, 255, 255, 255}, 0.6f);
+
+    // Neon frame with a soft halo; it flares on hover.
+    {
+        const float inset = 12.0f, th = s.hover ? 5.5f : 3.5f, rt = 42.0f;
+        const float hx = bm.w * 0.5f - inset, hy = bm.h * 0.5f - inset;
+        const float haloK = s.hover ? 0.75f : 0.32f, haloR = s.hover ? 11.0f : 6.0f;
+        for (int y = 0; y < bm.h; ++y)
+            for (int x = 0; x < bm.w; ++x) {
+                const float dd = roundBoxSdf(x + 0.5f - bm.w * 0.5f, y + 0.5f - bm.h * 0.5f, hx, hy, rt);
+                const float d = std::fabs(dd + th * 0.5f);
+                const float core = std::clamp(th * 0.5f + 0.5f - d, 0.0f, 1.0f);
+                const float halo = std::exp(-d / haloR) * haloK * (1.0f - core);
+                if (halo > 0.004f) blendPixel(bm, x, y, ac, halo);
+                if (core > 0.0f) blendPixel(bm, x, y, hot, core);
+            }
+    }
+
+    const float ax = static_cast<float>(kDoorArtX), ay = static_cast<float>(kDoorArtY);
+    const float aw = static_cast<float>(kDoorArtW), ah = static_cast<float>(kDoorArtH), ar = 16.0f;
+    if (s.art && s.art->w == kDoorArtW && s.art->h == kDoorArtH) {
+        for (int y = 0; y < kDoorArtH; ++y)
+            for (int x = 0; x < kDoorArtW; ++x) {
+                const float d = roundBoxSdf(x + 0.5f - aw * 0.5f, y + 0.5f - ah * 0.5f, aw * 0.5f, ah * 0.5f, ar);
+                const float cov = std::clamp(0.5f - d, 0.0f, 1.0f);
+                if (cov <= 0.0f) continue;
+                const uint8_t* p = &s.art->rgba[(static_cast<size_t>(y) * kDoorArtW + x) * 4];
+                const float shade = 1.0f - 0.45f * std::clamp((y - (kDoorArtH - 60)) / 60.0f, 0.0f, 1.0f);  // settles into the panel
+                blendPixel(bm, kDoorArtX + x, kDoorArtY + y,
+                           Color8{static_cast<uint8_t>(p[0] * shade), static_cast<uint8_t>(p[1] * shade), static_cast<uint8_t>(p[2] * shade), 255}, cov);
+            }
+    } else {
+        fillRoundRect(bm, ax, ay, aw, ah, ar, Color8{static_cast<uint8_t>(10 + ac.r / 9), static_cast<uint8_t>(14 + ac.g / 9), static_cast<uint8_t>(22 + ac.b / 9), 255});
+        const float cx = ax + aw * 0.5f;
+        if (!s.bigNumber.empty()) {
+            const float h1 = textLineHeight(112.0f, FontFace::UIBold), h2 = textLineHeight(32.0f, FontFace::UI);
+            const float top = ay + (ah - h1 - h2 * 0.8f) * 0.5f;
+            centredText(bm, s.bigNumber, cx, top, 112.0f, FontFace::UIBold, Color8{240, 246, 255, 255});
+            centredText(bm, s.bigLabel, cx, top + h1 * 0.92f, 32.0f, FontFace::UI, mixColor(ac, Color8{255, 255, 255, 255}, 0.25f));
+        } else {  // not scanned yet: a plain folder glyph
+            const float fx = cx - 62.0f, fy = ay + ah * 0.5f - 42.0f;
+            fillRoundRect(bm, fx, fy - 12.0f, 62.0f, 26.0f, 8.0f, ac);
+            fillRoundRect(bm, fx, fy, 124.0f, 84.0f, 12.0f, mixColor(ac, Color8{20, 26, 40, 255}, 0.25f));
+        }
+    }
+    // A hairline around the art ties it to the frame.
+    for (int y = 0; y < kDoorArtH + 2; ++y)
+        for (int x = 0; x < kDoorArtW + 2; ++x) {
+            const float d = roundBoxSdf(x - 0.5f - aw * 0.5f, y - 0.5f - ah * 0.5f, aw * 0.5f, ah * 0.5f, ar);
+            const float a = std::clamp(1.0f - std::fabs(d + 0.5f), 0.0f, 1.0f) * 0.55f;
+            if (a > 0.0f) blendPixel(bm, kDoorArtX - 1 + x, kDoorArtY - 1 + y, ac, a);
+        }
+
+    fillRoundRect(bm, bm.w * 0.5f - 30.0f, 334.0f, 60.0f, 4.0f, 2.0f, ac);
+    return bm;
+}
+
+float drawDoorText(Bitmap& bm, const std::string& title, const std::vector<std::string>& info, bool hover, float scroll, Color8 accent) {
+    const Color8 white{238, 243, 252, 255}, dim{176, 192, 218, 255};
+    const float cx = kDoorTextX + kDoorTextW * 0.5f;
+    if (!hover) {
+        // Largest size at which the whole name fits on three lines.
+        float px = 30.0f;
+        std::vector<std::string> lines;
+        bool fitted = false;
+        for (float t : {56.0f, 48.0f, 42.0f, 36.0f}) {
+            lines = wrapText(title, t, FontFace::UIBold, static_cast<float>(kDoorTextW), 3);
+            if (lines.size() <= 3 && (lines.empty() || lines.back().find("\xE2\x80\xA6") == std::string::npos)) { px = t; fitted = true; break; }
+        }
+        if (!fitted) lines = wrapText(title, px, FontFace::UIBold, static_cast<float>(kDoorTextW), 5);
+        const float lh = textLineHeight(px, FontFace::UIBold) * 1.02f;
+        float y = kDoorTextY + (kDoorTextH - lh * lines.size()) * 0.5f;
+        for (const std::string& l : lines) {
+            centredText(bm, l, cx, y, px, FontFace::UIBold, white);
+            y += lh;
+        }
+        return 0.0f;
+    }
+
+    struct Row { std::string text; float px; FontFace face; Color8 col; float gapAfter; };
+    std::vector<Row> rows;
+    const Color8 nameCol = mixColor(accent, Color8{255, 255, 255, 255}, 0.55f);
+    for (const std::string& l : wrapText(title, 27.0f, FontFace::UIBold, static_cast<float>(kDoorTextW), 12)) rows.push_back({l, 27.0f, FontFace::UIBold, nameCol, 0.0f});
+    if (!rows.empty()) rows.back().gapAfter = 12.0f;
+    for (const std::string& l : info)
+        for (const std::string& w : wrapText(l, 28.0f, FontFace::UI, static_cast<float>(kDoorTextW), 2)) rows.push_back({w, 28.0f, FontFace::UI, dim, 0.0f});
+    float total = 0.0f;
+    for (const Row& r : rows) total += textLineHeight(r.px, r.face) * 1.08f + r.gapAfter;
+    Bitmap tmp;
+    tmp.w = kDoorTextW;
+    tmp.h = static_cast<int>(std::ceil(total)) + 8;
+    tmp.rgba.assign(static_cast<size_t>(tmp.w) * tmp.h * 4, 0);
+    float y = 0.0f;
+    for (const Row& r : rows) {
+        drawText(tmp, 0.0f, y + textAscent(r.px, r.face), r.text, r.px, r.face, r.col);
+        y += textLineHeight(r.px, r.face) * 1.08f + r.gapAfter;
+    }
+    const float maxScroll = std::max(0.0f, static_cast<float>(tmp.h - kDoorTextH));
+    scroll = std::clamp(scroll, 0.0f, maxScroll);
+    const float fadeTop = std::min(1.0f, scroll / 24.0f), fadeBot = std::min(1.0f, (maxScroll - scroll) / 24.0f);
+    for (int ty = 0; ty < kDoorTextH; ++ty) {
+        const int sy = ty + static_cast<int>(scroll);
+        if (sy >= tmp.h) break;
+        const float f = std::min(1.0f - fadeTop * (1.0f - std::min(1.0f, ty / 22.0f)),
+                                 1.0f - fadeBot * (1.0f - std::min(1.0f, (kDoorTextH - 1 - ty) / 22.0f)));
+        for (int tx = 0; tx < tmp.w; ++tx) {
+            const uint8_t* p = &tmp.rgba[(static_cast<size_t>(sy) * tmp.w + tx) * 4];
+            if (p[3]) blendPixel(bm, kDoorTextX + tx, kDoorTextY + ty, Color8{p[0], p[1], p[2], p[3]}, f);
+        }
+    }
+    return maxScroll;
+}
 FileKind classifyFile(const std::string& path, bool isDir) {
     if (isDir) return FileKind::Folder;
     std::string e = lowerExt(path);
@@ -371,10 +512,10 @@ int ThumbnailLoader::reset() {
     return ++generation_;
 }
 
-void ThumbnailLoader::request(int generation, int index, const std::string& path, const std::string& name, FileKind kind) {
+void ThumbnailLoader::request(int generation, int index, const std::string& path, const std::string& name, FileKind kind, bool plain) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        jobs_.push_back({generation, index, path, name, kind});
+        jobs_.push_back({generation, index, path, name, kind, plain});
     }
     cv_.notify_one();
 }
@@ -407,7 +548,7 @@ void ThumbnailLoader::run() {
         }
         if (job.generation != generation_.load()) continue;
 
-        const std::filesystem::path cacheFile = cacheFileFor(cacheDirectory, job.path, job.kind);
+        const std::filesystem::path cacheFile = cacheFileFor(cacheDirectory, job.path, job.kind, job.plain);
         {
             Bitmap cached;
             if (readCache(cacheFile, cached)) {
@@ -437,7 +578,7 @@ void ThumbnailLoader::run() {
         ThumbResult res;
         res.generation = job.generation;
         res.index = job.index;
-        res.bitmap = composeCard(haveFrame ? &frame : nullptr, job.kind, job.path, job.name, haveLines ? &lines : nullptr);
+        res.bitmap = composeCard(haveFrame ? &frame : nullptr, job.kind, job.path, job.name, haveLines ? &lines : nullptr, job.plain);
         writeCache(cacheFile, res.bitmap);
         std::lock_guard<std::mutex> lock(mutex_);
         results_.push_back(std::move(res));

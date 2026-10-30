@@ -128,7 +128,7 @@ private:
     void renderMonuments(Renderer& r, Vec3 eye);
     void drawLabel(Renderer& r, GpuLabel& l, Vec3 at, float h, Vec3 eye, Vec3 color, float alpha = 1.0f);
     std::shared_ptr<GpuLabel> makeText(const std::string& s);
-    std::shared_ptr<GpuLabel> makeDoorLabel(const std::string& name);
+    std::shared_ptr<GpuLabel> makeDoorLabel(const std::string& name, Vec3 tint);
     Vec3 tintColor(int i) const;
     static float ease(float g) { g = g < 0 ? 0 : (g > 1 ? 1 : g); return 1.0f - (1.0f - g) * (1.0f - g) * (1.0f - g); }
 

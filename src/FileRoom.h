@@ -25,10 +25,22 @@ public:
     int roomIndex = -1;  // >= 0: a hallway door to that room; -2: the door back to the hallway
     void setThumbnail(std::shared_ptr<GpuLabel> thumb) { thumb_ = std::move(thumb); }
     const std::shared_ptr<GpuLabel>& thumbnail() const { return thumb_; }
-    void setInfo(std::vector<std::string> lines) { info_ = std::move(lines); label_.reset(); }
+    void setInfo(std::vector<std::string> lines) { info_ = std::move(lines); label_.reset(); doorDirty_ = true; }
+    bool isDoor() const { return tall; }  // lobby doors use the preview-and-details face
+    void setDoorArt(Bitmap art) { art_ = std::move(art); hasArt_ = true; doorDirty_ = true; }
+    void setDoorStats(std::string big, std::string label) { big_ = std::move(big); bigLabel_ = std::move(label); doorDirty_ = true; }
+    Color8 accent{80, 220, 255, 255};
+    bool hasPreviewRequested = false;
+    void update(double dt, double time) override;
 
 private:
     void ensureLabel();
+    void bakeDoor();
+    Bitmap art_, hoverBase_;
+    bool hasArt_ = false, doorDirty_ = true, shownHover_ = false;
+    std::string big_, bigLabel_;
+    float hoverT_ = 0.0f, maxScroll_ = 0.0f, scroll_ = 0.0f;
+    std::shared_ptr<GpuLabel> face_;
     Renderer* r_;
     std::string text_;
     std::vector<std::string> info_;

@@ -54,7 +54,7 @@ bool extractVideoFrame(const std::string& utf8Path, Bitmap& out) {
     PropVariantInit(&dur);
     if (SUCCEEDED(reader->GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE, MF_PD_DURATION, &dur)) &&
         dur.vt == VT_UI8 && dur.uhVal.QuadPart > 0) {
-        LONGLONG target = std::min<LONGLONG>(static_cast<LONGLONG>(dur.uhVal.QuadPart / 10), 50000000LL);
+        const LONGLONG target = static_cast<LONGLONG>(dur.uhVal.QuadPart / 5);  // about 20% of the way in
         PROPVARIANT pos;
         PropVariantInit(&pos);
         pos.vt = VT_I8;

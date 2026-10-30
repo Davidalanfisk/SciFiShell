@@ -8,6 +8,7 @@
 
 #include "TextRender.h"
 #include "Theme.h"
+#include "Thumbnails.h"
 
 namespace sf {
 
@@ -79,7 +80,8 @@ float City::emergeProgress() const { return (float)std::min(1.0, clock_ / 8.0); 
 Vec3 City::tintColor(int i) const {
     // Dark blue / cyan / teal range with white-ish steel greys mixed in. Hue steps by the golden ratio and saturation and
     // brightness drift on their own periods, so every index gets a distinct colour however many drives and regions exist.
-    if (i == 0) return currentTheme().accent * 0.8f;
+    constexpr float kDim = 0.68f;  // keeps the regions dark and moody
+    if (i == 0) return currentTheme().accent * 0.8f * kDim;
     auto fr = [](float v) { return v - std::floor(v); };
     const float u = fr(i * 0.6180339f), v = fr(i * 0.7548777f), w = fr(i * 0.5698403f);
     Vec3 c;
@@ -98,7 +100,7 @@ Vec3 City::tintColor(int i) const {
             default: c = {tt, p, val}; break;
         }
     }
-    return c;
+    return c * kDim;
 }
 std::shared_ptr<GpuLabel> City::makeText(const std::string& s) {
     return renderer_.createLabel(makeLabel(s, 54.0f, FontFace::UI, Color8{}, 96, 4));
@@ -452,19 +454,15 @@ void City::drawLabel(Renderer& r, GpuLabel& l, Vec3 at, float h, Vec3 eye, Vec3 
     r.drawWebRegion(l, Mat4::translate(at) * Mat4::rotateY(yaw) * Mat4::scale({w, h, 1.0f}), uvAll, l.aspect, 0.0f, -1.0f, 1.0f, white);
 }
 
-std::shared_ptr<GpuLabel> City::makeDoorLabel(const std::string& name) {
-    Bitmap bm;
-    bm.w = 400;
-    bm.h = 560;
-    bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 0);
-    drawDoorOutline(bm);
-    const auto lines = wrapText(name, 38.0f, FontFace::UI, 300.0f, 3);
-    float y = bm.h * 0.5f - lines.size() * textLineHeight(38.0f, FontFace::UI) * 0.5f;
-    for (const std::string& l : lines) {
-        drawText(bm, (bm.w - measureText(l, 38.0f, FontFace::UI)) * 0.5f, y + textAscent(38.0f, FontFace::UI), l, 38.0f, FontFace::UI, Color8{});
-        y += textLineHeight(38.0f, FontFace::UI);
-    }
-    return renderer_.createLabel(bm);
+// Same face as the lobby doors: a folder panel above the building name, which shrinks to fit.
+std::shared_ptr<GpuLabel> City::makeDoorLabel(const std::string& name, Vec3 tint) {
+    const float m = std::max(0.01f, std::max(tint.x, std::max(tint.y, tint.z)));
+    DoorFaceSpec spec;
+    spec.accent = Color8{static_cast<uint8_t>(std::clamp(tint.x / m * 255.0f, 60.0f, 255.0f)), static_cast<uint8_t>(std::clamp(tint.y / m * 255.0f, 60.0f, 255.0f)),
+                         static_cast<uint8_t>(std::clamp(tint.z / m * 255.0f, 60.0f, 255.0f)), 255};
+    Bitmap bm = composeDoorBase(spec);
+    drawDoorText(bm, name, {}, false, 0.0f, spec.accent);
+    return renderer_.createLabel(bm, true);
 }
 
 void City::markEntered() {
@@ -852,11 +850,11 @@ void City::render(Renderer& r, Vec3 eye) {
                 }
                 if (!mirror && h > 3.4f && tdx * tdx + tdz * tdz < 70.0f * 70.0f && t.grow > 0.95f) {  // street door on the +z face
                     if (!t.doorLabel && labelBudget_ > 0) {
-                        t.doorLabel = makeDoorLabel(t.name == "(FILES)" || t.name == "(MORE)" ? b.name + " " + t.name : t.name);
+                        t.doorLabel = makeDoorLabel(t.name == "(FILES)" || t.name == "(MORE)" ? b.name + " " + t.name : t.name, tint);
                         --labelBudget_;
                     }
                     if (t.doorLabel) {
-                        const float dh = std::min(3.2f, h * 0.8f), dw = std::min(dh * 0.714f, w * 0.85f);
+                        const float dh = std::min(3.4f, h * 0.8f), dw = std::min(dh * 0.8f, w * 0.85f);
                         const float zf = t.z + dd * 0.5f;
                         const Vec3 glowC = tint * 0.8f + Vec3{0.3f, 0.3f, 0.3f};
                         for (float sg : {-1.0f, 1.0f}) renderBox(r, {t.x + sg * (dw * 0.5f + 0.12f), base + dh * 0.5f + 0.1f, zf + 0.1f}, {0.14f, dh + 0.2f, 0.22f}, glowC, 0.5f, 4, 1, 1.0f, 0);
@@ -865,7 +863,7 @@ void City::render(Renderer& r, Vec3 eye) {
                         renderBox(r, {t.x, base + 0.05f, zf + 1.5f}, {dw + 1.2f, 0.05f, 2.4f}, tint, 0.5f, 6, 1, 1.0f, 0);
                         draws += 5;
                         r.drawCube(*t.doorLabel, Mat4::translate({t.x, base + dh * 0.5f, zf + 0.03f}) * Mat4::scale({dw, dh, 0.06f}),
-                                   {0.02f, 0.035f, 0.06f}, false, false, -1.0f);
+                                   {1.0f, 1.0f, 1.0f}, false, true, 0.0f);
                         ++draws;
                     }
                 }

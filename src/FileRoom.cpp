@@ -174,7 +174,58 @@ void CardNode::ensureLabel() {
     label_ = r_->createLabel(bm);
 }
 
+// Hover swaps the title for the details; long details scroll slowly while the preview stays put.
+void CardNode::update(double dt, double) {
+    if (!isDoor()) return;
+    if (hover != shownHover_) {
+        shownHover_ = hover;
+        hoverT_ = 0.0f;
+        scroll_ = 0.0f;
+        maxScroll_ = 0.0f;
+        if (!hover) hoverBase_ = Bitmap{};
+        doorDirty_ = true;
+    }
+    if (!hover) return;
+    hoverT_ += static_cast<float>(dt);
+    const float pause = 1.8f, speed = 34.0f, travel = maxScroll_ / speed, cycle = pause + travel + 1.5f;
+    float s = 0.0f;
+    if (maxScroll_ > 0.0f) {
+        const float u = std::fmod(hoverT_, cycle);
+        s = u < pause ? 0.0f : (u < pause + travel ? (u - pause) * speed : maxScroll_);
+    }
+    const float q = std::floor(s / 3.0f) * 3.0f;
+    if (q != scroll_) {
+        scroll_ = q;
+        doorDirty_ = true;
+    }
+}
+
+void CardNode::bakeDoor() {
+    DoorFaceSpec spec;
+    spec.art = hasArt_ ? &art_ : nullptr;
+    spec.bigNumber = big_;
+    spec.bigLabel = bigLabel_;
+    spec.accent = accent;
+    spec.hover = shownHover_;
+    Bitmap bm;
+    if (shownHover_) {
+        if (hoverBase_.rgba.empty()) hoverBase_ = composeDoorBase(spec);
+        bm = hoverBase_;
+    } else {
+        bm = composeDoorBase(spec);
+    }
+    const std::string title = isParentLink ? (roomIndex == -2 ? "Back to lobby" : "Leave building") : text_;
+    maxScroll_ = drawDoorText(bm, title, info_, shownHover_, scroll_, accent);
+    face_ = r_->createLabel(bm, true);
+    doorDirty_ = false;
+}
+
 void CardNode::render(Renderer& renderer) {
+    if (isDoor()) {
+        if (doorDirty_ || !face_) bakeDoor();
+        renderer.drawCube(*face_, worldMatrix(), Vec3{1.0f, 1.0f, 1.0f}, false, true, hover ? 1.0f : 0.0f);
+        return;
+    }
     Mat4 w = worldMatrix();
     if (hover) w = w * Mat4::scale({1.08f, 1.08f, 1.0f});
     if (thumb_) {
@@ -341,17 +392,18 @@ void FileRoom::buildCorridor() {
     const bool multi = L > 1;
     auto floorSlots = [&](float hw, float d) {
         std::vector<LobbySlot> v;
+        // Fill order: the far wall (facing you as you enter), then the side walls, and the exit wall last.
         for (float x = -hw + kStrip + kPitch * 0.5f; x <= hw - kStrip - kPitch * 0.5f + 0.01f; x += kPitch) {
-            if (std::fabs(x) < 4.0f) continue;  // the grand exit stands here
-            v.push_back({x, kFrontZ, kPi, 0});
+            if (multi && std::fabs(x) < kShaftHalf + 1.4f) continue;  // the lift shaft stands against the far wall
+            v.push_back({x, -d, 0.0f, 0});
         }
         for (float z = -d + kStrip + kPitch * 0.5f; z <= kFrontZ - kStrip - kPitch * 0.5f + 0.01f; z += kPitch) {
             v.push_back({-hw, z, kPi * 0.5f, 0});
             v.push_back({hw, z, -kPi * 0.5f, 0});
         }
-        for (float x = -hw + kStrip + kPitch * 0.5f; x <= hw - kStrip - kPitch * 0.5f + 0.01f; x += kPitch) {  // the back wall fills last
-            if (multi && std::fabs(x) < kShaftHalf + 1.4f) continue;  // the lift shaft stands against the far wall
-            v.push_back({x, -d, 0.0f, 0});
+        for (float x = -hw + kStrip + kPitch * 0.5f; x <= hw - kStrip - kPitch * 0.5f + 0.01f; x += kPitch) {
+            if (std::fabs(x) < 4.0f) continue;  // the grand exit stands here
+            v.push_back({x, kFrontZ, kPi, 0});
         }
         return v;
     };
@@ -395,6 +447,8 @@ void FileRoom::buildCorridor() {
     auto exitCard = std::make_unique<CardNode>(renderer_, parentEntry_, "EXIT");
     exitCard->isParentLink = true;
     exitCard->tall = true;  // the portrait door body fills the whole doorway
+    exitCard->accent = {120, 235, 255, 255};
+    exitCard->setDoorStats("EXIT", "back to the city");
     exitCard->position = {0, 2.55f, kFrontZ - 0.24f};
     exitCard->yaw = kPi;
     exitCard->scale = {3.9f, 5.0f, 0.06f};
@@ -500,8 +554,8 @@ void FileRoom::buildCorridor() {
         }
         const float by = pat == 3 ? 1.1f : 3.4f;
         for (float sgn : {-1.0f, 1.0f}) {
-            add({sgn * (hw - 0.04f), by, zm}, {0.06f, 0.1f, zl - 1.0f}, rim, -1.0f, true);
-            if (pat >= 2) add({sgn * (hw - 0.04f), by + 0.7f, zm}, {0.06f, 0.05f, zl - 1.0f}, rim * 0.5f, -1.0f, true);
+            add({sgn * (hw - 0.012f), by, zm}, {0.02f, 0.06f, zl - 1.0f}, rim * 0.4f, -1.0f, true);
+            if (pat >= 2) add({sgn * (hw - 0.012f), by + 0.7f, zm}, {0.02f, 0.03f, zl - 1.0f}, rim * 0.2f, -1.0f, true);
         }
         add({0, 0.05f, zm}, {0.08f, 0.01f, zl - 1.0f}, rim * 0.8f, -1.0f, true);
         if (pat == 1 || pat == 2)
@@ -553,14 +607,20 @@ void FileRoom::buildCorridor() {
         const float y0 = sl.level * kLevelH, nx = std::sin(sl.yaw), nz = std::cos(sl.yaw), tx = std::cos(sl.yaw), tz = -std::sin(sl.yaw);
         auto at = [&](float n, float tt, float y) { return Vec3{sl.x + nx * n + tx * tt, y0 + y, sl.z + nz * n + tz * tt}; };
         auto sz = [&](float along, float h, float thick) { return std::fabs(nx) > 0.5f ? Vec3{thick, h, along} : Vec3{along, h, thick}; };
-        add(at(1.3f, 0, 0.05f), sz(2.8f, 0.03f, 2.0f), kc * 0.25f, -1.0f);
+        add(at(1.3f, 0, 0.05f), sz(3.4f, 0.03f, 2.0f), kc * 0.25f, -1.0f);
 
-        auto door = std::make_unique<CardNode>(renderer_, DirEntry{rooms_[r].name, rooms_[r].path, true}, clip(rooms_[r].name, 40));
+        auto door = std::make_unique<CardNode>(renderer_, DirEntry{rooms_[r].name, rooms_[r].path, true}, rooms_[r].name);
         door->roomIndex = r;
         door->tall = true;
-        door->position = at(0.04f, 0, 1.55f);
+        {
+            static const Color8 accents[5] = {{60, 180, 255, 255}, {255, 90, 200, 255}, {255, 170, 60, 255}, {70, 255, 170, 255}, {170, 120, 255, 255}};
+            size_t h = 0;
+            for (unsigned char ch : rooms_[r].name) h = h * 131 + ch;
+            door->accent = accents[h % 5];
+        }
+        door->position = at(0.04f, 0, 1.95f);
         door->yaw = sl.yaw;
-        door->scale = {2.4f, 3.0f, 0.06f};
+        door->scale = {3.0f, 3.75f, 0.06f};
         doorCards_.push_back(addCard(std::move(door)));
         if (rooms_[r].ready) addRoomExtras(r);
     }
@@ -645,19 +705,19 @@ void FileRoom::addRoomExtras(int r) {
     kind(ri.auds, "audio");
     kind(ri.txts, "text");
     if (!kinds.empty()) lines.push_back(kinds);
-    for (const std::string& n : ri.sample) lines.push_back(clip(n, 26));
+    if (!ri.sample.empty()) lines.push_back("");
+    for (const std::string& n : ri.sample) lines.push_back(n);
     if (r < static_cast<int>(doorCards_.size())) doorCards_[r]->setInfo(lines);
 
-    if (ri.hasPreview) {
-        auto prev = std::make_unique<CardNode>(renderer_, ri.preview, ri.preview.name);
-        prev->roomIndex = r;
-        prev->position = at(0.11f, 0, 1.85f);
-        prev->yaw = sl.yaw;
-        prev->scale = {1.6f, 1.0f, 0.05f};
-        CardNode* c = addCard(std::move(prev));
-        requested_.back() = 1;
-        loader_.request(generation_, static_cast<int>(cards_.size()) - 1, c->entry.path, c->entry.name,
-                        classifyFile(c->entry.path, false));
+    if (r >= static_cast<int>(doorCards_.size())) return;
+    CardNode* door = doorCards_[r];
+    if (ri.files + ri.dirs > 0) door->setDoorStats(std::to_string(ri.files ? ri.files : ri.dirs) + plus, ri.files ? (ri.files == 1 && !ri.capped ? "file" : "files") : "folders");
+    else door->setDoorStats("0", "empty");
+    if (ri.hasPreview && !door->hasPreviewRequested) {
+        door->hasPreviewRequested = true;
+        const int idx = static_cast<int>(std::find(cards_.begin(), cards_.end(), door) - cards_.begin());
+        requested_[idx] = 1;
+        loader_.request(generation_, idx, ri.preview.path, ri.preview.name, classifyFile(ri.preview.path, false), true);
     }
 }
 
@@ -690,9 +750,9 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
         const float h = S * 0.5f;
         for (float t : ts) out.push_back({{t, 0, -h + 0.03f}, 0.0f});          // far wall, left to right
         for (float t : ts) out.push_back({{h - 0.03f, 0, t}, -kPi * 0.5f});    // right wall, far to near
+        for (float t : ts) out.push_back({{-h + 0.03f, 0, t}, kPi * 0.5f});   // left wall, far to near
         for (auto it = ts.rbegin(); it != ts.rend(); ++it)
-            if (std::fabs(*it) >= 3.0f) out.push_back({{*it, 0, h - 0.03f}, kPi});  // near wall, right to left, past the door
-        for (auto it = ts.rbegin(); it != ts.rend(); ++it) out.push_back({{-h + 0.03f, 0, *it}, kPi * 0.5f});  // left wall
+            if (std::fabs(*it) >= 3.0f) out.push_back({{*it, 0, h - 0.03f}, kPi});  // exit wall last, right to left, past the door
         return out;
     };
     float S = 10.0f;
@@ -711,8 +771,8 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     add({h + 0.2f, H * 0.5f, 0}, {0.4f, H, S + 0.8f}, wall);
     add({0, H + 0.1f, 0}, {S + 0.8f, 0.2f, S + 0.8f}, wall * 0.7f, -1.0f);
     add({0, 0.03f, 0}, {S - 0.2f, 0.04f, S - 0.2f}, Vec3{0.036f, 0.038f, 0.043f} + kc * 0.004f, -1.0f);
-    for (int e : {-1, 1}) add({e * 1.5f, 1.55f, h - 0.1f}, {0.1f, 3.2f, 0.1f}, kc * 2.0f, -1.0f);
-    add({0, 3.2f, h - 0.1f}, {3.1f, 0.1f, 0.1f}, kc * 2.0f, -1.0f);
+    for (int e : {-1, 1}) add({e * 1.66f, 1.95f, h - 0.04f}, {0.1f, 3.9f, 0.08f}, kc * 1.4f, -1.0f);
+    add({0, 3.9f, h - 0.04f}, {3.42f, 0.1f, 0.08f}, kc * 1.4f, -1.0f);
     root_->add(std::move(shell));
 
     DirEntry back;
@@ -722,9 +782,12 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     auto door = std::make_unique<CardNode>(renderer_, back, "Back to lobby");
     door->isParentLink = true;
     door->roomIndex = -2;
-    door->position = {0, 1.55f, h - 0.04f};
+    door->tall = true;
+    door->accent = {120, 235, 255, 255};
+    door->setDoorStats("BACK", "to the lobby");
+    door->position = {0, 1.95f, h - 0.04f};
     door->yaw = kPi;
-    door->scale = {2.8f, 3.0f, 0.06f};
+    door->scale = {3.0f, 3.75f, 0.06f};
     addCard(std::move(door));
 
     for (int k = 0; k < n && !slots.empty(); ++k) {
@@ -892,7 +955,8 @@ void FileRoom::pump() {
     ThumbResult r;
     for (int n = 0; n < 3 && loader_.poll(r); ++n) {
         if (r.generation != generation_ || r.index < 0 || r.index >= static_cast<int>(cards_.size())) continue;
-        cards_[r.index]->setThumbnail(renderer_.createLabel(r.bitmap, true));
+        if (cards_[r.index]->isDoor()) cards_[r.index]->setDoorArt(std::move(r.bitmap));
+        else cards_[r.index]->setThumbnail(renderer_.createLabel(r.bitmap, true));
     }
 }
 
