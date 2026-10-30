@@ -39,6 +39,7 @@ void ToolRing::close() {
     open_ = false;
     appsMode_ = false;
     level_ = 0;
+    intent_ = 0;
 }
 
 void ToolRing::cycle(int delta) {
@@ -97,18 +98,37 @@ void ToolRing::pointer(Vec3 o, Vec3 d) {
             const int n = static_cast<int>(sets_[level_].icons.size());
             appSel_ = std::min(n - 1, static_cast<int>(a / kTau * n));
             appHot_ = true;
+            hoverIntent(level_ == 0 && appSel_ == n - 1 && !sets_[1].icons.empty() ? 3 : 0);
             return;
         }
     }
     appHot_ = false;
-    if (r < 0.5f || r > 0.95f) return;
-    float ang = std::atan2(u, v);  // clockwise from the top
-    if (ang < 0) ang += kTau;
-    sel_ = std::min(kCount - 1, static_cast<int>(ang / kTau * kCount));
+    const bool inner = r >= 0.5f && r <= 0.95f;
+    bool overApps = false;
+    if (inner) {
+        float ang = std::atan2(u, v);  // clockwise from the top
+        if (ang < 0) ang += kTau;
+        sel_ = std::min(kCount - 1, static_cast<int>(ang / kTau * kCount));
+        overApps = kMap[sel_] == Tool::Apps;
+    }
+    // Sub-rings follow the pointer: hovering Apps opens it, leaving both the parent item and the sub-ring closes it.
+    const bool away = inner || r / kOuter > 1.0f;
+    if (!appsMode_) hoverIntent(overApps ? 1 : 0);
+    else if (overApps) hoverIntent(level_ == 1 ? 4 : 0);
+    else hoverIntent(away ? 2 : 0);
 }
 
 void ToolRing::update(double dt, double time) {
     time_ = static_cast<float>(time);
+    dwell_ += static_cast<float>(dt);
+    if (open_ && dwell_ > 0.12f) {
+        if (intent_ == 2 && appsMode_) showApps(false);
+        else if (intent_ == 3 && level_ == 0) enterLevel(1);
+        else if (intent_ == 4 && level_ == 1) {
+            level_ = 0;
+            appSel_ = std::max(0, static_cast<int>(sets_[0].names.size()) - 1);
+        }
+    }
     const float k = std::min(1.0f, static_cast<float>(dt) * 9.0f);
     anim_ += ((open_ ? 1.0f : 0.0f) - anim_) * k;
     if (!open_ && anim_ < 0.01f) anim_ = 0;

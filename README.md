@@ -56,8 +56,9 @@ around it are your drives. **Walk** with WASD, or **double-tap Space to fly** an
   way to the end of the route, a fast way to cross the city. Each bus is dual-lane: one channel in, one out.
 - **The command ring:** middle-click (or `F2`) any time to summon it. From here open **Web**, **Media**, **Windows
   Apps** and Settings. You can run several apps at once, and the ring is always available.
-- **Media player:** a Winamp-style player for audio *and* video. Point it at your media folders, let it scan into a
-  library, build playlists, and keep the music going in the background while you explore.
+- **Media player:** music, video and live radio in one window. Add folders (or drop them on the window), browse by
+  album, watch video fullscreen, and keep the music going in the background while you explore - see
+  [Media player](#media-player).
 - **Browser:** a real web browser (Chromium) floating in your world.
 - **Idle tour:** leave it alone for 10 seconds and the camera takes you on a cinematic flight through the city. Touch
   any control to take over again.
@@ -87,7 +88,7 @@ gently turns to face them and stays put until you move.
 | Tool | What it does |
 |---|---|
 | **Web** | A real Chromium browser floating in your world. |
-| **Media** | Winamp-style audio and video player with a scanned library, playlists and background playback. |
+| **Media** | Music, video and live radio with a scanned library, fullscreen video and background playback. |
 | **System Monitor** | Live CPU, memory, GPU, per-thread load, top processes, network and drives. Also opens when you click the **CPU building**. |
 | **File Browser** | A classic 2D file manager: places, drives, search, sorting, copy / cut / paste, rename, delete (to the Recycle Bin), and **Open in 3D Room**. |
 | **Editor** | A text editor that always starts with a blank document: New, Open, Save, Save As. |
@@ -106,6 +107,31 @@ gently turns to face them and stays put until you move.
 
 ### Editor
 ![Editor](docs/tool-editor.jpg)
+
+### Media player
+One window for your **music**, **videos** and **live radio**, with tabs along the top and a now-playing bar (transport,
+seek, volume and a live spectrum) that stays put whatever you browse.
+
+**Music** - an album grid with cover art, artist and search. Open an album for its track list, then play or shuffle it.
+![Music library](docs/media-music.jpg)
+![Album view](docs/media-album.jpg)
+
+**Video** - play a video right inside the window. `FULLSCREEN` takes the picture to the full size of your display: only
+the video is shown, and the title, seek bar, transport and volume fade in when you move the pointer and fade away again
+a couple of seconds later. Click the picture to pause, `Esc` to leave. Frames are scaled on the decoder thread to the size
+they are shown at, so HD video stays smooth.
+![Video in the window](docs/media-video.jpg)
+![Fullscreen video](docs/media-fullscreen.jpg)
+
+**Radio** - a set of hand-picked live stations, one click to play. Add your own by putting `Name|URL|Genre` lines in
+`radio.txt`.
+![Live radio](docs/media-radio.jpg)
+
+- **Adding folders:** `ADD FOLDERS` opens the Windows folder picker (select several at once), or just drop a folder
+  onto the window.
+- **Removing folders:** `MANAGE` lists every watched folder with a `REMOVE` button next to each; `DONE` goes back.
+- **Background playback:** close the window and the music keeps playing. While something is playing, **Media** always
+  appears in the `Alt+Tab` switcher so you can glide straight back to it.
 
 
 ## What's coming
@@ -199,7 +225,7 @@ folder is missing the shell builds without a browser. The project now builds as 
 - **Themes**: Cyan, Amber, Magenta. Cycle with **F6** or the ring's Theme segment; the choice is saved in `%LOCALAPPDATA%\SciFiShell\theme.ini`.
 - **Screenshots**: press **F12** to save the shell window as a PNG in `Pictures\SciFiShell` (you'll hear a beep; nothing is drawn on screen).
 - **Settings**: the ring's Settings segment opens a card based hub (aim + click / A / trigger to open a card, arrow keys / d-pad / wheel to move, Esc / B goes back, then closes). The **SHELL** card holds the app options (VR mode, theme, look sensitivity, move speed, invert look Y, crosshair, FPS counter, browser resolution, exit), saved to `%LOCALAPPDATA%\SciFiShell\settings.ini`. On Windows the other cards are native replacements for the Control Panel (no hosted Windows pages): Display (resolution/scaling info), Sound (volume up/down, mute), Network (active adapters and IPs), Mouse (pointer speed, swap buttons), Personalisation (Windows dark mode, shell theme), Power (battery, lock, sleep) and System (PC name, Windows, CPU, memory, uptime, clock, drives). System and Display cards are read-only. Not covered yet: changing resolution, brightness, Bluetooth, Wi-Fi networks, night light, app management.
-- **Windows (desktop)**: the browser, apps, built-in tools (monitor, terminal, files, editor), settings and the media viewer are all glass windows that behave the same way and stay open until you close them, so you can arrange as many as you like. New windows fan out in front of you. Click a window to raise it and give it the keyboard (the frontmost one under the aim takes the mouse; the world, doors and bus lanes still work around windows). **Drag** any window by its header (or the empty parts of the browser toolbar) to reposition it. Header buttons: minimise (hides it, restore from Alt+Tab or the ring), fullscreen, close. **Right click** a window to pin the view to it (the camera glides to centre it and the mouse moves a cursor); right click again, press Esc or click empty space to look around freely. Esc / pad B steps back inside the focused window (leaves the address bar or fullscreen, goes up a page) and never closes it. The middle mouse button / F2 only opens the command ring. Alt+Tab lists every window. VR keeps pointing with the controller.
+- **Windows (desktop)**: the browser, apps, built-in tools (monitor, terminal, files, editor), settings and the media viewer are all glass windows that behave the same way and stay open until you close them, so you can arrange as many as you like. New windows fan out in front of you. Click a window to raise it and give it the keyboard (the frontmost one under the aim takes the mouse; the world, doors and bus lanes still work around windows). **Drag** any window by its header (or the empty parts of the browser toolbar) to reposition it. Header buttons: minimise (hides it, restore from Alt+Tab or the ring), fullscreen, close. **Right click** a window to pin the view to it (the camera glides to centre it and the mouse moves a cursor); right click again, press Esc or click empty space to look around freely. Esc / pad B steps back inside the focused window (leaves the address bar or fullscreen, goes up a page) and never closes it. The middle mouse button / F2 only opens the command ring. Alt+Tab lists every window and glides you to a point in front of the one you choose (switching also turns flying on). In the command ring, hovering Apps opens its sub-ring automatically and moving away closes it. VR keeps pointing with the controller.
 - **Applications (Windows)**: the ring's Apps segment shows an outer ring of icons (from the shell) for Notepad plus every program pinned to your Windows taskbar (`SCIFI_OPEN_APPS=1` opens it at start for debugging; the pin list is read from (read from `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar`). Several programs can be open as panels at once; the panel under the pointer takes the keyboard. Caveats: single-instance apps that hand off to an already-running process, apps with splash windows, and elevated apps (e.g. Task Manager) may fail to attach or pick the wrong window. The program runs normally but its window is parked off-screen and mirrored onto a floating panel. Aim + click to use it; once clicked, the keyboard (typing, Ctrl+C/X/V/A/Z) goes to it (hold Alt to walk). Esc / B hides the panel (program keeps running); the X on the panel's bar closes the program, â€“ hides it. Input to the program's text area is injected as window messages; tabs, buttons and menus are clicked through UI Automation by the `SciFiUia.exe` helper (built next to `SciFiShell.exe`, must stay beside it). Menus/flyouts are mirrored into the panel. The hosted window is marked non-activating so clicking it never steals the foreground (and mouse capture) from the shell. There are no hover highlights. **Moving**: press and hold the panel's title bar (the dark strip, not the buttons) and aim around: the panel follows the pointer at the same distance and turns to face you; release to drop it (mouse only; pad/VR taps don't drag yet). **Fullscreen**: F11 or the square button on the panel's bar makes the program fill the screen (the window is resized to the screen's shape; the mouse / right stick move a pointer over it, the room is frozen); Esc / B / F11 returns. **Task switcher**: Alt+Tab (or Ctrl+Tab, which always works) opens a strip of cards (Room, each running program, Browser, Desktop); keep Alt/Ctrl held and press Tab (Shift+Tab goes back) or â†/â†’ to choose, release to switch; Esc cancels; Desktop minimises the shell. The shell grabs the keyboard so Alt+Tab (and the Win key) reach it instead of Windows; Ctrl+Tab therefore no longer reaches Notepad's tabs.
 - **City** (the home view - the app starts here): a neon-grid city generated from this PC (fly with the usual controls at 8x speed; buildings and the CPU/RAM/GPU monuments are solid. Aim at a tower and click to enter it (opens that folder as a file room; Esc returns to the city). Windows open on top of the city. CPU (spire + per-core pillars), RAM (slab bank) and GPU (ziggurat + VRAM pylon) sit in the middle and show live load; each fixed/removable drive is a platform sized by its capacity, with a lit pad for used space and one tower per top-level folder (height ~ file count, width ~ bytes), joined to the core by roads. A background scan starts ~1.5 s after launch (so it has usually finished listing by the time you open the city) and the city rises out of the grid the first time you view it. A `ReadDirectoryChangesW` watcher per fixed drive flashes towers (green = added, red = removed) with a beam and resizes them. GPU load/VRAM come from Windows performance counters; if unavailable they fall back to a gentle animation. `SCIFI_OPEN_CITY=1` opens it at start (debug). Click a bus lane (or run the `ride N` script command) to ride along it with a chase camera and a glowing trail; any movement input, click or Esc gets you off.
 - Limitations: fog, bloom and audio cues are shader approximations / not implemented; the viewer, web toolbar and editor panels use baked colours and don't follow the theme yet. `SCIFI_OPEN_RING=1` opens the ring at start (debug).

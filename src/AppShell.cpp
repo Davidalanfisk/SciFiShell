@@ -120,6 +120,59 @@ bool AppShell::init() {
     settings_.load();
     settingsPanel_ = std::make_unique<SettingsHub>(renderer_);
     monitor_ = std::make_unique<SysMonitor>(renderer_, [this] { return city_ ? city_->sysStats() : SystemStats{}; });
+    if (!mediaLib_) mediaLib_ = std::make_unique<MediaLibrary>();
+    {
+        MediaHost h;
+        h.tracks = [this] { return mediaLib_->tracks(); };
+        h.count = [this] { return mediaLib_->count(); };
+        h.scanning = [this] { return mediaLib_->scanning(); };
+        h.scanned = [this] { return mediaLib_->scanned(); };
+        h.addDefaultFolders = [this] {
+            const std::string home = homeDirectory();
+            for (const char* n : {"Music", "Videos"}) {
+                const std::string p = home + "\\" + n;
+                if (std::filesystem::exists(std::filesystem::u8path(p)) && !mediaLib_->hasFolder(p)) mediaLib_->addFolder(p);
+            }
+            mediaLib_->rescan();
+        };
+        h.pickFolders = [this] {
+            void* hwnd = nullptr;
+#ifdef _WIN32
+            SDL_SysWMinfo wm;
+            SDL_VERSION(&wm.version);
+            if (SDL_GetWindowWMInfo(window_, &wm)) hwnd = static_cast<void*>(wm.info.win.window);
+#endif
+            folderPicker_.start(hwnd);
+        };
+        h.pickBusy = [this] { return folderPicker_.busy(); };
+        h.folders = [this] { return mediaLib_->folders(); };
+        h.removeFolder = [this](const std::string& p) { mediaLib_->removeFolder(p); };
+        h.openFolderSettings = [this] {
+            if (!settingsPanel_->isOpen()) buildSettingsHub();
+            openSettingsWin();
+            settingsPanel_->openPage("MEDIA FOLDERS");
+        };
+        h.play = [this](const std::vector<std::string>& p, int i) { mediaPlayList(p, i); };
+        h.playStream = [this](const std::string& n, const std::string& u) { mediaPlayStream(n, u); };
+        h.now = [this] { return mediaNow(); };
+        h.toggle = [this] {
+            if (!mediaPlayer_.isOpen()) return;
+            if (mediaPlayer_.playing()) mediaPlayer_.pause();
+            else mediaPlayer_.play();
+        };
+        h.next = [this] { mediaNext(1); };
+        h.prev = [this] { mediaNext(-1); };
+        h.toggleShuffle = [this] { shuffle_ = !shuffle_; };
+        h.cycleRepeat = [this] { repeat_ = (repeat_ + 1) % 3; };
+        h.seek = [this](double s) { if (mediaPlayer_.isOpen()) mediaPlayer_.seek(s); };
+        h.setVolume = [this](float v) { mediaVol_ = v; mediaPlayer_.setVolume(v); };
+        h.spectrum = [this](float* b, int n) { return mediaPlayer_.isOpen() && mediaPlayer_.spectrum(b, n); };
+        h.videoFrame = [this](std::vector<uint8_t>& px, int& w, int& hh) {
+            return mediaPlayer_.isOpen() && mediaPlayer_.hasVideo() && mediaPlayer_.takeFrame(px, w, hh);
+        };
+        h.videoTarget = [this](int w, int hh) { mediaPlayer_.setMaxVideoSize(w, hh); };
+        media_ = std::make_unique<MediaApp>(renderer_, std::move(h));
+    }
     terminal_ = std::make_unique<Terminal>(renderer_);
     editor2d_ = std::make_unique<TextEditor>(renderer_);
     editor2d_->requestOpen = [this] {
@@ -439,7 +492,8 @@ std::vector<AppShell::WinRef> AppShell::allWins() {
     for (auto& a : apps_) v.push_back({kWinApp, a.get()});
 #endif
     for (PanelApp* p : {static_cast<PanelApp*>(monitor_.get()), static_cast<PanelApp*>(terminal_.get()),
-                        static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get())})
+                        static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get()),
+                        static_cast<PanelApp*>(media_.get())})
         if (p) v.push_back({kWinPanel, p});
     v.push_back({kWinSettings, settingsPanel_.get()});
     return v;
@@ -739,6 +793,47 @@ Vec3 AppShell::winForward() const {
     return {f.x * c + f.z * s, f.y, -f.x * s + f.z * c};
 }
 
+// Glides the camera to a spot squarely in front of a window (the window stays put). The pin is applied when it arrives.
+void AppShell::addMediaFolders(const std::vector<std::string>& paths) {
+    namespace fs = std::filesystem;
+    bool any = false;
+    for (const std::string& raw : paths) {
+        std::error_code ec;
+        fs::path p = fs::u8path(raw);
+        if (fs::is_regular_file(p, ec)) p = p.parent_path();
+        if (!fs::is_directory(p, ec)) continue;
+        const std::string s = p.u8string();
+        if (!mediaLib_->hasFolder(s)) {
+            mediaLib_->addFolder(s);
+            any = true;
+        }
+    }
+    if (any && media_ && !media_->isOpen()) openPanel(media_.get());
+}
+
+void AppShell::flyToWin(const WinRef& t) {
+    if (!t.p || vrOn_ || recT_ >= 0.0f) return;
+    Vec3 c, n;
+    float bw, bh;
+    if (!winBoundsOf(t, c, n, bw, bh)) return;
+    raiseFocus(t);
+    flying_ = true;  // the glide must not be undone by gravity
+    vy_ = 0.0f;
+    n.y = 0;
+    n = length(n) > 1e-4f ? normalize(n) : Vec3{0, 0, 1};
+    if (dot(n, camera_.position - c) < 0) n = n * -1.0f;
+    const float dist = fitDistance(bw, bh, renderer_.aspect(), std::tan(kFovY * 0.5f));
+    const float eyeHi = cityMode_ ? 450.0f : (room_->building() ? room_->maxEye() : 24.0f);
+    const float eyeY = clampf(c.y, 0.35f, eyeHi);
+    recFromPos_ = camera_.position;
+    recToPos_ = {c.x + n.x * dist, eyeY, c.z + n.z * dist};
+    if (cityMode_ && city_) city_->resolve(recToPos_, 0.8f, flying_ ? 0.35f : 1.7f);
+    recFromYaw_ = camera_.yaw;
+    recToYaw_ = std::atan2(n.x, n.z);
+    recFromPitch_ = camera_.pitch;
+    recToPitch_ = std::atan2(c.y - eyeY, dist);
+    recT_ = 0.0f;
+}
 void AppShell::openSettingsWin() {
     settingsPanel_->open(vrOn_ ? head_.eye : camera_.position, winForward());
     raiseFocus({kWinSettings, settingsPanel_.get()});
@@ -751,6 +846,7 @@ void AppShell::openPanel(PanelApp* p) {
         return;
     }
     p->open(vrOn_ ? head_.eye : camera_.position, winForward());
+    raiseFocus({kWinPanel, p});
 }
 void AppShell::runTool(Tool tool) {
     ring_->pulse();
@@ -777,11 +873,7 @@ void AppShell::runTool(Tool tool) {
         case Tool::Monitor: openPanel(monitor_.get()); break;
         case Tool::FileBrowser: openPanel(files2d_.get()); break;
         case Tool::Terminal: openPanel(terminal_.get()); break;
-        case Tool::Media:
-            if (!settingsPanel_->isOpen()) buildSettingsHub();
-            openSettingsWin();
-            settingsPanel_->openPage("MEDIA PLAYER");
-            break;
+        case Tool::Media: openPanel(media_.get()); break;
         case Tool::Settings:
             if (!settingsPanel_->isOpen()) buildSettingsHub();
             openSettingsWin();
@@ -830,7 +922,7 @@ void AppShell::runTool(Tool tool) {
                 for (const auto& n : top) topIcons.push_back(topLabel(n));
                 ring_->setLevel(0, top, topIcons, true);
             }
-            ring_->showApps(!ring_->appsMode());
+            if (!ring_->appsMode()) ring_->showApps(true);
 #endif
             return;  // the app ring stays open so an icon can be picked
     }
@@ -928,6 +1020,10 @@ bool AppShell::scriptExec(const std::string& line) {
                 if (v == "windows") ring_->enterLevel(1);
             }
         }
+    } else if (cmd == "switch") {
+        int id = 0;
+        is >> id;
+        switchTo(id);
     } else if (cmd == "tool") {
         std::string v;
         is >> v;
@@ -949,8 +1045,21 @@ bool AppShell::scriptExec(const std::string& line) {
         else if (v == "mediaplay") {
             mediaCategories();
             std::vector<std::string> all;
-            for (const MediaTrack& t : mediaLib_->tracks()) all.push_back(t.path);
-            mediaQueueSet(all, 0);
+            std::string one;
+            std::getline(is >> std::ws, one);
+            if (!one.empty()) mediaPlayList({one}, 0);
+            else {
+                for (const MediaTrack& t : mediaLib_->tracks()) all.push_back(t.path);
+                mediaQueueSet(all, 0);
+            }
+        }
+        else if (v == "mediaclick") {
+            int id = 0, arg = 0;
+            is >> id >> arg;
+            if (media_) media_->scriptClick(id, arg);
+        }
+        else if (v == "cinema") {
+            if (media_) media_->enterCinema();
         }
         else if (v == "apps") { if (!ring_->isOpen()) ring_->open(head_.eye, head_.forward); runTool(Tool::Apps); }
         else scriptLog("unknown tool: " + v);
@@ -1349,25 +1458,29 @@ void AppShell::switchTo(int id) {
         return;
     }
 #ifdef _WIN32
-    if (id >= 10 && id < 10 + static_cast<int>(apps_.size())) {
-        launchApp(id - 10);
+    if (id >= 100 && id < 100 + static_cast<int>(apps_.size())) {
+        launchApp(id - 100);
+        flyToWin(focus_);
         return;
     }
 #endif
     if (id == 40) {
         if (!settingsPanel_->isOpen()) buildSettingsHub();
         openSettingsWin();
+        flyToWin(focus_);
         return;
     }
-    PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get()};
-    if (id >= 30 && id < 34) {
+    PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get(), media_.get()};
+    if (id >= 30 && id < 35) {
         openPanel(panels[id - 30]);
+        flyToWin(focus_);
         return;
     }
 #ifdef SCIFI_HAS_CEF
     if (id == 2 && browser_) {
         if (!browser_->active()) browser_->open("", head_.eye, head_.forward, vrOn_);
         raiseFocus({kWinBrowser, browser_.get()});
+        flyToWin(focus_);
     }
 #endif
 }
@@ -1380,11 +1493,12 @@ void AppShell::handleSwitcher(FrameInput& in, PadState& pad) {
         std::vector<TaskSwitcher::Item> items;
         items.push_back({0, "ROOM", "File room", false});
         {
-            PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get()};
-            const char* names[] = {"MONITOR", "TERMINAL", "FILES", "EDITOR"};
-            for (int i = 0; i < 4; ++i)
-                if (panels[i]->exists()) {
-                    items.push_back({30 + i, names[i], panels[i]->hidden() ? "Minimised" : "Window", false});
+            PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get(), media_.get()};
+            const char* names[] = {"MONITOR", "TERMINAL", "FILES", "EDITOR", "MEDIA"};
+            const bool mediaPlaying = mediaNow().active;  // keeps its place in the switcher while it plays on with the window closed
+            for (int i = 0; i < 5; ++i)
+                if (panels[i]->exists() || (i == 4 && mediaPlaying)) {
+                    items.push_back({30 + i, names[i], panels[i]->exists() ? (panels[i]->hidden() ? "Minimised" : "Window") : "Now playing", false});
                     if (focus_ == WinRef{kWinPanel, panels[i]}) current = 30 + i;
                 }
             if (settingsPanel_->exists()) {
@@ -1395,8 +1509,8 @@ void AppShell::handleSwitcher(FrameInput& in, PadState& pad) {
 #ifdef _WIN32
         for (size_t i = 0; i < apps_.size(); ++i)
             if (apps_[i]->running()) {
-                items.push_back({10 + static_cast<int>(i), catalog_[i].name, "Program", false});
-                if (focus_ == WinRef{kWinApp, apps_[i].get()}) current = 10 + static_cast<int>(i);
+                items.push_back({100 + static_cast<int>(i), catalog_[i].name, "Program", false});
+                if (focus_ == WinRef{kWinApp, apps_[i].get()}) current = 100 + static_cast<int>(i);
             }
 #endif
 #ifdef SCIFI_HAS_CEF
@@ -1456,6 +1570,12 @@ void AppShell::tick(double dt) {
     const bool winTypingNow = focus_.p && winTyping(focus_);
     PadState pad = pad_.poll();
     if (in.quit) running_ = false;
+    {
+        std::vector<std::string> picked = std::move(in.dropped);
+        std::vector<std::string> more;
+        if (folderPicker_.poll(more)) picked.insert(picked.end(), more.begin(), more.end());
+        if (!picked.empty()) addMediaFolders(picked);
+    }
     if (in.resized) renderer_.resize();
     {
         const float th = std::tan(kFovY * 0.5f), asp = renderer_.aspect();
@@ -1466,7 +1586,8 @@ void AppShell::tick(double dt) {
         if (browser_) browser_->setView(asp, th);
 #endif
         for (PanelApp* p : {static_cast<PanelApp*>(monitor_.get()), static_cast<PanelApp*>(terminal_.get()),
-                            static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get())})
+                            static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get()),
+                            static_cast<PanelApp*>(media_.get())})
             p->setView(th, asp);
         settingsPanel_->setView(th, asp);
     }
@@ -1591,25 +1712,7 @@ void AppShell::tick(double dt) {
                     winFocus_ = false;
                 } else {
                     const WinRef t = topWinAt(o, d);
-                    Vec3 c, n;
-                    float bw, bh;
-                    if (t.p && winBoundsOf(t, c, n, bw, bh)) {
-                        raiseFocus(t);
-                        n.y = 0;
-                        n = length(n) > 1e-4f ? normalize(n) : Vec3{0, 0, 1};
-                        if (dot(n, camera_.position - c) < 0) n = n * -1.0f;
-                        const float dist = fitDistance(bw, bh, wasp, wth);
-                        const float eyeHi = cityMode_ ? 450.0f : (room_->building() ? room_->maxEye() : 24.0f);
-                        const float eyeY = clampf(c.y, 0.35f, eyeHi);
-                        recFromPos_ = camera_.position;
-                        recToPos_ = {c.x + n.x * dist, eyeY, c.z + n.z * dist};
-                        if (cityMode_ && city_) city_->resolve(recToPos_, 0.8f, flying_ ? 0.35f : 1.7f);  // never end up inside a building
-                        recFromYaw_ = camera_.yaw;
-                        recToYaw_ = std::atan2(n.x, n.z);
-                        recFromPitch_ = camera_.pitch;
-                        recToPitch_ = std::atan2(c.y - eyeY, dist);
-                        recT_ = 0.0f;
-                    }
+                    if (t.p) flyToWin(t);
                 }
             }
             if (recT_ >= 0.0f) {
@@ -1772,6 +1875,9 @@ void AppShell::tick(double dt) {
             updateCamera(dt, 0, 0, 0, lookX, lookY);
             room_->setHover(nullptr);
             ring_->pointer(o, d);
+#ifdef _WIN32
+            if (ring_->wantApps()) runTool(Tool::Apps);
+#endif
             if (in.wheel != 0.0f) ring_->cycle(in.wheel > 0 ? -1 : 1);
             if (up || in.left) ring_->cycle(-1);
             if (down || in.right) ring_->cycle(1);
@@ -1984,6 +2090,8 @@ void AppShell::tick(double dt) {
         terminal_->update(dt);
         files2d_->update(dt);
         editor2d_->update(dt);
+        media_->update(dt);
+        mediaStep();
         appsPanel_->update(dt, time_);
     }
     scriptTick(dt);
@@ -1991,7 +2099,6 @@ void AppShell::tick(double dt) {
         room_->pump();
         { Vec3 sp; float sy; if (room_->takeSpawn(sp, sy)) { camera_.position = sp; camera_.yaw = sy; camera_.pitch = 0; room_->setEye(sp); } }
         viewer_->update(dt, head_);
-        mediaStep();
         if (!pendingMediaPage_.empty()) {
             const std::string page = pendingMediaPage_;
             pendingMediaPage_.clear();

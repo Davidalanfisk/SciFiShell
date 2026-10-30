@@ -62,6 +62,7 @@ protected:
     virtual void onText(const std::string&) {}
     virtual void onCtrl(const std::string&) {}
     virtual void onClose() {}
+    virtual bool chromeless() const { return false; }  // fullscreen without the window buttons (video cinema)
     virtual double repaintInterval() const { return 0.0; }  // > 0: also repaint on a timer (animated content)
 
     int pw() const { return w_; }

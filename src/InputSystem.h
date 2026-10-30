@@ -39,6 +39,7 @@ struct FrameInput {
     bool screenshot = false;        // F12: save a screenshot
     bool toggleVR = false;
     bool quit = false;
+    std::vector<std::string> dropped;  // files / folders dropped on the window
     bool resized = false;
     bool mouseMoved = false;
     int mouseX = 0, mouseY = 0;

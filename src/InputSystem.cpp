@@ -28,6 +28,10 @@ FrameInput InputSystem::poll() {
                     }
                 }
                 break;
+            case SDL_DROPFILE:
+                if (e.drop.file) in.dropped.emplace_back(e.drop.file);
+                SDL_free(e.drop.file);
+                break;
             case SDL_TEXTINPUT: in.text += e.text.text; break;
             case SDL_MOUSEWHEEL: in.wheel += static_cast<float>(e.wheel.y); break;
             case SDL_KEYDOWN: {

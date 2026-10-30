@@ -15,6 +15,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -32,11 +34,43 @@ constexpr double kBytesPerSec = 48000.0 * 2 * 2;  // 48 kHz, stereo, 16-bit
 constexpr size_t kVideoQueue = 6;                 // decoded frames kept ahead of the clock
 constexpr double kAudioAhead = 0.3;               // seconds of audio kept queued
 using Clock = std::chrono::steady_clock;
+
+void fft(std::vector<float>& re, std::vector<float>& im) {
+    const size_t n = re.size();
+    for (size_t i = 1, j = 0; i < n; ++i) {
+        size_t bit = n >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) {
+            std::swap(re[i], re[j]);
+            std::swap(im[i], im[j]);
+        }
+    }
+    for (size_t len = 2; len <= n; len <<= 1) {
+        const float ang = -6.2831853f / static_cast<float>(len);
+        const float wr = std::cos(ang), wi = std::sin(ang);
+        for (size_t i = 0; i < n; i += len) {
+            float cr = 1, ci = 0;
+            for (size_t k = 0; k < len / 2; ++k) {
+                const size_t a = i + k, b = i + k + len / 2;
+                const float tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+                re[b] = re[a] - tr;
+                im[b] = im[a] - ti;
+                re[a] += tr;
+                im[a] += ti;
+                const float nr = cr * wr - ci * wi;
+                ci = cr * wi + ci * wr;
+                cr = nr;
+            }
+        }
+    }
+}
 }  // namespace
 
 struct MediaPlayer::Impl {
     struct Frame {
         double pts = 0;
+        int w = 0, h = 0;
         std::vector<uint8_t> rgba;
     };
 
@@ -64,6 +98,8 @@ struct MediaPlayer::Impl {
     uint64_t audioQueued = 0;
     double audioBase = 0;
     bool audioBaseSet = false;
+    std::deque<std::pair<uint64_t, std::vector<int16_t>>> hist;  // recent unscaled PCM and its byte offset, for the spectrum
+    size_t histBytes = 0;
 
     // Clock for files without audio.
     double clockBase = 0;
@@ -74,6 +110,7 @@ struct MediaPlayer::Impl {
     int vIdx = -1, aIdx = -1;
     LONG vStride = 0;
     bool vEos = false, aEos = false;
+    std::atomic<int> maxW{0}, maxH{0};
 
     ~Impl() { stop(); }
 
@@ -200,15 +237,47 @@ struct MediaPlayer::Impl {
         if (cwid >= w && chgt >= h && absStride >= static_cast<size_t>(w) * 4 && curLen >= absStride * chgt) {
             Frame f;
             f.pts = pts;
-            f.rgba.resize(static_cast<size_t>(w) * h * 4);
-            for (int y = 0; y < h; ++y) {
-                const BYTE* srow = data + (stride < 0 ? (chgt - 1 - y) : y) * absStride;
-                uint8_t* drow = &f.rgba[static_cast<size_t>(y) * w * 4];
-                for (int x = 0; x < w; ++x) {
-                    drow[x * 4 + 0] = srow[x * 4 + 2];
-                    drow[x * 4 + 1] = srow[x * 4 + 1];
-                    drow[x * 4 + 2] = srow[x * 4 + 0];
-                    drow[x * 4 + 3] = 255;
+            int ow = w, oh = h;
+            const int mw = maxW.load(), mh = maxH.load();
+            if (mw > 0 && mh > 0) {
+                const double s = std::min(1.0, std::min(static_cast<double>(mw) / w, static_cast<double>(mh) / h));
+                ow = std::max(2, static_cast<int>(w * s) & ~1);
+                oh = std::max(2, static_cast<int>(h * s) & ~1);
+            }
+            f.w = ow;
+            f.h = oh;
+            f.rgba.resize(static_cast<size_t>(ow) * oh * 4);
+            auto rowPtr = [&](int y) { return data + static_cast<size_t>(stride < 0 ? (chgt - 1 - y) : y) * absStride; };
+            if (ow == w && oh == h) {
+                for (int y = 0; y < h; ++y) {
+                    const BYTE* srow = rowPtr(y);
+                    uint8_t* drow = &f.rgba[static_cast<size_t>(y) * w * 4];
+                    for (int x = 0; x < w; ++x) {
+                        drow[x * 4 + 0] = srow[x * 4 + 2];
+                        drow[x * 4 + 1] = srow[x * 4 + 1];
+                        drow[x * 4 + 2] = srow[x * 4 + 0];
+                        drow[x * 4 + 3] = 255;
+                    }
+                }
+            } else {
+                // Four taps per output pixel, spread over its footprint: cheap and clean enough for moving pictures.
+                const double fx = static_cast<double>(w) / ow, fy = static_cast<double>(h) / oh;
+                std::vector<int> xa(static_cast<size_t>(ow)), xb(static_cast<size_t>(ow));
+                for (int x = 0; x < ow; ++x) {
+                    xa[static_cast<size_t>(x)] = std::min(w - 1, static_cast<int>((x + 0.25) * fx)) * 4;
+                    xb[static_cast<size_t>(x)] = std::min(w - 1, static_cast<int>((x + 0.75) * fx)) * 4;
+                }
+                for (int y = 0; y < oh; ++y) {
+                    const BYTE* r0 = rowPtr(std::min(h - 1, static_cast<int>((y + 0.25) * fy)));
+                    const BYTE* r1 = rowPtr(std::min(h - 1, static_cast<int>((y + 0.75) * fy)));
+                    uint8_t* d = &f.rgba[static_cast<size_t>(y) * ow * 4];
+                    for (int x = 0; x < ow; ++x, d += 4) {
+                        const int a = xa[static_cast<size_t>(x)], b = xb[static_cast<size_t>(x)];
+                        d[0] = static_cast<uint8_t>((r0[a + 2] + r0[b + 2] + r1[a + 2] + r1[b + 2]) >> 2);
+                        d[1] = static_cast<uint8_t>((r0[a + 1] + r0[b + 1] + r1[a + 1] + r1[b + 1]) >> 2);
+                        d[2] = static_cast<uint8_t>((r0[a] + r0[b] + r1[a] + r1[b]) >> 2);
+                        d[3] = 255;
+                    }
                 }
             }
             std::lock_guard<std::mutex> lk(m);
@@ -229,6 +298,12 @@ struct MediaPlayer::Impl {
         std::memcpy(pcm.data(), data, pcm.size() * 2);
         buffer->Unlock();
         std::lock_guard<std::mutex> lk(m);
+        hist.emplace_back(audioQueued, pcm);
+        histBytes += pcm.size() * 2;
+        while (histBytes > 600000 && hist.size() > 1) {
+            histBytes -= hist.front().second.size() * 2;
+            hist.pop_front();
+        }
         if (volume < 0.999f)
             for (auto& s : pcm) s = static_cast<int16_t>(s * volume);
         if (!audioBaseSet) {
@@ -332,6 +407,8 @@ struct MediaPlayer::Impl {
 
 MediaPlayer::MediaPlayer() = default;
 MediaPlayer::~MediaPlayer() = default;
+MediaPlayer::MediaPlayer(MediaPlayer&&) noexcept = default;
+MediaPlayer& MediaPlayer::operator=(MediaPlayer&&) noexcept = default;
 
 bool MediaPlayer::open(const std::string& path) {
     close();
@@ -422,6 +499,8 @@ void MediaPlayer::seek(double seconds) {
         I.frames.clear();
         if (I.dev) SDL_ClearQueuedAudio(I.dev);
         I.audioQueued = 0;
+        I.hist.clear();
+        I.histBytes = 0;
         I.audioBaseSet = false;
         I.clockBase = seconds;
         I.wallStart = Clock::now();
@@ -460,7 +539,58 @@ bool MediaPlayer::ended() const {
     return true;
 }
 
+bool MediaPlayer::spectrum(float* bands, int nb) {
+    if (!impl_ || nb <= 0) return false;
+    Impl& I = *impl_;
+    constexpr int N = 1024;
+    std::vector<float> re(N, 0.0f), im(N, 0.0f);
+    {
+        std::lock_guard<std::mutex> lk(I.m);
+        if (!I.hasA || !I.dev || !I.playing) return false;
+        const Uint32 q = SDL_GetQueuedAudioSize(I.dev);
+        const uint64_t played = I.audioQueued > q ? I.audioQueued - q : 0;
+        const uint64_t start = played >= N * 4 ? played - N * 4 : 0;
+        for (const auto& c : I.hist) {
+            const uint64_t s = c.first, e = s + c.second.size() * 2;
+            if (e <= start || s >= start + N * 4) continue;
+            for (uint64_t b = std::max(s, start); b + 3 < std::min(e, start + N * 4); b += 4) {
+                const size_t si = static_cast<size_t>((b - s) / 2);
+                const size_t di = static_cast<size_t>((b - start) / 4);
+                if (di < N && si + 1 < c.second.size()) re[di] = (c.second[si] + c.second[si + 1]) * (0.5f / 32768.0f);
+            }
+        }
+        while (I.hist.size() > 2 && I.hist.front().first + I.hist.front().second.size() * 2 < start) {
+            I.histBytes -= I.hist.front().second.size() * 2;
+            I.hist.pop_front();
+        }
+    }
+    for (int i = 0; i < N; ++i) re[static_cast<size_t>(i)] *= 0.5f - 0.5f * std::cos(6.2831853f * i / (N - 1));
+    fft(re, im);
+    const float lo = 50.0f, hi = 16000.0f, binHz = 48000.0f / N;
+    for (int b = 0; b < nb; ++b) {
+        const float f0 = lo * std::pow(hi / lo, static_cast<float>(b) / nb), f1 = lo * std::pow(hi / lo, static_cast<float>(b + 1) / nb);
+        const int k0 = std::clamp(static_cast<int>(f0 / binHz), 1, N / 2 - 1);
+        const int k1 = std::clamp(static_cast<int>(f1 / binHz), k0, N / 2 - 1);
+        float mag = 0;
+        for (int k = k0; k <= k1; ++k) mag = std::max(mag, std::sqrt(re[static_cast<size_t>(k)] * re[static_cast<size_t>(k)] + im[static_cast<size_t>(k)] * im[static_cast<size_t>(k)]));
+        const float db = 20.0f * std::log10(mag / (N * 0.25f) + 1e-6f) + static_cast<float>(b) * 0.45f;
+        bands[b] = std::clamp((db + 62.0f) / 52.0f, 0.0f, 1.0f);
+    }
+    return true;
+}
+
+void MediaPlayer::setMaxVideoSize(int w, int h) {
+    if (!impl_) return;
+    impl_->maxW = w;
+    impl_->maxH = h;
+}
+
 bool MediaPlayer::takeFrame(std::vector<uint8_t>& rgba) {
+    int w, h;
+    return takeFrame(rgba, w, h);
+}
+
+bool MediaPlayer::takeFrame(std::vector<uint8_t>& rgba, int& fw, int& fh) {
     if (!impl_) return false;
     Impl& I = *impl_;
     std::lock_guard<std::mutex> lk(I.m);
@@ -468,6 +598,8 @@ bool MediaPlayer::takeFrame(std::vector<uint8_t>& rgba) {
     double clk = I.clockLocked();
     while (!I.frames.empty() && (I.frames.front().pts <= clk + 0.005 || (!I.playing && !got))) {
         rgba.swap(I.frames.front().rgba);
+        fw = I.frames.front().w;
+        fh = I.frames.front().h;
         I.frames.pop_front();
         got = true;
     }
@@ -482,6 +614,9 @@ namespace sf {
 struct MediaPlayer::Impl {};
 MediaPlayer::MediaPlayer() = default;
 MediaPlayer::~MediaPlayer() = default;
+MediaPlayer::MediaPlayer(MediaPlayer&&) noexcept = default;
+MediaPlayer& MediaPlayer::operator=(MediaPlayer&&) noexcept = default;
+bool MediaPlayer::spectrum(float*, int) { return false; }
 bool MediaPlayer::open(const std::string&) { return false; }
 void MediaPlayer::close() {}
 bool MediaPlayer::isOpen() const { return false; }
@@ -499,6 +634,8 @@ void MediaPlayer::setVolume(float) {}
 float MediaPlayer::volume() const { return 1; }
 bool MediaPlayer::ended() const { return false; }
 bool MediaPlayer::takeFrame(std::vector<uint8_t>&) { return false; }
+bool MediaPlayer::takeFrame(std::vector<uint8_t>&, int&, int&) { return false; }
+void MediaPlayer::setMaxVideoSize(int, int) {}
 }  // namespace sf
 
 #endif

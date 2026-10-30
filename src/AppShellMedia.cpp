@@ -2,8 +2,10 @@
 // Audio plays through a MediaPlayer owned by the shell so it keeps going with every panel closed; video opens in the viewer.
 #include <algorithm>
 #include <cmath>
+#include <atomic>
 #include <filesystem>
 #include <random>
+#include <thread>
 
 #include "AppShell.h"
 
@@ -26,8 +28,16 @@ std::string clock(double s) {
 }
 }  // namespace
 
+// A radio stream being opened on a worker thread (opening a URL can take seconds); the shell adopts the player once done.
+struct StreamOpen {
+    std::atomic<bool> done{false};
+    bool ok = false;
+    MediaPlayer mp;
+};
+
 void AppShell::mediaPlayAt(int index, int dir) {
-    for (int tries = 0; tries < 8; ++tries) {
+    stream_.reset();
+    nowLive_ = false;    for (int tries = 0; tries < 8; ++tries) {
         if (index < 0 || index >= static_cast<int>(queue_.size())) break;
         const std::string path = queue_[static_cast<size_t>(index)];
         queueIndex_ = index;
@@ -36,7 +46,7 @@ void AppShell::mediaPlayAt(int index, int dir) {
         MediaLibrary::isMediaFile(path, &video);
         nowVideo_ = video;
         mediaPlayer_.close();
-        if (video) {
+        if (video && !viaWindow_) {
             OpenRequest req;
             req.path = path;
             req.name = nowTitle_;
@@ -76,14 +86,81 @@ void AppShell::mediaNext(int dir) {
     mediaPlayAt(next, dir);
 }
 
+void AppShell::mediaPlayList(const std::vector<std::string>& paths, int start) {
+    if (paths.empty()) return;
+    queue_ = paths;
+    viaWindow_ = true;
+    mediaPlayAt(std::clamp(start, 0, static_cast<int>(paths.size()) - 1), 1);
+}
+
+void AppShell::mediaPlayStream(const std::string& name, const std::string& url) {
+    mediaPlayer_.close();
+    queue_.clear();
+    queueIndex_ = -1;
+    nowTitle_ = name;
+    nowVideo_ = false;
+    nowLive_ = true;
+    auto st = std::make_shared<StreamOpen>();
+    stream_ = st;
+    SDL_InitSubSystem(SDL_INIT_AUDIO);
+    std::thread([st, url] {
+        st->ok = st->mp.open(url);
+        st->done = true;
+    }).detach();
+}
+
+NowInfo AppShell::mediaNow() {
+    NowInfo n;
+    n.vol = mediaVol_;
+    n.shuffle = shuffle_;
+    n.repeat = repeat_;
+    n.title = nowTitle_;
+    if (stream_) {
+        n.active = true;
+        n.live = true;
+        n.loading = true;
+        return n;
+    }
+    if (nowTitle_.empty() || !mediaPlayer_.isOpen()) {
+        if (nowVideo_ && !viaWindow_ && queueIndex_ >= 0 && queueIndex_ < static_cast<int>(queue_.size())) {  // playing in the viewer
+            n.active = true;
+            n.video = true;
+            n.path = queue_[static_cast<size_t>(queueIndex_)];
+        }
+        return n;
+    }
+    n.active = true;
+    n.live = nowLive_;
+    n.video = nowVideo_;
+    n.playing = mediaPlayer_.playing();
+    n.pos = mediaPlayer_.position();
+    n.dur = mediaPlayer_.duration();
+    if (!nowLive_ && queueIndex_ >= 0 && queueIndex_ < static_cast<int>(queue_.size())) n.path = queue_[static_cast<size_t>(queueIndex_)];
+    return n;
+}
+
 void AppShell::mediaStep() {
-    if (!mediaLib_ || !mediaPlayer_.isOpen() || nowVideo_ || !mediaPlayer_.ended()) return;
+    if (stream_ && stream_->done.load()) {
+        std::shared_ptr<StreamOpen> st = std::move(stream_);
+        stream_.reset();
+        if (st->ok) {
+            mediaPlayer_ = std::move(st->mp);
+            mediaPlayer_.setVolume(mediaVol_);
+            mediaPlayer_.play();
+        } else {
+            nowTitle_.clear();
+            nowLive_ = false;
+        }
+        return;
+    }
+    if (!mediaLib_ || !mediaPlayer_.isOpen() || nowLive_ || (nowVideo_ && !viaWindow_) || !mediaPlayer_.ended()) return;
     if (repeat_ == 2) { mediaPlayer_.seek(0); mediaPlayer_.play(); }
     else mediaNext(1);
 }
 
 void AppShell::mediaQueueSet(const std::vector<std::string>& paths, int start) {
     queue_ = paths;
+    viaWindow_ = false;
     mediaPlayAt(start, 1);
     pendingMediaPage_ = "MEDIA TRACKS";
 }

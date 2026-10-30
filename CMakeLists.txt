@@ -75,6 +75,9 @@ set(SOURCES
     src/Thumbnails.cpp
     src/MediaPlayer.cpp
     src/MediaLibrary.cpp
+    src/MediaMeta.cpp
+    src/MediaApp.cpp
+    src/FolderPicker.cpp
     src/AppShellMedia.cpp
     src/CodeEditor.cpp
     src/Viewer.cpp

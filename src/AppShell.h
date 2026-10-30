@@ -11,7 +11,9 @@
 #include "Renderer.h"
 #include "Settings.h"
 #include "MediaLibrary.h"
+#include "FolderPicker.h"
 #include "MediaPlayer.h"
+#include "MediaApp.h"
 #ifdef _WIN32
 #include "AppWindow.h"
 #include "AppCatalog.h"
@@ -34,6 +36,8 @@
 struct SDL_Window;
 
 namespace sf {
+
+struct StreamOpen;
 
 class AppShell {
 public:
@@ -102,10 +106,18 @@ private:
     // Media player (see AppShellMedia.cpp)
     void mediaPlayAt(int index, int dir);
     void mediaNext(int dir);
+    void mediaPlayList(const std::vector<std::string>& paths, int start);
+    void mediaPlayStream(const std::string& name, const std::string& url);
+    NowInfo mediaNow();
+    std::unique_ptr<MediaApp> media_;
+    std::shared_ptr<StreamOpen> stream_;
+    bool nowLive_ = false, viaWindow_ = false;
     void mediaStep();
     void mediaQueueSet(const std::vector<std::string>& paths, int start);
     std::vector<SettingsCategory> mediaCategories();
     std::unique_ptr<MediaLibrary> mediaLib_;
+    FolderPicker folderPicker_;
+    void addMediaFolders(const std::vector<std::string>& paths);
     MediaPlayer mediaPlayer_;
     std::vector<std::string> queue_;
     int queueIndex_ = -1, repeat_ = 0, trackFilter_ = 0, trackPage_ = 0, queuePage_ = 0;
@@ -137,6 +149,7 @@ private:
     std::vector<WinRef> allWins();
     void syncWins();
     void raiseFocus(WinRef w);
+    void flyToWin(const WinRef& t);
     void setFocus(WinRef w);
     WinRef topWinAt(const Vec3& o, const Vec3& d);
     bool winOpen(WinRef w);

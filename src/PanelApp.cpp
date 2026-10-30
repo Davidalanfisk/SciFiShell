@@ -189,7 +189,8 @@ void PanelApp::wheel(float notches) {
 void PanelApp::repaint() {
     std::fill(bm_.rgba.begin(), bm_.rgba.end(), uint8_t(0));
     paint(bm_);
-    ui::windowButtons(bm_, w_, hoverBtn_, fs_, close_, &hide_);
+    if (fullscreen_ && chromeless()) fs_ = close_ = hide_ = ui::Rect{-100, -100, -99, -99};
+    else ui::windowButtons(bm_, w_, hoverBtn_, fs_, close_, &hide_);
     if (!label_) label_ = renderer_.createDynamicLabel(w_, h_);
     renderer_.updateLabel(*label_, bm_.rgba.data(), w_, h_);
     dirty_ = false;
