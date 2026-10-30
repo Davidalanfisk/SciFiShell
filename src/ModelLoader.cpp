@@ -122,7 +122,12 @@ bool loadGltfMesh(const std::string& path, std::vector<float>& vertices, std::ve
                     const cgltf_buffer_view* bv = tex->image->buffer_view;
                     px = stbi_load_from_memory(static_cast<const unsigned char*>(bv->buffer->data) + bv->offset, static_cast<int>(bv->size), &tw, &th, &tc, 4);
                 }
-            }            for (int y = 0; y < kTile; ++y)
+            }            // Emissive materials become a fully saturated tile; the shader turns those into unlit glow.
+            if (mat && !px && std::max({mat->emissive_factor[0], mat->emissive_factor[1], mat->emissive_factor[2]}) > 0.05f) {
+                const float mx = std::max({mat->emissive_factor[0], mat->emissive_factor[1], mat->emissive_factor[2]});
+                for (int k = 0; k < 3; ++k) f[k] = mat->emissive_factor[k] / mx;
+            }
+            for (int y = 0; y < kTile; ++y)
                 for (int x = 0; x < kTile; ++x) {
                     unsigned char* o = &atlas->rgba[(static_cast<size_t>((m / grid) * kTile + y) * atlas->w + (m % grid) * kTile + x) * 4];
                     float c[3] = {1, 1, 1};

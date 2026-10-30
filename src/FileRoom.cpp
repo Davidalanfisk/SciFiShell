@@ -541,24 +541,8 @@ void FileRoom::buildCorridor() {
             add({0, 0.2f, fz}, {6.0f, 0.4f, 6.0f}, wall * 3.0f, 0.0f, true);
             add({0, 0.42f, fz}, {5.6f, 0.04f, 5.6f}, rim, -1.0f, true);
             add({0, H * 0.5f, fz}, {0.12f, H, 0.12f}, rim * 1.3f, -1.0f, true);
-            auto m = std::make_unique<ModelNode>(renderer_, "CarConcept", 2.2f, rim * 0.9f);
-            m->position = {0, 0.5f, fz};
-            root_->add(std::move(m));
         }
     }
-    // A pair of hologram pedestals showing a model, chosen per building.
-    if (L < 3 && hw >= 8.0f) {
-        static const char* props[7] = {"Duck", "CesiumMan", "CarConcept", "GlamVelvetSofa", "IridescenceLamp", "SheenChair", "CarbonFibre"};
-        for (int i = 0; i < 2; ++i) {
-            const float px = i == 0 ? -5.5f : 5.5f, pz = kFrontZ - 5.5f;
-            add({px, 0.25f, pz}, {1.6f, 0.5f, 1.6f}, wall * 3.0f, 0.0f, true);
-            add({px, 0.52f, pz}, {1.4f, 0.04f, 1.4f}, rim, -1.0f, true);
-            auto m = std::make_unique<ModelNode>(renderer_, props[(pathHash / 12 + i * 3 + lookIdx) % 7], 1.8f, rim * 0.8f);
-            m->position = {px, 0.6f, pz};
-            root_->add(std::move(m));
-        }
-    }
-
     // A skylight over the fountain.
     add({0, H - 0.04f, fz}, {9.0f, 0.06f, 9.0f}, light * 0.9f, -1.0f, true);
 

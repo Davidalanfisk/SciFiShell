@@ -13,6 +13,7 @@ namespace sf {
 
 namespace {
 constexpr float kRoadY = 0.08f;
+constexpr float kCycleFlip = 0.0f;  // set to pi if the model faces backwards
 constexpr float kSlabH = 1.0f;
 constexpr float kPlateH = 0.3f;
 constexpr float kPadSlope = 1.4f;  // width of the sloped rim round each block pad
@@ -636,6 +637,35 @@ void City::renderMonuments(Renderer& r, Vec3 eye) {
     }
 }
 
+void City::renderCycle(Renderer& r, Vec3 pos, float yaw, const std::vector<Vec3>& path, float dist) {
+    const Theme& th = currentTheme();
+    const int mid = r.model("LightCycle");
+    if (mid >= 0) {
+        const Vec3 sz = r.modelSize(mid);
+        const float h = 1.8f;
+        // The model is normalised to height 1; turn its long axis to the direction of travel.
+        const float turn = sz.x > sz.z ? kPi * 0.5f : 0.0f;
+        r.drawModel(mid, *dummy_, Mat4::translate({pos.x, pos.y + 0.06f, pos.z}) * Mat4::rotateY(yaw + turn + kCycleFlip) * Mat4::scale({h, h, h}), th.accent, 0.5f, true);
+    }
+    // Light ribbon: the last stretch of the route, drawn as a thin glowing wall.
+    const float from = std::max(0.0f, dist - 90.0f);
+    float acc = 0;
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+        const Vec3 a = path[i], b = path[i + 1];
+        const float dx = b.x - a.x, dz = b.z - a.z, sl = std::sqrt(dx * dx + dz * dz);
+        const float s0 = acc, s1 = acc + sl;
+        acc = s1;
+        if (sl < 1e-3f || s1 < from || s0 > dist) continue;
+        const float u0 = std::max(0.0f, (from - s0) / sl), u1 = std::min(1.0f, (dist - 2.2f - s0) / sl);
+        if (u1 <= u0) continue;
+        const Vec3 p0{a.x + dx * u0, a.y + (b.y - a.y) * u0, a.z + dz * u0}, p1{a.x + dx * u1, a.y + (b.y - a.y) * u1, a.z + dz * u1};
+        const Vec3 c{(p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f + 0.75f, (p0.z + p1.z) * 0.5f};
+        const float lx = std::fabs(p1.x - p0.x), lz = std::fabs(p1.z - p0.z);
+        if (lx > lz) renderBox(r, c, {lx, 1.5f, 0.12f}, th.accent * 0.8f, 0.4f, 7, 1, 0, 0);
+        else renderBox(r, c, {0.12f, 1.5f, lz}, th.accent * 0.8f, 0.4f, 7, 1, 0, 0);
+    }
+}
+
 void City::render(Renderer& r, Vec3 eye) {
     labelBudget_ = 2;
     renderMonuments(r, eye);
@@ -819,20 +849,6 @@ void City::render(Renderer& r, Vec3 eye) {
                     renderBox(r, {t.x + tp.cx, base + (tp.y0 + tp.y1) * 0.5f, t.z + tp.cz}, {tp.sx, tp.y1 - tp.y0, tp.sz}, tp.glow ? Vec3{0.9f, 1.0f, 1.0f} : tint,
                               seed, tp.glow ? 4 : 3, t.grow, tp.glow ? 1.0f : 0.0f, hovered ? 0.6f : t.flash);
                     ++draws;
-                }
-                if (t.prop >= 0 && t.grow > 0.95f && tdx * tdx + tdz * tdz < 260.0f * 260.0f) {
-                    const TPart* top = &parts[0];
-                    for (const TPart& tp : parts)
-                        if (tp.y1 > top->y1 + 0.01f) top = &tp;
-                    static const char* names[7] = {"Duck", "CesiumMan", "CarConcept", "GlamVelvetSofa", "IridescenceLamp", "SheenChair", "CarbonFibre"};
-                    const int mid = r.model(names[t.prop]);
-                    if (mid >= 0) {
-                        const Vec3 ms = r.modelSize(mid);
-                        const float fit = std::min(top->sx, top->sz) * 0.85f / std::max(0.2f, std::max(ms.x, ms.z));
-                        const float ph = std::min(fit, 10.0f);
-                        r.drawModel(mid, *dummy_, Mat4::translate({t.x + top->cx, base + top->y1 + 0.25f, t.z + top->cz}) * Mat4::rotateY(float(wall_) * 0.5f + seed * 6.0f) * Mat4::scale({ph, ph, ph}), tint * 1.2f, seed);
-                        ++draws;
-                    }
                 }
                 if (!mirror && h > 3.4f && tdx * tdx + tdz * tdz < 70.0f * 70.0f && t.grow > 0.95f) {  // street door on the +z face
                     if (!t.doorLabel && labelBudget_ > 0) {

@@ -80,6 +80,8 @@ private:
     float rideLen_ = 0, rideDist_ = 0, rideT_ = 0, rideY0_ = 0;
     void startRide(const std::vector<Vec3>& path);
     void rideStep(double dt);
+    Vec3 ridePos_{};
+    float rideYaw_ = 0;
     // Loading indicator (white command-ring) and the work deferred until it has been drawn once.
     std::function<void()> deferred_;
     int deferDelay_ = 0;
@@ -153,7 +155,7 @@ private:
     void scriptLog(const std::string& s);
     std::vector<std::string> script_;
     size_t scriptPc_ = 0;
-    double scriptWait_ = 0, scriptPoll_ = 0;
+    double scriptWait_ = 0, scriptPoll_ = 0, waitCity_ = 0;
     std::string shotPath_;
     struct ScriptMove {
         bool on = false, pos = false, ang = false, hasY = false;

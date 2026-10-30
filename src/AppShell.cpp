@@ -563,6 +563,7 @@ bool AppShell::scriptExec(const std::string& line) {
     const Vec3 fwd{-std::sin(camera_.yaw), 0, -std::cos(camera_.yaw)}, right{std::cos(camera_.yaw), 0, -std::sin(camera_.yaw)};
     if (cmd.empty() || cmd[0] == '#') return true;
     if (cmd == "wait") scriptWait_ = num(1);
+    else if (cmd == "waitcity") waitCity_ = 120.0;
     else if (cmd == "goto") {
         const float x = num(0), y = num(camera_.position.y), z = num(0), s = num(0);
         startMove(true, false, true, {x, y, z}, 0, 0, s);
@@ -698,6 +699,11 @@ void AppShell::scriptTick(double dt) {
         return;
     }
     if (scriptWait_ > 0) { scriptWait_ -= dt; return; }
+    if (waitCity_ > 0) {  // "waitcity": hold the script until the city has been built (or the cap runs out)
+        waitCity_ -= dt;
+        if (!city_ || city_->settled()) waitCity_ = 0;
+        else return;
+    }
     if (shotPending_) return;
     if (scriptPc_ >= script_.size()) {  // idle: look for a fresh control file twice a second
         script_.clear();
@@ -717,7 +723,7 @@ void AppShell::scriptTick(double dt) {
         return;
     }
     // Run commands until one needs time.
-    for (int guard = 0; guard < 64 && scriptPc_ < script_.size() && scriptWait_ <= 0 && !mv_.on && !shotPending_; ++guard)
+    for (int guard = 0; guard < 64 && scriptPc_ < script_.size() && scriptWait_ <= 0 && waitCity_ <= 0 && !mv_.on && !shotPending_; ++guard)
         scriptExec(script_[scriptPc_++]);
 }
 
@@ -796,9 +802,14 @@ void AppShell::rideStep(double dt) {
     if (dy > kPi) dy -= 2.0f * kPi;
     if (dy < -kPi) dy += 2.0f * kPi;
     camera_.yaw += dy * k;
-    camera_.pitch += (-0.06f - camera_.pitch) * k * 0.5f;
+    camera_.pitch += (-0.2f - camera_.pitch) * k * 0.5f;
+    // Chase camera: behind and above the light cycle.
     const float e = std::min(1.0f, rideT_ * 2.0f);
-    camera_.position = {pos.x, rideY0_ + (pos.y + 2.32f - rideY0_) * e, pos.z};
+    const Vec3 fwd{-std::sin(camera_.yaw), 0.0f, -std::cos(camera_.yaw)};
+    const float back = 4.5f * e;
+    ridePos_ = pos;
+    rideYaw_ = camera_.yaw;
+    camera_.position = {pos.x - fwd.x * back, rideY0_ + (pos.y + 2.6f - rideY0_) * e, pos.z - fwd.z * back};
     vy_ = 0.0f;
     flying_ = true;
     if (done) {
@@ -1887,12 +1898,18 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         renderer_.beginReflection();
         renderer_.setMirror(true);
         activeRoot().renderTree(renderer_);
-        if (cityMode_ && city_) city_->render(renderer_, realEye);
+        if (cityMode_ && city_) {
+            city_->render(renderer_, realEye);
+            if (riding_ && rideT_ > 0.3f) city_->renderCycle(renderer_, ridePos_, rideYaw_, ridePath_, rideDist_);
+        }
         renderer_.setMirror(false);
         renderer_.endReflection();
     }
     activeRoot().renderTree(renderer_);
-    if (cityMode_ && city_) city_->render(renderer_, realEye);
+    if (cityMode_ && city_) {
+            city_->render(renderer_, realEye);
+            if (riding_ && rideT_ > 0.3f) city_->renderCycle(renderer_, ridePos_, rideYaw_, ridePath_, rideDist_);
+        }
     if (cityMode_ && city_) renderer_.postWorld();  // effects are for the city; inside buildings and rooms text stays sharp
     if (state_ == State::FileRoom && viewer_->active()) {
         renderer_.clearDepth();

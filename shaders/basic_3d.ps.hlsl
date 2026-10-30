@@ -215,7 +215,9 @@ float3 buildingColor(PSInput In)
         float fres = pow(1.0 - abs(dot(n, V)), 3.0);
         float diff = saturate(dot(n, normalize(float3(0.4, 0.8, 0.5))));
         float3 tex = g_Tex.Sample(g_Tex_sampler, In.UV).rgb;
-        col = tex * (0.3 + 0.7 * diff) + neon * fres * 0.25;
+        float mxc = max(tex.r, max(tex.g, tex.b)), mnc = min(tex.r, min(tex.g, tex.b));
+        float emis = step(0.97, mxc) * smoothstep(0.35, 0.7, mxc - mnc);  // saturated tiles are emissive materials
+        col = tex * (0.3 + 0.7 * diff) * (1.0 - emis) + tex * emis * 2.2 + neon * fres * 0.25;
         return col;  // skip the city haze: the model sits in lit rooms
     }
     else

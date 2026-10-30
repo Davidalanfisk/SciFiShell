@@ -22,6 +22,8 @@ public:
     // Advances the data/animation. `active` = the city is on screen (emergence only progresses while it is).
     void update(double dt, bool active, Vec3 eye);
     void render(Renderer& renderer, Vec3 eye);
+    // The light cycle used while riding a bus lane, with its light ribbon trailing along the route behind it.
+    void renderCycle(Renderer& renderer, Vec3 pos, float yaw, const std::vector<Vec3>& path, float dist);
 
     // Pushes a point (a camera eye) out of the buildings; landing on a roof is allowed.
     void resolve(Vec3& p, float radius, float eyeH = 0.35f) const;
@@ -45,6 +47,11 @@ public:
 
     float extent() const { return extent_; }
     bool built() const { return built_; }
+    bool settled() const {  // every drive scanned and its buildings laid out
+        if (!built_ || snap_.empty()) return false;
+        for (const auto& d : snap_) if (!d.done) return false;
+        return true;
+    }
     float emergeProgress() const;
 
 private:
