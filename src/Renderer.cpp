@@ -677,7 +677,8 @@ void Renderer::drawBuilding(const GpuLabel& any, const Mat4& world, Vec3 neon, f
     const float params[4] = {emerge, fill, flash, static_cast<float>(kind)};
     Vec3 eye = view_.rigidInverse().transformPoint({0, 0, 0});
     const float eyeL[4] = {eye.x, eye.y, eye.z, 0};
-    draw(solidPipeline_, any.solidSRB, cube_, world, color, params, eyeL);
+    if (kind == 6) draw(floorPipeline_, any.floorSRB, cube_, world, color, params, eyeL);  // glass pane: blended, no depth write
+    else draw(solidPipeline_, any.solidSRB, cube_, world, color, params, eyeL);
 }
 
 int Renderer::model(const std::string& name) {

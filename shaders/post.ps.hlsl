@@ -78,15 +78,18 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
     }
     streak /= 8.0;
 
-    col += glow * 0.8 + streak * 0.12 * lerp(float3(1, 1, 1), g_Accent.rgb, 0.6);
+    col += glow * 0.5 + streak * 0.08 * lerp(float3(1, 1, 1), g_Accent.rgb, 0.6);
 
     // Cool teal grade in the shadows, a touch more punch overall.
     float l = dot(col, float3(0.299, 0.587, 0.114));
     col += float3(0.0, 0.004, 0.012) * (1.0 - saturate(l * 3.0));
     col = lerp(float3(l, l, l), col, 1.12);
 
+    // Moody grade: deepen the mid-tones and lower exposure so the city stays dark with the neon standing out.
+    col = pow(max(col, 0.0), 1.35) * 0.9;
+
     // Vignette.
-    col *= 1.0 - saturate(r2 * 1.35);
+    col *= 1.0 - saturate(r2 * 1.5);
 
     // Dither the dark gradients so fog and haze do not band, plus a whisper of film grain.
     float n = hash(In.Pos.xy + frac(g_Color.z) * 61.0) - 0.5;

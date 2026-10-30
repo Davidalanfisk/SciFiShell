@@ -186,6 +186,8 @@ float3 buildingColor(PSInput In)
     else if (kind == 6)
     {
         // fillF = 0: the drive's footprint slab; fillF > 0: the lit "used space" pad on top of it.
+        // Drawn as a glass pane: no body colour, just a faint tint, the grid and a clear outline.
+        col = float3(0, 0, 0);
         if (top)
         {
             float2 wp = In.WPos.xz;
@@ -194,7 +196,7 @@ float3 buildingColor(PSInput In)
             float gl = 1.0 - smoothstep(0.0, 2.0, min((0.5 - g.x) / fw.x, (0.5 - g.y) / fw.y));
             gl *= saturate(1.0 - max(fw.x, fw.y) * 3.0);
             col += neon * gl * (0.10 + 0.5 * fillF);
-            col += neon * (0.03 + 0.10 * fillF);
+            col += neon * (0.012 + 0.04 * fillF);
         }
         col += neon * rim * (0.55 + 0.7 * fillF);
     }
@@ -235,6 +237,7 @@ float3 buildingColor(PSInput In)
     if (grow > 0.001 && kind != 7 && (top || rim > 0.0)) col += neon * grow * 1.2 * (top ? 1.0 : rim);
 
     float mist = smoothstep(650.0, 980.0, dist);  // dark ring that masks the edge of the map
+    if (kind == 6) return col * (1.0 - mist);  // glass: additive light only, no haze (premultiplied blend)
     // Dense low fog: barely there up close, building to a thick glowing bank with distance, deepest near the ground and
     // lit by the neon of whatever is inside it.
     float fogD = 1.0 - exp(-pow(dist * 0.0042, 1.2));
@@ -249,7 +252,9 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
     float tm = g_Accent.w;
     if (g_Params.w > 2.5)
     {
-        Color = float4(buildingColor(In), 1.0);
+        const float3 bc = buildingColor(In);
+        const bool glass = (int)(g_Params.w + 0.5) == 6;
+        Color = float4(bc, glass ? saturate(0.06 + 0.9 * max(bc.r, max(bc.g, bc.b))) : 1.0);
         return;
     }
     // Cloud dome (cube centred on the eye, seen from inside).
