@@ -507,9 +507,10 @@ void AppShell::runTool(Tool tool) {
                     bm.h = 128;
                     bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 0);
                     auto line = [&](const std::string& s, float px, float base) {
+                        px = std::min(px, px * 232.0f / std::max(1.0f, measureText(s, px, FontFace::UI)));
                         drawText(bm, (bm.w - measureText(s, px, FontFace::UI)) * 0.5f, base, s, px, FontFace::UI, Color8{});
                     };
-                    if (sp == std::string::npos) line(n, 70.0f, 86.0f);
+                    if (sp == std::string::npos) line(n, std::min(70.0f, 70.0f * 224.0f / std::max(1.0f, measureText(n, 70.0f, FontFace::UI))), 86.0f);
                     else {
                         line(n.substr(0, sp), 50.0f, 56.0f);
                         line(n.substr(sp + 1), 50.0f, 112.0f);
@@ -630,6 +631,7 @@ bool AppShell::scriptExec(const std::string& line) {
         else if (v == "edtype") { std::string s; std::getline(is >> std::ws, s); editor2d_->text(s); }
         else if (v == "edkey") { editor2d_->key(EditKey::Enter); }
         else if (v == "edsave") { editor2d_->key(EditKey::Save); }
+        else if (v == "fs") { if (panel_) panel_->toggleFullscreen(); }
         else if (v == "termtype") { std::string s; std::getline(is >> std::ws, s); terminal_->text(s + "\r"); }
         else if (v == "media") runTool(Tool::Media);
         else if (v == "page") { std::string pg; std::getline(is >> std::ws, pg); settingsPanel_->openPage(pg); }
@@ -852,16 +854,16 @@ void AppShell::tourStep(double dt) {
     const float ux = vel.x / hl, uz = vel.z / hl;
     // Look ahead for buildings and rise early enough to clear them.
     float need = 0;
-    for (float s : {0.0f, 8.0f, 16.0f, 26.0f}) need = std::max(need, city_->clearHeight(pos.x + ux * s, pos.z + uz * s, 5.5f));
+    for (float s : {0.0f, 10.0f, 20.0f, 32.0f, 48.0f}) need = std::max(need, city_->clearHeight(pos.x + ux * s, pos.z + uz * s, 5.5f));
     const float want = std::max(pos.y, need + 3.0f);
-    const float k = 1.0f - std::exp(-static_cast<float>(dt) * (want > tourY_ ? 7.0f : 2.5f));
+    const float k = 1.0f - std::exp(-static_cast<float>(dt) * (want > tourY_ ? 3.5f : 1.2f));
     tourY_ += (want - tourY_) * k;
     camera_.position = {pos.x, tourY_, pos.z};
     const float tyaw = std::atan2(-ux, -uz);
     float dy = std::fmod(tyaw - camera_.yaw, 2.0f * kPi);
     if (dy > kPi) dy -= 2.0f * kPi;
     if (dy < -kPi) dy += 2.0f * kPi;
-    camera_.yaw += dy * (1.0f - std::exp(-static_cast<float>(dt) * 3.0f));
+    camera_.yaw += dy * (1.0f - std::exp(-static_cast<float>(dt) * 1.6f));
     const float tp = clampf(std::atan2(vel.y, hl) * 0.8f - 0.08f, -0.6f, 0.4f);
     camera_.pitch += (tp - camera_.pitch) * (1.0f - std::exp(-static_cast<float>(dt) * 2.5f));
     vy_ = 0;
@@ -1331,9 +1333,11 @@ void AppShell::tick(double dt) {
                             n = length(n) > 1e-4f ? normalize(n) : Vec3{0, 0, 1};
                             if (dot(n, camera_.position - c) < 0) n = n * -1.0f;
                             const float dist = fitDistance(w, h, asp, th);
-                            const float eyeY = clampf(c.y, 0.35f, 24.0f);
+                            const float eyeHi = cityMode_ ? 450.0f : (!cityMode_ && room_->building() ? room_->maxEye() : 24.0f);  // same ceiling as free movement
+                            const float eyeY = clampf(c.y, 0.35f, eyeHi);
                             recFromPos_ = camera_.position;
                             recToPos_ = {c.x + n.x * dist, eyeY, c.z + n.z * dist};
+                            if (cityMode_ && city_) city_->resolve(recToPos_, 0.8f, flying_ ? 0.35f : 1.7f);  // never end up inside a building
                             recFromYaw_ = camera_.yaw;
                             recToYaw_ = std::atan2(n.x, n.z);
                             recFromPitch_ = camera_.pitch;

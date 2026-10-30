@@ -33,6 +33,8 @@ protected:
     void onText(const std::string& s) override;
     void onCtrl(const std::string& s) override;
     double repaintInterval() const override { return 0.5; }  // cursor blink
+    bool fsResizable() const override { return true; }
+    void onResize(int w, int h) override;
 
 private:
     struct Cell {
@@ -58,7 +60,7 @@ private:
     void eraseDisplay(int mode);
     Row blankRow() const;
 
-    int cols_ = 100, rows_ = 31;
+    int cols_ = 100, rows_ = 31, cols0_ = 100, rows0_ = 30;
     float cw_ = 12, lh_ = 24;
     std::vector<Row> grid_, saved_;
     std::deque<Row> scrollback_;

@@ -306,7 +306,7 @@ void CodeEditor::metrics() {
     lineH_ = std::ceil(textLineHeight(kFontPx, FontFace::Mono)) + 4.0f;
 }
 
-int CodeEditor::visibleLines() const { return std::max(1, static_cast<int>((kPxH - 2 * kTop) / std::max(lineH_, 1.0f))); }
+int CodeEditor::visibleLines() const { return std::max(1, static_cast<int>((pxH_ - 2 * kTop) / std::max(lineH_, 1.0f))); }
 
 void CodeEditor::clear() {
     lines_.assign(1, std::string());
@@ -420,7 +420,7 @@ void CodeEditor::ensureVisible() {
     int vis = visibleLines();
     if (curLine_ < scroll_) scroll_ = curLine_;
     if (curLine_ >= scroll_ + vis) scroll_ = curLine_ - vis + 1;
-    int cols = std::max(8, static_cast<int>((kPxW - kGutter - kPad - kRightMargin) / cw_));
+    int cols = std::max(8, static_cast<int>((pxW_ - kGutter - kPad - kRightMargin) / cw_));
     int d = cursorColumn();
     if (d < hscroll_) hscroll_ = d;
     if (d >= hscroll_ + cols - 1) hscroll_ = d - cols + 2;
@@ -629,15 +629,15 @@ void CodeEditor::recomputeStates() {
 
 void CodeEditor::render(Bitmap& bm, bool editing, bool caretOn) {
     metrics();
-    bm.w = kPxW;
-    bm.h = kPxH;
-    bm.rgba.resize(static_cast<size_t>(kPxW) * kPxH * 4);
-    fillRect(bm, 0, 0, kPxW, kPxH, kBg);
+    bm.w = pxW_;
+    bm.h = pxH_;
+    bm.rgba.resize(static_cast<size_t>(pxW_) * pxH_ * 4);
+    fillRect(bm, 0, 0, pxW_, pxH_, kBg);
     if (statesDirty_) recomputeStates();
 
     const int vis = visibleLines();
     const int textX = kGutter + kPad;
-    const int cols = static_cast<int>((kPxW - textX - kRightMargin) / cw_);
+    const int cols = static_cast<int>((pxW_ - textX - kRightMargin) / cw_);
     const float ascent = textAscent(kFontPx, FontFace::Mono);
     std::vector<uint8_t> cls;
 
@@ -646,7 +646,7 @@ void CodeEditor::render(Bitmap& bm, bool editing, bool caretOn) {
         if (li >= lineCount()) break;
         int y0 = kTop + static_cast<int>(r * lineH_);
         float baseline = static_cast<float>(y0) + 2.0f + ascent;
-        if (editing && li == curLine_) fillRect(bm, kGutter, y0, kPxW, y0 + static_cast<int>(lineH_), kLineBg);
+        if (editing && li == curLine_) fillRect(bm, kGutter, y0, pxW_, y0 + static_cast<int>(lineH_), kLineBg);
 
         std::string line = lines_[li].size() > kMaxRenderedLine ? lines_[li].substr(0, kMaxRenderedLine) : lines_[li];
         bool inBlock = li < static_cast<int>(states_.size()) && states_[li];
@@ -685,8 +685,8 @@ void CodeEditor::render(Bitmap& bm, bool editing, bool caretOn) {
     }
 
     // The gutter is painted last so horizontally scrolled text disappears behind it.
-    fillRect(bm, 0, 0, kGutter, kPxH, kGutterBg);
-    fillRect(bm, kGutter - 1, 0, kGutter, kPxH, kTrack);
+    fillRect(bm, 0, 0, kGutter, pxH_, kGutterBg);
+    fillRect(bm, kGutter - 1, 0, kGutter, pxH_, kTrack);
     for (int r = 0; r < vis; ++r) {
         int li = scroll_ + r;
         if (li >= lineCount()) break;
@@ -697,13 +697,13 @@ void CodeEditor::render(Bitmap& bm, bool editing, bool caretOn) {
     }
 
     if (lineCount() > vis) {
-        int trackY0 = kTop, trackY1 = kPxH - kTop;
-        fillRect(bm, kPxW - 14, trackY0, kPxW - 8, trackY1, kTrack);
+        int trackY0 = kTop, trackY1 = pxH_ - kTop;
+        fillRect(bm, pxW_ - 14, trackY0, pxW_ - 8, trackY1, kTrack);
         float frac = static_cast<float>(vis) / static_cast<float>(lineCount());
         int thumbH = std::max(48, static_cast<int>((trackY1 - trackY0) * frac));
         int maxScroll = std::max(1, lineCount() - vis);
         int ty = trackY0 + static_cast<int>((trackY1 - trackY0 - thumbH) * std::min(1.0f, static_cast<float>(scroll_) / maxScroll));
-        fillRect(bm, kPxW - 14, ty, kPxW - 8, ty + thumbH, kThumb);
+        fillRect(bm, pxW_ - 14, ty, pxW_ - 8, ty + thumbH, kThumb);
     }
 }
 

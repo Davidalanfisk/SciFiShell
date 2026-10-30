@@ -27,6 +27,7 @@ protected:
     void onOpen() override;
     void onClose() override { pickHandler = nullptr; }
     void paint(Bitmap& bm) override;
+    bool fsResizable() const override { return true; }
     bool onHover(float x, float y) override;
     void onClick(float x, float y, bool dbl) override;
     void onWheel(float x, float y, float notches) override;

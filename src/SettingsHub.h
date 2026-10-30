@@ -69,6 +69,7 @@ public:
     bool toPanel(Vec3 o, Vec3 d, float& px, float& py, float& t) const;
     int hitButton(Vec3 o, Vec3 d) const;  // 1 fullscreen, 2 close, 0 none
     void applyFullscreen();
+    int W_ = 1832, H_ = 960;  // bitmap size: fullscreen widens it to the screen's shape
 
     Rect fsRect_{0, 0, 0, 0}, closeRect_{0, 0, 0, 0};
     int hoverBtn_ = 0;

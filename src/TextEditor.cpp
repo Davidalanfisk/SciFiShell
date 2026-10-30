@@ -190,7 +190,7 @@ void TextEditor::paint(Bitmap& bm) {
         label(bm, fr.x0 + 14, fr.y0 + 32, ellipsize(p, 20, FontFace::UI, fr.w() - 28), 20, FontFace::UI, t.dim);
     }
 
-    editRect_ = Rect{c.x0 + 4, c.y0 + 62, c.x0 + 4 + CodeEditor::kPxW, c.y0 + 62 + CodeEditor::kPxH};
+    editRect_ = Rect{c.x0 + 4, c.y0 + 62, c.x0 + 4 + ed_.pxW(), c.y0 + 62 + ed_.pxH()};
     const bool caretOn = !saveAs_ && (SDL_GetTicks() / 500) % 2 == 0;
     if (ed_.version() != drawnVersion_ || caretOn != drawnCaret_ || surf_.rgba.empty()) {
         ed_.render(surf_, !saveAs_, caretOn);

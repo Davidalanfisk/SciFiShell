@@ -30,6 +30,8 @@ protected:
     void onText(const std::string& s) override;
     void onCtrl(const std::string& s) override;
     double repaintInterval() const override { return 0.5; }
+    bool fsResizable() const override { return true; }
+    void onResize(int w, int h) override { ed_.setSize(w - 80, h - 250); surf_.rgba.clear(); }
 
 private:
     struct Hit {

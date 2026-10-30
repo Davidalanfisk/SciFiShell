@@ -54,6 +54,8 @@ Terminal::Terminal(Renderer& renderer) : PanelApp(renderer, 1600, 900, 2.2f) {
     cw_ = std::max(6.0f, measureText("M", 20.0f, FontFace::Mono));
     cols_ = std::max(40, static_cast<int>(1540.0f / cw_));
     rows_ = 30;
+    cols0_ = cols_;
+    rows0_ = rows_;
     bot_ = rows_ - 1;
     hasWsl_ = std::filesystem::exists("C:\\Windows\\System32\\wsl.exe");
     grid_.assign(rows_, blankRow());
@@ -62,6 +64,37 @@ Terminal::Terminal(Renderer& renderer) : PanelApp(renderer, 1600, 900, 2.2f) {
 Terminal::~Terminal() { stop(); }
 
 Terminal::Row Terminal::blankRow() const { return Row(cols_); }
+
+// Fullscreen gives the terminal more room: grow / shrink the character grid to fit and tell the pseudo console.
+void Terminal::onResize(int w, int h) {
+    int cols = cols0_, rows = rows0_;
+    if (w != 1600 || h != 900) {
+        cols = std::max(40, static_cast<int>((w - 72 - 40) / cw_));
+        rows = std::max(10, static_cast<int>((h - 120 - 62 - 20) / lh_));
+    }
+    if (cols == cols_ && rows == rows_) return;
+    std::lock_guard<std::mutex> lk(mu_);
+    auto fit = [&](std::vector<Row>& g) {
+        for (Row& r : g) r.resize(cols);
+        while (static_cast<int>(g.size()) > rows) g.erase(g.begin());
+        while (static_cast<int>(g.size()) < rows) g.push_back(Row(cols));
+    };
+    const int drop = std::max(0, static_cast<int>(grid_.size()) - rows);
+    fit(grid_);
+    if (!saved_.empty()) fit(saved_);
+    for (Row& r : scrollback_) r.resize(cols);
+    cy_ = std::clamp(cy_ - drop, 0, rows - 1);
+    cx_ = std::min(cx_, cols - 1);
+    sx_ = std::min(sx_, cols - 1);
+    sy_ = std::min(sy_, rows - 1);
+    cols_ = cols;
+    rows_ = rows;
+    top_ = 0;
+    bot_ = rows_ - 1;
+    wrapPending_ = false;
+    scrollOff_ = 0;
+    if (pc_) ResizePseudoConsole(pc_, COORD{static_cast<SHORT>(cols_), static_cast<SHORT>(rows_)});
+}
 
 void Terminal::onOpen() {
     if (!alive_) start(shell_);

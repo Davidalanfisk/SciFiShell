@@ -296,8 +296,10 @@ bool Viewer::open(const OpenRequest& req, const HeadPose& head) {
     if (req.kind == FileKind::Text) {
         if (editor_.load(req.path)) {
             isText_ = true;
-            textLabel_ = renderer_.createDynamicLabel(CodeEditor::kPxW, CodeEditor::kPxH);
-            mediaAspect_ = static_cast<float>(CodeEditor::kPxW) / CodeEditor::kPxH;
+            const bool big = fullscreen_ && !lastHead_.vr && lastHead_.aspect > 0.5f;  // fullscreen text fills the screen
+            editor_.setSize(big ? static_cast<int>(1440 * lastHead_.aspect) : CodeEditor::kPxW, big ? 1440 : CodeEditor::kPxH);
+            textLabel_ = renderer_.createDynamicLabel(editor_.pxW(), editor_.pxH());
+            mediaAspect_ = static_cast<float>(editor_.pxW()) / editor_.pxH();
             if (editor_.truncated()) setStatus("Large file - opened read only", 1e9);
             else if (editor_.readOnly()) setStatus("Binary file - opened read only", 1e9);
             redrawText(false);
@@ -752,6 +754,14 @@ void Viewer::toggleFullscreen(const HeadPose& head) {
     fullscreen_ = !fullscreen_;
     idle_ = 0;
     barFade_ = 1.0f;
+    if (isText_ && textLabel_ && !head.vr && head.aspect > 0.5f) {
+        const int w = fullscreen_ ? static_cast<int>(1440 * head.aspect) : CodeEditor::kPxW, h = fullscreen_ ? 1440 : CodeEditor::kPxH;
+        editor_.setSize(w, h);
+        textLabel_ = renderer_.createDynamicLabel(w, h);
+        surface_->label = textLabel_;
+        mediaAspect_ = static_cast<float>(w) / h;
+        redrawText(editing_);
+    }
     layout(head);
     drawBar();
 }
@@ -807,7 +817,7 @@ bool Viewer::pointerPress(Vec3 origin, Vec3 dir) {
     if (surface_->rayHitUV(origin, dir, t, u, v)) {
         if (isText_) {
             if (!editing_) startEditing();
-            if (editing_) editor_.click((u + 0.5f) * CodeEditor::kPxW, (0.5f - v) * CodeEditor::kPxH);
+            if (editing_) editor_.click((u + 0.5f) * editor_.pxW(), (0.5f - v) * editor_.pxH());
             return true;
         }
         togglePause();

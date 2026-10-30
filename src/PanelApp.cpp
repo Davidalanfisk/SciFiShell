@@ -43,7 +43,23 @@ void PanelApp::close() {
 
 void PanelApp::applyFullscreen() {
     const float viewH = 2.0f * viewTan_, viewW = viewH * viewAspect_;
-    worldW_ = std::min(viewW, viewH * static_cast<float>(w_) / h_);
+    if (fsResizable()) {
+        const int th = 1440, tw = std::max(640, static_cast<int>(th * viewAspect_ + 0.5f));
+        if (tw != w_ || th != h_) {
+            if (!savedW_) { savedW_ = w_; savedH_ = h_; }
+            w_ = tw;
+            h_ = th;
+            bm_.w = tw;
+            bm_.h = th;
+            bm_.rgba.assign(static_cast<size_t>(tw) * th * 4, 0);
+            label_.reset();
+            dirty_ = true;
+            onResize(w_, h_);
+        }
+        worldW_ = viewW;
+        base_ = Mat4::translate({0, 0, -1.0f});
+        return;
+    }    worldW_ = std::min(viewW, viewH * static_cast<float>(w_) / h_);
     base_ = Mat4::translate({0, 0, -1.0f});
 }
 
@@ -55,6 +71,16 @@ void PanelApp::toggleFullscreen() {
     } else {
         base_ = savedBase_;
         worldW_ = baseWorldW_;
+        if (savedW_) {
+            w_ = savedW_;
+            h_ = savedH_;
+            bm_.w = w_;
+            bm_.h = h_;
+            bm_.rgba.assign(static_cast<size_t>(w_) * h_ * 4, 0);
+            label_.reset();
+            savedW_ = savedH_ = 0;
+            onResize(w_, h_);
+        }
     }
     dirty_ = true;
 }

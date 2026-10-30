@@ -212,13 +212,13 @@ float3 buildingColor(PSInput In)
     // The tops flare while a building is still rising out of the grid.
     if (grow > 0.001 && kind != 7 && (top || rim > 0.0)) col += neon * grow * 1.2 * (top ? 1.0 : rim);
 
-    float mist = smoothstep(120.0, 750.0, dist);
+    float mist = smoothstep(650.0, 980.0, dist);  // dark ring that masks the edge of the map
     // Dense low fog: barely there up close, building to a thick glowing bank with distance, deepest near the ground and
     // lit by the neon of whatever is inside it.
-    float fogD = 1.0 - exp(-pow(dist * 0.0085, 1.5));
+    float fogD = 1.0 - exp(-pow(dist * 0.0042, 1.2));
     float fog = saturate(fogD * (0.35 + 0.65 * exp(-max(In.WPos.y, 0.0) * 0.045)));
-    float3 fogCol = neon * 0.16 + g_Accent.rgb * 0.07 + float3(0.01, 0.02, 0.035);
-    col = lerp(col, fogCol, fog * 0.92) + neon * 0.05 * fog * (1.0 - fog);
+    float3 fogCol = float3(0.55, 0.70, 0.78) * 0.7 + neon * 0.10;  // pale atmospheric haze, kept thin so distant buildings stay readable
+    col = lerp(col, fogCol, fog * 0.62) + neon * 0.05 * fog * (1.0 - fog);
     return col * (1.0 - mist) + mistColor(g_Accent.rgb) * mist;
 }
 
@@ -257,7 +257,7 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         float r = length(wp);
         float3 eyeP = g_Light.xyz;
         float dist = length(In.WPos - eyeP);
-        float mist = smoothstep(20.0, 700.0, dist);  // distance haze: everything melts into the horizon colour
+        float mist = smoothstep(650.0, 980.0, dist);  // dark ring at the limit of view
         float fade = (1.0 - mist) * (1.0 - mist) * (1.0 - mist);
         float fwMax = max(fw.x, fw.y);
         minor *= saturate(1.0 - fwMax * 1.5);
@@ -321,7 +321,7 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         float3 sky = skyColor(float3(vdir.x, -vdir.y, vdir.z), tm, g_Accent.rgb, g_Alt.rgb);
         float3 reflection = (reflSum + sky * (1.0 - saturate(cov))) * metalTint;
         float gd = length(In.WPos.xz - eyeP.xz) + 0.35 * max(eyeP.y, 0.0);
-        col *= fade * exp(-gd * 0.018) / (1.0 + gd * gd / 900.0);  // grid and pulses dim steadily with distance from the player
+        col *= fade * exp(-gd * 0.008) / (1.0 + gd * gd / 6000.0);  // grid and pulses dim steadily with distance from the player
         col += metal * (1.0 - fres) * fade + reflection * rk * 0.3;
         // Distance haze: beyond ~95 m the floor is an opaque patch of exactly the horizon colour, so the grid has no visible edge.
         col = col * (1.0 - mist) + mistColor(g_Accent.rgb) * mist;

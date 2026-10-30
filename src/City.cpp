@@ -125,14 +125,14 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap) {
             Block& b = p.blocks[fi];
             b.name = d.folders[fi].name;
             const int nb = std::max<int>(1, (int)d.folders[fi].subs.size());
-            b.g = std::max(1, (int)std::ceil(std::sqrt(nb * 1.35)));
+            b.g = std::max(1, (int)std::ceil(std::sqrt(nb * 1.0)));
             b.side = b.g * kPitch + kMargin;
             items.push_back({(int)fi, b.side});
             area += (b.side + kGap) * (b.side + kGap);
             maxW = std::max(maxW, b.side);
         }
         std::stable_sort(items.begin(), items.end(), [](const Item& A, const Item& B) { return A.w > B.w; });
-        const float rowW = std::max(maxW, std::sqrt(area * 1.25f));
+        const float rowW = std::max(maxW, std::sqrt(area * 1.08f));
         float x = 0, y = 0, rowH = 0, usedW = 0;
         for (const Item& it : items) {
             if (x > 0 && x + it.w > rowW) {
@@ -153,26 +153,71 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap) {
         sum += p.side + 30.0f;
         platforms_.push_back(std::move(p));
     }
-    float R = std::max(90.0f + maxSide * 0.62f, 1.1f * sum / (2.0f * kPi));
-    extent_ = R + maxSide * 0.75f + 100.0f;
-
+    // Greedy compact packing: biggest platforms first, each at the smallest radius from the hub where it clears the hub and
+    // every platform already placed. Target angles follow the golden angle so the regions spread evenly around the centre.
+    constexpr float kHubHalf = 75.0f, kClear = 22.0f;
+    std::vector<float> px(n, 0.0f), pz(n, 0.0f);
+    std::vector<int> order(n);
+    for (int i = 0; i < n; ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](int A, int B) { return platforms_[A].side > platforms_[B].side; });
+    std::vector<int> placed;
+    float maxR = 0;
+    for (int k = 0; k < n; ++k) {
+        const int i = order[k];
+        const float half = platforms_[i].side * 0.5f;
+        const float target = 0.5f * kPi + 2.399963f * k;
+        bool done = false;
+        for (float r = kHubHalf + half; !done && r < 6000.0f; r += 3.0f) {
+            for (int s = 0; s < 72 && !done; ++s) {
+                const float off = ((s + 1) / 2) * (2.0f * kPi / 72.0f) * ((s & 1) ? 1.0f : -1.0f);
+                const float a = target + off;
+                const float x = r * std::cos(a), z = r * std::sin(a);
+                bool ok = std::fabs(x) > kHubHalf + half + kClear || std::fabs(z) > kHubHalf + half + kClear;
+                for (size_t q = 0; ok && q < placed.size(); ++q) {
+                    const int j = placed[q];
+                    const float need = half + platforms_[j].side * 0.5f + kClear;
+                    if (std::fabs(x - px[j]) < need && std::fabs(z - pz[j]) < need) ok = false;
+                }
+                if (ok) {
+                    px[i] = x;
+                    pz[i] = z;
+                    maxR = std::max(maxR, r);
+                    done = true;
+                }
+            }
+        }
+        placed.push_back(i);
+    }
+    extent_ = maxR + maxSide * 0.75f + 100.0f;
     // Pass 2: place the platforms on a ring around the monuments and move the blocks into world space.
-    float cum = 0;
     for (int i = 0; i < n; ++i) {
         const auto& d = snap[i];
         Platform& p = platforms_[i];
-        float a = 0.5f * kPi + 2.0f * kPi * (cum + (p.side + 30.0f) * 0.5f) / sum;
-        cum += p.side + 30.0f;
-        p.cx = R * std::cos(a);
-        p.cz = R * std::sin(a);
+        p.cx = px[i];
+        p.cz = pz[i];
         p.tint = i;
         p.total = d.total;
         p.usedFrac = d.total ? clampf(1.0f - float(d.freeBytes) / float(d.total), 0.02f, 1.0f) : 0.3f;
         float dist = std::sqrt(p.cx * p.cx + p.cz * p.cz);
         p.delay = 1.0f + dist / 220.0f;
+        // Blocks are packed biggest-first from the (0,0) corner; mirror so that corner faces the hub.
+        const bool flipX = p.cx < 0, flipZ = p.cz < 0;
         for (Block& b : p.blocks) {
+            if (flipX) b.cx = contentW[i] - b.cx;
+            if (flipZ) b.cz = contentH[i] - b.cz;
             b.cx += p.cx - contentW[i] * 0.5f;
             b.cz += p.cz - contentH[i] * 0.5f;
+            // Cells nearest the hub (world origin) fill first; the empty (free-space) cells end up on the outskirts.
+            const int g = b.g;
+            b.cellOrder.resize(size_t(g) * g);
+            std::vector<float> key(size_t(g) * g);
+            for (int c = 0; c < g * g; ++c) {
+                const float x = b.cx + (float(c % g) - (g - 1) * 0.5f) * p.pitch;
+                const float z = b.cz + (float(c / g) - (g - 1) * 0.5f) * p.pitch;
+                key[c] = x * x + z * z;
+                b.cellOrder[c] = c;
+            }
+            std::stable_sort(b.cellOrder.begin(), b.cellOrder.end(), [&](int A, int B) { return key[A] < key[B]; });
         }
     }
     built_ = true;
@@ -194,8 +239,8 @@ void City::refreshTargets(const std::vector<CityDrive>& snap) {
                 if (si >= b.towers.size()) {
                     Tower t;
                     t.name = subs[si].name;
-                    t.x = b.cx + (float(si % b.g) - (b.g - 1) * 0.5f) * p.pitch;
-                    t.z = b.cz + (float(si / b.g) - (b.g - 1) * 0.5f) * p.pitch;
+                    t.x = b.cx + (float(b.cellOrder[si] % b.g) - (b.g - 1) * 0.5f) * p.pitch;
+                    t.z = b.cz + (float(b.cellOrder[si] / b.g) - (b.g - 1) * 0.5f) * p.pitch;
                     const float jitter = rnd01(uint32_t(si * 7919 + fi * 104729 + i * 31 + 3));
                     const float ring = std::sqrt((t.x - p.cx) * (t.x - p.cx) + (t.z - p.cz) * (t.z - p.cz)) / 40.0f;
                     t.delay = clock_ > p.delay + 4.0 ? float(clock_) + jitter * 0.8f : p.delay + 0.8f + ring * 0.5f + jitter * 1.0f;
@@ -207,6 +252,21 @@ void City::refreshTargets(const std::vector<CityDrive>& snap) {
                 t.tgtH = clampf(3.0f + 12.0f * std::log10(1.0f + float(t.files)), 3.0f, 95.0f);
                 float share = p.total ? clampf(float(t.bytes) / (0.05f * float(p.total)), 0.0f, 1.0f) : 0.3f;
                 t.tgtW = p.pitch * (0.56f + 0.26f * std::sqrt(share));
+            }
+        }
+        if (p.done && !p.sorted) {
+            p.sorted = true;
+            // Seat the tallest towers on the cells nearest the hub.
+            for (Block& b : p.blocks) {
+                const size_t n = b.towers.size();
+                if (n < 2) continue;
+                std::vector<size_t> byH(n);
+                for (size_t k = 0; k < n; ++k) byH[k] = k;
+                std::stable_sort(byH.begin(), byH.end(), [&](size_t A, size_t B) { return b.towers[A].tgtH > b.towers[B].tgtH; });
+                std::vector<std::pair<float, float>> pos(n);
+                for (size_t k = 0; k < n; ++k) pos[k] = {b.towers[k].x, b.towers[k].z};
+                std::stable_sort(pos.begin(), pos.end(), [](const auto& A, const auto& B) { return A.first * A.first + A.second * A.second < B.first * B.first + B.second * B.second; });
+                for (size_t k = 0; k < n; ++k) { b.towers[byH[k]].x = pos[k].first; b.towers[byH[k]].z = pos[k].second; }
             }
         }
     }
@@ -1171,13 +1231,13 @@ float City::clearHeight(float x, float z, float r) const {
 void City::tourPoints(std::vector<Vec3>& out) const {
     out.clear();
     out.push_back({0, 70, 130});
-    out.push_back({0, 7, 40});
-    out.push_back({40, 38, -30});
-    out.push_back({0, 12, -105});
+    out.push_back({0, 30, 40});
+    out.push_back({40, 50, -30});
+    out.push_back({0, 25, -105});
     out.push_back({-45, 55, -40});
-    out.push_back({-52, 9, 62});
+    out.push_back({-52, 22, 62});
     out.push_back({10, 40, 70});
-    out.push_back({52, 8, 75});
+    out.push_back({52, 20, 75});
     out.push_back({50, 85, 20});
     for (const auto& p : platforms_) {
         if (p.grow < 0.9f) continue;

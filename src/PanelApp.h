@@ -44,6 +44,8 @@ public:
 
 protected:
     virtual void onOpen() {}
+    virtual void onResize(int /*w*/, int /*h*/) {}  // the bitmap changed size (fullscreen enter / exit)
+    virtual bool fsResizable() const { return false; }  // true: fullscreen re-lays the bitmap out at screen resolution
     virtual void tick(double /*dt*/) {}
     virtual void paint(Bitmap& bm) = 0;
     virtual bool onHover(float /*x*/, float /*y*/) { return false; }  // true when the look changed
@@ -70,6 +72,7 @@ private:
     void repaint();
 
     int w_, h_;
+    int savedW_ = 0, savedH_ = 0;
     float worldW_, baseWorldW_;
     bool open_ = false, fullscreen_ = false, dirty_ = true;
     float mx_ = -1, my_ = -1;

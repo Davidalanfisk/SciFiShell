@@ -143,7 +143,8 @@ struct WebState {
     CefRefPtr<CefBrowser> browser;
     bool created = false;
 
-    int pageW = 1920, pageH = 1080;  // backing resolution = kView * scale
+    int vw = kViewW, vh = kViewH;    // CSS size of the page view (fullscreen matches the screen shape)
+    int pageW = 1920, pageH = 1080;  // backing resolution = view * scale
     float scale = 1.5f;
     std::vector<uint32_t> pixels;
     bool dirty = false;
@@ -191,10 +192,10 @@ public:
         model->Clear();
     }
 
-    void GetViewRect(CefRefPtr<CefBrowser>, CefRect& rect) override { rect = CefRect(0, 0, kViewW, kViewH); }
+    void GetViewRect(CefRefPtr<CefBrowser>, CefRect& rect) override { rect = CefRect(0, 0, s_ ? s_->vw : kViewW, s_ ? s_->vh : kViewH); }
     bool GetScreenInfo(CefRefPtr<CefBrowser>, CefScreenInfo& info) override {
         info.device_scale_factor = s_ ? s_->scale : 1.5f;
-        info.rect = CefRect(0, 0, kViewW, kViewH);
+        info.rect = CefRect(0, 0, s_ ? s_->vw : kViewW, s_ ? s_->vh : kViewH);
         info.available_rect = info.rect;
         return true;
     }
@@ -340,13 +341,30 @@ float WebBrowser::scaleForQuality(int q) {
     return kScales[std::clamp(q, 0, kQualityCount - 1)];
 }
 
-void WebBrowser::setQuality(int q) {
-    q = std::clamp(q, 0, kQualityCount - 1);
+static void resizeView(Renderer& renderer, WebState& s, int w, int h) {
+    if (s.vw == w && s.vh == h) return;
+    s.vw = w;
+    s.vh = h;
+    s.pageW = static_cast<int>(w * s.scale);
+    s.pageH = static_cast<int>(h * s.scale);
+    s.pixels.assign(static_cast<size_t>(s.pageW) * s.pageH, 0xFFFFFFFF);
+    s.dirty = false;
+    s.page = renderer.createDynamicLabel(s.pageW, s.pageH);
+    renderer.updateLabel(*s.page, reinterpret_cast<const uint8_t*>(s.pixels.data()), s.pageW, s.pageH);
+    if (s.browser) {
+        auto host = s.browser->GetHost();
+        host->NotifyScreenInfoChanged();
+        host->WasResized();
+        host->Invalidate(PET_VIEW);
+    }
+}
+
+void WebBrowser::setQuality(int q) {    q = std::clamp(q, 0, kQualityCount - 1);
     const float sc = scaleForQuality(q);
     if (sc == s_->scale && !s_->pixels.empty()) return;
     s_->scale = sc;
-    s_->pageW = static_cast<int>(kViewW * sc);
-    s_->pageH = static_cast<int>(kViewH * sc);
+    s_->pageW = static_cast<int>(s_->vw * sc);
+    s_->pageH = static_cast<int>(s_->vh * sc);
     s_->pixels.assign(static_cast<size_t>(s_->pageW) * s_->pageH, 0xFFFFFFFF);
     s_->dirty = false;
     s_->page = renderer_.createDynamicLabel(s_->pageW, s_->pageH);
@@ -385,9 +403,10 @@ void WebBrowser::open(const std::string& url, Vec3 eye, Vec3 forward, bool vr) {
     Vec3 f{forward.x, 0, forward.z};
     f = length(f) < 0.1f ? Vec3{0, 0, -1} : normalize(f);
     fullscreen_ = false;
+    resizeView(renderer_, *s_, kViewW, kViewH);
     s_->depth.setMode(DepthMode::Off);
     s_->worldW = vr ? 2.0f : 2.4f;
-    s_->worldH = s_->worldW * kViewH / kViewW;
+    s_->worldH = s_->worldW * s_->vh / s_->vw;
     s_->barH = s_->worldW * kBarH / kBarW;
     const float totalH = s_->worldH + s_->barH + 0.015f;
     // Desktop: sit at the distance where the page (with its toolbar) fills 85% of the screen.
@@ -472,7 +491,7 @@ void WebBrowser::update(double dt, Vec3, bool vr) {
     // Layout analysis: on load/navigation, after input settles, and as a slow refresh while the page keeps painting.
     if (s_->browser && s_->analysisAt >= 0 && clock_ >= s_->analysisAt && clock_ - s_->lastAnalysis > 0.4) {
         s_->requestSeq = s_->inputSeq;
-        s_->analyzer.request(s_->browser->GetMainFrame(), kViewW, kViewH);
+        s_->analyzer.request(s_->browser->GetMainFrame(), s_->vw, s_->vh);
         s_->lastAnalysis = clock_;
         s_->analysisAt = -1;
         s_->paintedSince = false;
@@ -498,7 +517,7 @@ void WebBrowser::render(Renderer& renderer) {
         renderer.drawGlass(s_->base * Mat4::translate({0, (top + bottom) * 0.5f, -0.012f}) * Mat4::scale({fw, fh, 1}), fw / fh,
                            0.022f / fh);
     }
-    s_->depth.render(renderer, *s_->page, s_->base, s_->worldW, s_->worldH, kViewW, kViewH, layout, clock_);
+    s_->depth.render(renderer, *s_->page, s_->base, s_->worldW, s_->worldH, s_->vw, s_->vh, layout, clock_);
     const float y = s_->worldH * 0.5f + s_->barH * 0.5f + gap;
     const float uvAll[4] = {0, 0, 1, 1}, white[3] = {1, 1, 1};
     renderer.drawWebRegion(*s_->toolbar, s_->base * Mat4::translate({0, y, 0}) * Mat4::scale({s_->worldW, s_->barH, 1}), uvAll,
@@ -582,13 +601,13 @@ void WebBrowser::pointer(Vec3 origin, Vec3 dir) {
         s_->pointerU = clampf(u, -0.5f, 0.5f);
         s_->pointerV = clampf(v, -0.5f, 0.5f);
         if (std::fabs(u) <= 0.5f && std::fabs(v) <= 0.5f) {
-            int px = clampf((u + 0.5f) * kViewW, 0, kViewW - 1), py = clampf((0.5f - v) * kViewH, 0, kViewH - 1);
+            int px = clampf((u + 0.5f) * s_->vw, 0, s_->vw - 1), py = clampf((0.5f - v) * s_->vh, 0, s_->vh - 1);
             // A raised layer in front of the page: hit-test what the user actually sees, not the plane behind it.
             const Mat4 inv = s_->base.rigidInverse();
             float vx = 0, vy = 0;
             if (s_->depth.pick(inv.transformPoint(origin), inv.transformDir(dir), vx, vy)) {
-                px = clampf(vx, 0, kViewW - 1);
-                py = clampf(vy, 0, kViewH - 1);
+                px = clampf(vx, 0, s_->vw - 1);
+                py = clampf(vy, 0, s_->vh - 1);
             }
             if (px != s_->mouseX || py != s_->mouseY) {
                 s_->mouseX = px;
@@ -772,13 +791,13 @@ void WebBrowser::escape() {
 
 void WebBrowser::applyFullscreen() {
     const float gap = 0.015f, viewH = 2.0f * viewTan_, viewW = viewH * viewAspect_;
-    const float k = static_cast<float>(kViewH) / kViewW + static_cast<float>(kBarH) / kBarW;
-    s_->worldW = std::min(viewW, (viewH - gap) / k);
-    s_->worldH = s_->worldW * kViewH / kViewW;
+    s_->worldW = viewW;
     s_->barH = s_->worldW * kBarH / kBarW;
+    s_->worldH = viewH - gap - s_->barH;
+    const int vh = kViewH, vw = std::max(640, static_cast<int>(vh * s_->worldW / s_->worldH + 0.5f));
+    resizeView(renderer_, *s_, vw, vh);
     s_->base = Mat4::translate({0, -(s_->barH + gap) * 0.5f, -1.0f});
 }
-
 void WebBrowser::toggleFullscreen() {
     if (!visible_) return;
     dragging_ = false;
@@ -788,9 +807,10 @@ void WebBrowser::toggleFullscreen() {
         savedWorldW_ = s_->worldW;
         applyFullscreen();
     } else {
+        resizeView(renderer_, *s_, kViewW, kViewH);
         s_->base = savedBase_;
         s_->worldW = savedWorldW_;
-        s_->worldH = s_->worldW * kViewH / kViewW;
+        s_->worldH = s_->worldW * s_->vh / s_->vw;
         s_->barH = s_->worldW * kBarH / kBarW;
     }
     toolbarDirty_ = true;

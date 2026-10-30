@@ -1,6 +1,7 @@
 #pragma once
 // A small text/code editor model: UTF-8 document, cursor, scrolling, syntax highlighting and a CPU rasteriser that
 // draws the visible part of the document into a bitmap (the viewer uploads it as the editor "screen").
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -13,6 +14,9 @@ class CodeEditor {
 public:
     static constexpr int kPxW = 1400, kPxH = 1000;  // size of the rendered editor surface
 
+    void setSize(int w, int h) { if (w != pxW_ || h != pxH_) { pxW_ = std::max(200, w); pxH_ = std::max(200, h); touch(); } }
+    int pxW() const { return pxW_; }
+    int pxH() const { return pxH_; }
     bool load(const std::string& path);  // false when the file cannot be read
     bool save();                         // false when read-only or the write failed
     bool saveAs(const std::string& path);  // adopts the path, then saves
@@ -73,6 +77,7 @@ private:
     bool statesDirty_ = true;
     int langId_ = 0;
     float cw_ = 0, lineH_ = 0;
+    int pxW_ = kPxW, pxH_ = kPxH;
 };
 
 }  // namespace sf

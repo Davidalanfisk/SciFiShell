@@ -71,8 +71,8 @@ std::string SettingsHub::signature() const {
 
 void SettingsHub::rebuild() {
     Bitmap bm;
-    bm.w = kW;
-    bm.h = kH;
+    bm.w = W_;
+    bm.h = H_;
     bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 0);
     rects_.clear();
     const ui::Tokens tk = ui::tokens();
@@ -80,10 +80,10 @@ void SettingsHub::rebuild() {
     const std::string title = home ? "SETTINGS" : cats_[static_cast<size_t>(page_)].name;
     const std::string sub = home ? "SHELL PREFERENCES  +  WINDOWS CONTROL PANEL" : cats_[static_cast<size_t>(page_)].subtitle;
     ui::panel(bm, title, "");
-    drawText(bm, kW - kPad - 8 - measureText(sub, 24, FontFace::UI) - 240, 56, sub, 24, FontFace::UI, tk.dim);
+    drawText(bm, W_ - kPad - 8 - measureText(sub, 24, FontFace::UI) - 240, 56, sub, 24, FontFace::UI, tk.dim);
     {
         ui::Rect fs, cl;
-        ui::windowButtons(bm, kW, hoverBtn_, fs, cl);
+        ui::windowButtons(bm, W_, hoverBtn_, fs, cl);
         fsRect_ = {fs.x0, fs.y0, fs.x1, fs.y1};
         closeRect_ = {cl.x0, cl.y0, cl.x1, cl.y1};
     }
@@ -93,7 +93,7 @@ void SettingsHub::rebuild() {
 
     if (home) {
         const int n = static_cast<int>(cats_.size());
-        const float cw = static_cast<float>(kW - 2 * kPad - (kCols - 1) * kGap) / kCols;
+        const float cw = static_cast<float>(W_ - 2 * kPad - (kCols - 1) * kGap) / kCols;
         for (int i = 0; i < n; ++i) {
             const SettingsCategory& c = cats_[static_cast<size_t>(i)];
             const float x = kPad + (i % kCols) * (cw + kGap), y = static_cast<float>(kHomeTop + (i / kCols) * (kHomeCardH + kGap));
@@ -121,7 +121,7 @@ void SettingsHub::rebuild() {
         const Rect br{kPad, 132, kPad + 260, 212};
         rects_.push_back(br);
         ui::button(bm, ui::Rect{br.x0, br.y0, br.x1, br.y1}, "< BACK", sel_ == 0 ? ui::State::Selected : ui::State::Normal, false, 30);
-        const float cw = static_cast<float>(kW - 2 * kPad - kGap) / 2;
+        const float cw = static_cast<float>(W_ - 2 * kPad - kGap) / 2;
         const int n = std::min(static_cast<int>(c.items.size()), kMaxItems);
         for (int i = 0; i < n; ++i) {
             const SettingsItem& it = c.items[static_cast<size_t>(i)];
@@ -159,8 +159,8 @@ bool SettingsHub::toPanel(Vec3 o, Vec3 d, float& px, float& py, float& t) const 
     t = -lo.z / ld.z;
     if (t < 0) return false;
     const float x = lo.x + ld.x * t, y = lo.y + ld.y * t, worldH = worldW_ / aspect_;
-    px = (x / worldW_ + 0.5f) * kW;
-    py = (0.5f - y / worldH) * kH;
+    px = (x / worldW_ + 0.5f) * W_;
+    py = (0.5f - y / worldH) * H_;
     return true;
 }
 
@@ -182,7 +182,14 @@ void SettingsHub::pointer(Vec3 o, Vec3 d) {
 
 void SettingsHub::applyFullscreen() {
     const float viewH = 2.0f * viewTan_, viewW = viewH * viewAspect_;
-    worldW_ = std::min(viewW, viewH * aspect_);
+    const int h = kH, w = std::max(1000, static_cast<int>(h * viewAspect_ + 0.5f));
+    if (w != W_ || h != H_) {
+        W_ = w;
+        H_ = h;
+        aspect_ = static_cast<float>(W_) / H_;
+        dirty_ = true;
+    }
+    worldW_ = viewW;
     base_ = Mat4::translate({0, 0, -1.0f});
 }
 
@@ -194,6 +201,9 @@ void SettingsHub::toggleFullscreen() {
     } else {
         base_ = savedBase_;
         worldW_ = kWorldW;
+        W_ = kW;
+        H_ = kH;
+        aspect_ = static_cast<float>(W_) / H_;
     }
     dirty_ = true;
 }
@@ -310,8 +320,8 @@ float SettingsHub::hitDistance(Vec3 o, Vec3 d) const {
     if (!open_) return -1.0f;
     float px, py, t;
     if (!toPanel(o, d, px, py, t)) return -1.0f;
-    const float m = fullscreen_ ? 0.0f : 0.03f / worldW_ * kW;
-    if (px < -m || px > kW + m || py < -m || py > kH + m) return -1.0f;
+    const float m = fullscreen_ ? 0.0f : 0.03f / worldW_ * W_;
+    if (px < -m || px > W_ + m || py < -m || py > H_ + m) return -1.0f;
     return t * length(d);
 }
 

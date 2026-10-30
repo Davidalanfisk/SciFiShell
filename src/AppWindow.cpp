@@ -28,7 +28,7 @@
 namespace sf {
 
 namespace {
-constexpr int kTexW = 1920, kTexH = 1200;       // GPU texture; the program's window is copied into its top-left corner
+constexpr int kTexW = 3840, kTexH = 2160;       // GPU texture; the program's window is copied into its top-left corner
 constexpr int kWinW = 1600, kWinH = 960;        // size the program's window is given
 constexpr int kOffX = -24000, kOffY = 200;      // parked off-screen position
 constexpr int kBarW = 1920, kBarH = 80;

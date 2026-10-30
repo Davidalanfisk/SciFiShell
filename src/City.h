@@ -65,6 +65,7 @@ private:
         float cx = 0, cz = 0, side = 20;  // plate footprint, world space
         int g = 1;                        // buildings per row
         std::vector<Tower> towers;
+        std::vector<int> cellOrder;       // grid cells nearest the platform centre first
         std::shared_ptr<GpuLabel> label;
         float maxH = 4;
     };
@@ -72,6 +73,7 @@ private:
         std::string name, text, root;
         float cx = 0, cz = 0, side = 60, pitch = 12;
         float usedFrac = 0;
+        bool sorted = false;  // towers re-seated tallest-nearest-the-hub once the scan finishes
         float delay = 0, grow = 0;
         uint64_t files = 0, bytes = 0, total = 0;
         bool done = false;
