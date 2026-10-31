@@ -53,10 +53,11 @@ around it are your drives. **Walk** with WASD, or **double-tap Space to fly** an
 
 - **Open a drive or building:** look at it and click. Step through the door and you're in a *file room*: every file
   is a card on the wall. Click a folder card to go deeper, `..` to go up, and use the grand exit doors to get back to
-  the street.
+  the street. A folder with only one sub-folder skips the lobby and drops you straight into its room, with the exit
+  door taking you back out to the city.
 - **Lifts:** tall buildings have multiple floors. Press the call button outside the lift, step in, and choose a floor
   from the buttons inside.
-- **View things:** click an image, text file, video or audio card to open it in the viewer. Long-click a card to lock
+- **View things:** click an image or text file to open it in the viewer; videos and audio open in the built-in media player, on the right tab. Long-click a card to lock
   your view onto it. Press `E` on text to edit, `Ctrl+S` to save, `F` for fullscreen.
 - **Ride the bus lanes:** click any bus lane and you'll be sucked into it and carried like a packet of data all the
   way to the end of the route, a fast way to cross the city. Each bus is dual-lane: one channel in, one out.
@@ -75,7 +76,10 @@ Every folder is a building and every sub-folder a door. Doors show a large thumb
 and rooms fill the far wall first, then the side walls, and the exit wall last.
 
 ![Lobby doors](docs/lobby-doors.jpg)
-![Door hover details](docs/door-hover.jpg)
+![A file room](docs/file-room.jpg)
+
+Rooms are dark, panelled halls with a reflective floor, glowing trim and tiered shelves of cards. A faint ring of
+mountains encircles the grid on the horizon, and building labels are depth-sorted so they are never clipped.
 
 ### Ride the bus lanes
 Click a bus lane to ride it: a chase camera follows you along the lane network with a glowing trail.
