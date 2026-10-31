@@ -2183,13 +2183,10 @@ void AppShell::tick(double dt) {
         char tb[16], db[64];
         std::strftime(tb, sizeof tb, "%H:%M", &lt);
         std::strftime(db, sizeof db, "%A %d %B %Y", &lt);
-        if (!hudTimeLabel_ || hudTimeText_ != tb) {
-            hudTimeText_ = tb;
-            hudTimeLabel_ = renderer_.createLabel(makeLabel(hudTimeText_, 64.0f, FontFace::UI, Color8{}, 96, 4));
-        }
-        if (!hudDateLabel_ || hudDateText_ != db) {
-            hudDateText_ = db;
-            hudDateLabel_ = renderer_.createLabel(makeLabel(hudDateText_, 36.0f, FontFace::UI, Color8{}, 64, 4));
+        const std::string full = std::string(db) + "  " + tb;
+        if (!hudTimeLabel_ || hudTimeText_ != full) {
+            hudTimeText_ = full;
+            hudTimeLabel_ = renderer_.createLabel(makeLabel(full, 40.0f, FontFace::UI, Color8{}, 64, 4));
         }
         const std::string want = cityMode_ ? hudTarget_ : std::string();
         if (want != hudTargetShown_) {
@@ -2204,7 +2201,7 @@ void AppShell::tick(double dt) {
         fpsAccum_ = 0;
         fpsFrames_ = 0;
         if (settings_.showFps)
-            fpsLabel_ = renderer_.createLabel(makeLabel(std::to_string(fps) + " FPS", 54.0f, FontFace::UI, Color8{}, 96, 4));
+            fpsLabel_ = renderer_.createLabel(makeLabel(std::to_string(fps) + " FPS", 40.0f, FontFace::UI, Color8{}, 96, 4));
     }
     {
         const Theme& th = currentTheme();
@@ -2345,17 +2342,16 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
                            std::floor(std::fmod(t * 9.0f, 12.0f)), t * 1.2f, loaderA_, 0.5f + 0.5f * std::sin(t * 6.0f));
         renderer_.setTheme(currentTheme().accent, currentTheme().alt);
     }
-    if (hudTimeLabel_ && hudDateLabel_) {
+    if (hudTimeLabel_) {
         renderer_.clearDepth();
         const float dist = 1.2f, halfH = std::tan(kFovY * 0.5f) * dist, halfW = halfH * renderer_.aspect();
         auto put = [&](const GpuLabel& lab, float h, Vec3 at) {
             renderer_.drawHudText(lab, view.rigidInverse() * Mat4::translate(at) * Mat4::scale({h * lab.aspect, h, 1.0f}));
         };
-        const float th = 0.07f, dh = 0.04f;
-        const float tw = th * hudTimeLabel_->aspect, dw = dh * hudDateLabel_->aspect;
-        const float rx = vrOn_ ? 0.3f : halfW - 0.05f, ty = vrOn_ ? 0.2f : halfH - 0.04f - th * 0.5f;
+        const float th = 0.03f;
+        const float tw = th * hudTimeLabel_->aspect;
+        const float rx = vrOn_ ? 0.3f : halfW - 0.008f, ty = vrOn_ ? 0.2f : halfH - 0.008f - th * 0.5f;
         put(*hudTimeLabel_, th, {rx - tw * 0.5f, ty, -dist});
-        put(*hudDateLabel_, dh, {rx - dw * 0.5f, ty - th * 0.5f - dh * 0.5f, -dist});
         if (hudTargetLabel_) {
             const float gh = 0.06f;
             put(*hudTargetLabel_, gh, {0.0f, vrOn_ ? -0.22f : -halfH * 0.62f, -dist});
@@ -2364,17 +2360,10 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
     if (settings_.showFps && fpsLabel_) {
         // Head-locked readout in the top-left of the view.
         renderer_.clearDepth();
-        const float h = 0.07f, w = h * fpsLabel_->aspect;
+        const float h = 0.03f, w = h * fpsLabel_->aspect;
         const float dist = 1.2f, halfH = std::tan(kFovY * 0.5f) * dist;
-        Vec3 at = vrOn_ ? Vec3{-0.28f, 0.2f, -dist} : Vec3{-halfH * renderer_.aspect() + w * 0.6f + 0.05f, halfH - h * 0.6f - 0.04f, -dist};
-        PanelParams pp;
-        pp.time = static_cast<float>(time_);
-        pp.aspect = w / h;
-        pp.radius = 0.35f;
-        pp.selected = 0.0f;
-        pp.segments = 0.0f;
-        renderer_.drawPanel(*fpsLabel_, view.rigidInverse() * Mat4::translate(at) * Mat4::scale({w, h, 1.0f}),
-                            currentTheme().accent, pp);
+        Vec3 at = vrOn_ ? Vec3{-0.28f, 0.2f, -dist} : Vec3{-halfH * renderer_.aspect() + w * 0.5f + 0.008f, halfH - h * 0.5f - 0.008f, -dist};
+        renderer_.drawHudText(*fpsLabel_, view.rigidInverse() * Mat4::translate(at) * Mat4::scale({w, h, 1.0f}));
     }
     if (vrOn_ && vrInput_.valid && !vrGaze_) {
         renderer_.drawCube(*crosshair_, alignZ(vrInput_.pointerOrigin + vrInput_.pointerDir * 1.5f, vrInput_.pointerDir,

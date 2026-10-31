@@ -497,6 +497,78 @@ bool City::debugStreet(Vec3& pos) const {
     return false;
 }
 
+// The central hub: a stepped data-exchange tower. Corner pylons carry the CPU / RAM / GPU / network traffic as packets
+// climbing their faces, rings of light spread across the slab, and a beam leaves the spire in proportion to overall load.
+void City::renderHub(Renderer& r, const Theme& th, float g) {
+    const float t = float(clock_), b0 = kSlabH, gg = coreGrow_[0];
+    const float loads[3] = {shownCpu_, shownRam_, shownGpu_};
+    const Vec3 hc[4] = {th.accent, th.alt, Vec3{0.12f, 0.85f, 0.42f}, Vec3{0.95f, 0.95f, 1.0f}};
+    const float act = clampf((loads[0] + loads[1] + loads[2]) / 3.0f, 0.0f, 1.0f);
+    auto blk = [&](float cx, float cz, float y0, float sx, float h, float sz, Vec3 col, int kind) {
+        renderBox(r, {cx, b0 + (y0 + h * 0.5f) * g, cz}, {sx, h * g, sz}, col, 0.35f, kind, gg, 1.0f, 0);
+    };
+    blk(0, 0, 0, 18, 1.2f, 18, th.accent * 0.8f, 6);
+    blk(0, 0, 1.2f, 14, 3.5f, 14, th.alt, 6);
+    blk(0, 0, 4.7f, 8, 8.0f, 8, th.accent, 6);
+    blk(0, 0, 12.7f, 4, 7.0f, 4, th.alt, 6);
+    blk(0, 0, 19.7f, 1.2f, 8.0f, 1.2f, th.accent * (0.7f + 0.3f * std::sin(t * 3.0f)), 5);
+    if (g < 0.99f || r.mirror()) {
+        // the animated detail only needs to appear once the hub has finished rising
+        if (g < 0.99f) return;
+    }
+    // Glowing bands round the tower, brighter with load.
+    for (int i = 0; i < 3; ++i) {
+        const float sz = 8.6f - i * 3.4f + (i == 2 ? 0.0f : 0.0f);
+        blk(0, 0, 8.0f + i * 5.0f - (i == 2 ? 0.5f : 0.0f), sz, 0.35f, sz, hc[i] * (0.6f + 1.2f * loads[i]), 5);
+    }
+    // Corner pylons: each is one traffic source; packets climb them faster the busier the source is.
+    const float px[4] = {-11, 11, -11, 11}, pz[4] = {-11, -11, 11, 11};
+    for (int i = 0; i < 4; ++i) {
+        const float ld = i < 3 ? loads[i] : act;
+        blk(px[i], pz[i], 0, 2.2f, 9.0f, 2.2f, hc[i] * 0.55f, 6);
+        blk(px[i], pz[i], 9.0f, 2.8f, 0.5f, 2.8f, hc[i] * (0.8f + 1.4f * ld), 5);
+        for (int k = 0; k < 4; ++k) {
+            const float ph = float(std::fmod(t * (0.25f + 0.9f * ld) + k * 0.25f + i * 0.13f, 1.0));
+            blk(px[i], pz[i], 1.0f + ph * 7.6f, 2.5f, 0.45f, 2.5f, hc[i] * (0.4f + 1.6f * std::sin(ph * kPi)), 5);
+        }
+        // a bridge of light from each pylon into the tower, with a packet crossing it
+        const float bx = px[i] * 0.5f, bz = pz[i] * 0.5f;
+        renderBox(r, {bx * 0.5f + px[i] * 0.25f, b0 + 6.0f * g, pz[i] * 0.5f * 0.5f + pz[i] * 0.25f}, {0.01f, 0.01f, 0.01f}, hc[i], 0.3f, 5, 0, 0, 0);
+        const float ph = float(std::fmod(t * (0.3f + 0.8f * ld) + i * 0.27f, 1.0));
+        const float u = i % 2 ? ph : 1.0f - ph;
+        renderBox(r, {px[i] * (0.2f + 0.8f * u), b0 + 3.6f, pz[i] * (0.2f + 0.8f * u)}, {0.6f, 0.6f, 0.6f}, hc[i] * (0.5f + 1.5f * std::sin(ph * kPi)), 0.3f, 5, 1, 0, 0);
+    }
+    // Orbiting data carriers round the tower.
+    for (int i = 0; i < 8; ++i) {
+        const float a = t * (0.35f + 0.8f * act) + i * kPi * 0.25f, rr = 6.6f;
+        renderBox(r, {rr * std::cos(a), b0 + 9.5f + 0.8f * std::sin(a * 2.0f + i), rr * std::sin(a)}, {0.7f, 0.7f, 0.7f}, hc[i % 3] * (0.6f + loads[i % 3] * 1.2f), 0.3f, 5, 1, 0, 0);
+    }
+    // Rings of light spread out across the slab: exchange pulses, quicker and brighter when the machine is busy.
+    for (int k = 0; k < 3; ++k) {
+        const float ph = float(std::fmod(t * (0.18f + 0.35f * act) + k / 3.0f, 1.0)), e = 9.6f + ph * 3.2f, a = (1.0f - ph) * (0.5f + act);
+        const Vec3 c = hc[k] * a;
+        const float y = b0 + 0.07f;
+        renderBox(r, {0, y, -e}, {2 * e, 0.1f, 0.35f}, c, 0.3f, 5, 1, 0, 0);
+        renderBox(r, {0, y, e}, {2 * e, 0.1f, 0.35f}, c, 0.3f, 5, 1, 0, 0);
+        renderBox(r, {-e, y, 0}, {0.35f, 0.1f, 2 * e}, c, 0.3f, 5, 1, 0, 0);
+        renderBox(r, {e, y, 0}, {0.35f, 0.1f, 2 * e}, c, 0.3f, 5, 1, 0, 0);
+    }
+    // Gateways where the road spokes meet the hub.
+    for (int s = -1; s <= 1; s += 2) {
+        const float z = 12.0f * s;
+        blk(-3.2f, z, 0, 0.7f, 5.0f, 0.7f, th.accent * 0.9f, 5);
+        blk(3.2f, z, 0, 0.7f, 5.0f, 0.7f, th.accent * 0.9f, 5);
+        blk(0, z, 5.0f, 7.0f, 0.5f, 0.7f, th.alt * (0.7f + 0.6f * std::sin(t * 2.5f + s)), 5);
+    }
+    // The beam from the spire, with pulses running up it.
+    const float top = b0 + 27.7f * g;
+    renderBox(r, {0, top + 11.0f, 0}, {0.35f, 22.0f, 0.35f}, th.accent * (0.25f + 0.6f * act), 0.3f, 5, 1, 0, 0);
+    for (int k = 0; k < 3; ++k) {
+        const float ph = float(std::fmod(t * (0.4f + 1.2f * act) + k / 3.0f, 1.0));
+        renderBox(r, {0, top + ph * 22.0f, 0}, {0.8f, 0.8f, 0.8f}, th.accent * (1.6f * (1.0f - ph)), 0.3f, 5, 1, 0, 0);
+    }
+}
+
 void City::renderMonuments(Renderer& r, Vec3 eye) {
     const Theme& th = currentTheme();
     const SystemStats& s = data_.stats();
@@ -698,7 +770,6 @@ void City::render(Renderer& r, Vec3 eye) {
         float g = ease(coreGrow_[0]);
         if (g > 0) {
             renderBox(r, {0, kSlabH * 0.5f * g, 0}, {26, kSlabH * g, 26}, th.accent, 0.35f, 6, coreGrow_[0], 1.0f, 0);
-            renderBox(r, {0, (kSlabH + 0.6f) * 0.5f * g, 0}, {8, (kSlabH + 0.6f) * g, 8}, th.alt, 0.35f, 6, coreGrow_[0], 1.0f, 0);
             // Activity: data packets stream from the hub to the CPU / RAM / GPU, faster and denser the busier each is.
             if (!r.mirror() && g > 0.99f) {
                 // Packets ride the real road polylines (same data as the roads and click-to-ride) so they follow every corner,
@@ -749,9 +820,9 @@ void City::render(Renderer& r, Vec3 eye) {
                         packets(nr.pts, pc, 0.05f + 0.1f * (nr.plat % 3), 5, nr.plat * 0.37f, false);
                         packets(nr.pts, pc * 0.8f, 0.05f + 0.1f * ((nr.plat + 1) % 3), 4, nr.plat * 0.61f + 0.5f, true);
                     }
-                }                const float beat = 0.5f + 0.5f * std::sin(float(clock_) * 3.0f);
-                renderBox(r, {0, kSlabH + 0.8f + 0.5f * beat, 0}, {5.0f, 0.3f, 5.0f}, th.accent * (0.5f + beat), 0.3f, 5, 1, 0, 0);
+                }
             }
+            renderHub(r, th, g);
             const float y = kRoadY + 0.02f;
             int N = std::clamp<int>(s.cores, 1, 32);
             float plinth = std::max(14.0f, N * 4.2f / (2.0f * kPi)) * 2.0f + 10.0f;
@@ -1276,6 +1347,11 @@ void City::monumentBoxes(std::vector<Box>& out) const {
             add(ringR * std::cos(a), -55 + ringR * std::sin(a), 1.3f, 1.3f, kSlabH + 30);
         }
         add(0, 0, 13, 13, kSlabH);
+        add(0, 0, 9, 9, kSlabH + 1.2f);
+        add(0, 0, 7, 7, kSlabH + 4.7f);
+        add(0, 0, 4, 4, kSlabH + 12.7f);
+        add(0, 0, 2, 2, kSlabH + 19.7f);
+        for (int i = 0; i < 4; ++i) add((i % 2 ? 11.0f : -11.0f), (i / 2 ? 11.0f : -11.0f), 1.1f, 1.1f, kSlabH + 9.5f);
     }
     if (coreGrow_[1] > 0.3f) {
         int K = std::clamp<int>((int)(s.ramTotal / 1073741824.0 / 4.0 + 0.5), 2, 16);

@@ -1233,6 +1233,13 @@ void MediaApp::paint(Bitmap& bm) {
                     blendPx(d, Color8{s[0], s[1], s[2], s[3]}, 1.0f);
                 }
             }
+        // the window background sits under the layer: re-cut the video hole so the picture shows at full brightness
+        if (theatre_ && vw_ > 0 && vh_ > 0)
+            for (int yy = std::max(0, vy_); yy < std::min(bm.h, vy_ + vh_); ++yy)
+                for (int xx = std::max(0, vx_); xx < std::min(bm.w, vx_ + vw_); ++xx) {
+                    const size_t o = (static_cast<size_t>(yy) * bm.w + xx) * 4;
+                    if (L.rgba[o + 3] == 0) std::memset(&bm.rgba[o], 0, 4);
+                }
         // scroll indicator
         if (scrollMax_ > 1) {
             const float trackH = view.h(), th2 = std::max(40 * k, trackH * view.h() / (contentH + 1)), ty2 = view.y0 + (trackH - th2) * (scroll_ / scrollMax_);

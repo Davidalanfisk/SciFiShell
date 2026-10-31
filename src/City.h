@@ -126,6 +126,7 @@ private:
     void refreshTargets(const std::vector<CityDrive>& snap);
     void renderBox(Renderer& r, Vec3 c, Vec3 size, Vec3 neon, float seed, int kind, float emerge, float fill, float flash);
     void renderMonuments(Renderer& r, Vec3 eye);
+    void renderHub(Renderer& r, const struct Theme& th, float g);
     void drawLabel(Renderer& r, GpuLabel& l, Vec3 at, float h, Vec3 eye, Vec3 color, float alpha = 1.0f);
     std::shared_ptr<GpuLabel> makeText(const std::string& s);
     std::shared_ptr<GpuLabel> makeDoorLabel(const std::string& name, Vec3 tint);
