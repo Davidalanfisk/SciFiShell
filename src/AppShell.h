@@ -14,6 +14,7 @@
 #include "FolderPicker.h"
 #include "MediaPlayer.h"
 #include "MediaApp.h"
+#include "OnScreenKeyboard.h"
 #ifdef _WIN32
 #include "AppWindow.h"
 #include "AppCatalog.h"
@@ -130,6 +131,8 @@ private:
     std::unique_ptr<TaskSwitcher> switcher_;
     std::unique_ptr<SettingsHub> settingsPanel_;
     std::unique_ptr<SysMonitor> monitor_;
+    std::unique_ptr<OnScreenKeyboard> osk_;  // floating keyboard for the headset and gamepad; types into the focused window
+    void toggleKeyboard();
     std::unique_ptr<Terminal> terminal_;
     std::unique_ptr<FileBrowser> files2d_;
     std::unique_ptr<TextEditor> editor2d_;
@@ -229,7 +232,14 @@ private:
     Camera camera_;
     bool running_ = true;
     bool vrOn_ = false;
+    float vrHeadY_ = 0.0f;  // tracked head height above the tracking origin, latched so the rig can follow the flown altitude
     VRInput vrInput_;
+    // Who aims in VR: the headset's gaze (mouse / keyboard / gamepad users) or the right controller once it is used.
+    bool vrGaze_ = true;
+    Vec3 vrAnchor_{0, 0, -1};
+    bool snapLatch_ = false;
+    int lastSource_ = 0;  // 0 keyboard + mouse, 1 gamepad, 2 VR controller: decides whether a text field pops the keyboard up
+    bool wasTyping_ = false;
     double time_ = 0;
     static constexpr float kFovY = 1.2f;  // radians (~69 degrees)
 };

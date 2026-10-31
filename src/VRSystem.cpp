@@ -1,5 +1,6 @@
 #include "VRSystem.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -44,11 +45,12 @@ struct VRSystem::Impl {
     XrSpace aimSpace = XR_NULL_HANDLE;
     XrActionSet actionSet = XR_NULL_HANDLE;
     XrAction poseAction = XR_NULL_HANDLE, selectAction = XR_NULL_HANDLE, moveAction = XR_NULL_HANDLE,
-             backAction = XR_NULL_HANDLE, menuAction = XR_NULL_HANDLE;
+             backAction = XR_NULL_HANDLE, menuAction = XR_NULL_HANDLE, lookAction = XR_NULL_HANDLE,
+             kbdAction = XR_NULL_HANDLE, switchAction = XR_NULL_HANDLE;
     XrPath leftHand = XR_NULL_PATH, rightHand = XR_NULL_PATH;
     Eye eyes[2];
     bool sessionRunning = false;
-    bool prevSelect = false, prevBack = false, prevMenu = false;
+    bool prevSelect = false, prevBack = false, prevMenu = false, prevKbd = false, prevSwitch = false;
 
     XrPath path(const char* s) const {
         XrPath p = XR_NULL_PATH;
@@ -88,25 +90,39 @@ struct VRSystem::Impl {
         moveAction = makeAction("move", "Move", XR_ACTION_TYPE_VECTOR2F_INPUT, both, 2);
         backAction = makeAction("back", "Back", XR_ACTION_TYPE_BOOLEAN_INPUT, both, 2);
         menuAction = makeAction("tools", "Tool ring", XR_ACTION_TYPE_BOOLEAN_INPUT, both, 2);
+        lookAction = makeAction("look", "Turn and climb", XR_ACTION_TYPE_VECTOR2F_INPUT, both, 2);
+        kbdAction = makeAction("keyboard", "On-screen keyboard", XR_ACTION_TYPE_BOOLEAN_INPUT, both, 2);
+        switchAction = makeAction("switch", "Switch window", XR_ACTION_TYPE_BOOLEAN_INPUT, both, 2);
 
         suggest("/interaction_profiles/oculus/touch_controller",
                 {{poseAction, "/user/hand/right/input/aim/pose"},
                  {selectAction, "/user/hand/right/input/trigger/value"},
                  {moveAction, "/user/hand/left/input/thumbstick"},
                  {menuAction, "/user/hand/left/input/y/click"},
-                 {backAction, "/user/hand/right/input/b/click"}});
+                 {backAction, "/user/hand/right/input/b/click"},
+                 {lookAction, "/user/hand/right/input/thumbstick"},
+                 {kbdAction, "/user/hand/left/input/squeeze/value"},
+                 {kbdAction, "/user/hand/left/input/x/click"},
+                 {switchAction, "/user/hand/right/input/squeeze/value"}});
         suggest("/interaction_profiles/valve/index_controller",
                 {{poseAction, "/user/hand/right/input/aim/pose"},
                  {selectAction, "/user/hand/right/input/trigger/value"},
                  {moveAction, "/user/hand/left/input/thumbstick"},
                  {menuAction, "/user/hand/left/input/b/click"},
-                 {backAction, "/user/hand/right/input/b/click"}});
+                 {backAction, "/user/hand/right/input/b/click"},
+                 {lookAction, "/user/hand/right/input/thumbstick"},
+                 {kbdAction, "/user/hand/left/input/squeeze/value"},
+                 {kbdAction, "/user/hand/left/input/a/click"},
+                 {switchAction, "/user/hand/right/input/squeeze/value"}});
         suggest("/interaction_profiles/htc/vive_controller",
                 {{poseAction, "/user/hand/right/input/aim/pose"},
                  {selectAction, "/user/hand/right/input/trigger/value"},
                  {moveAction, "/user/hand/left/input/trackpad"},
                  {menuAction, "/user/hand/left/input/menu/click"},
-                 {backAction, "/user/hand/right/input/menu/click"}});
+                 {backAction, "/user/hand/right/input/menu/click"},
+                 {lookAction, "/user/hand/right/input/trackpad"},
+                 {kbdAction, "/user/hand/left/input/squeeze/click"},
+                 {switchAction, "/user/hand/right/input/squeeze/click"}});
         suggest("/interaction_profiles/khr/simple_controller",
                 {{poseAction, "/user/hand/right/input/aim/pose"},
                  {selectAction, "/user/hand/right/input/select/click"},
@@ -316,13 +332,35 @@ void VRSystem::frame(Renderer& renderer, const Mat4& rig, const DrawScene& drawS
         d.prevMenu = menu;
         gi.subactionPath = d.rightHand;
 
+        auto edge = [&](XrAction a, XrPath hand, bool& prev) {
+            XrActionStateBoolean s{XR_TYPE_ACTION_STATE_BOOLEAN};
+            XrActionStateGetInfo g{XR_TYPE_ACTION_STATE_GET_INFO};
+            g.action = a;
+            g.subactionPath = hand;
+            xrGetActionStateBoolean(d.session, &g, &s);
+            const bool on = s.isActive && s.currentState;
+            const bool e = on && !prev;
+            prev = on;
+            return e;
+        };
+        input.kbdPressed = edge(d.kbdAction, d.leftHand, d.prevKbd);
+        input.switchPressed = edge(d.switchAction, d.rightHand, d.prevSwitch);
+
         XrActionStateVector2f v{XR_TYPE_ACTION_STATE_VECTOR2F};
         gi.action = d.moveAction;
         gi.subactionPath = d.leftHand;
         xrGetActionStateVector2f(d.session, &gi, &v);
         if (v.isActive) {
-            input.moveX = v.currentState.x;
-            input.moveY = v.currentState.y;
+            input.moveX = std::fabs(v.currentState.x) < 0.18f ? 0.0f : v.currentState.x;
+            input.moveY = std::fabs(v.currentState.y) < 0.18f ? 0.0f : v.currentState.y;
+        }
+        gi.action = d.lookAction;
+        gi.subactionPath = d.rightHand;
+        v = XrActionStateVector2f{XR_TYPE_ACTION_STATE_VECTOR2F};
+        xrGetActionStateVector2f(d.session, &gi, &v);
+        if (v.isActive) {
+            input.lookX = std::fabs(v.currentState.x) < 0.18f ? 0.0f : v.currentState.x;
+            input.lookY = std::fabs(v.currentState.y) < 0.18f ? 0.0f : v.currentState.y;
         }
 
         XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};

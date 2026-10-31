@@ -120,6 +120,23 @@ void drawImage(Bitmap& bm, const Bitmap& src, const Rect& r, float rad) {
 
 // Draws a video frame letterboxed into rea. Frames the decoder already scaled to fit are copied row by row; anything else
 // is resampled with fixed-point bilinear filtering.
+// Letterboxes a frame of sw x sh into area (same sizing as blitFit) and cuts a transparent hole there, so the picture can be
+// drawn on its own texture behind the panel. Returns the hole in bitmap pixels (w == 0: nothing).
+void holeFit(Bitmap& bm, int sw, int sh, const Rect& area, int& ox, int& oy, int& ow, int& oh) {
+    ow = oh = 0;
+    if (sw <= 0 || sh <= 0 || area.w() < 2 || area.h() < 2) return;
+    const float s = std::min(area.w() / sw, area.h() / sh);
+    const int dw = std::max(1, static_cast<int>(sw * s + 0.5f)), dh = std::max(1, static_cast<int>(sh * s + 0.5f));
+    const int dx = static_cast<int>((area.x0 + area.x1) * 0.5f - dw * 0.5f + 0.5f), dy = static_cast<int>((area.y0 + area.y1) * 0.5f - dh * 0.5f + 0.5f);
+    const int x0 = std::max(0, dx), x1 = std::min(bm.w, dx + dw), y0 = std::max(0, dy), y1 = std::min(bm.h, dy + dh);
+    if (x1 <= x0 || y1 <= y0) return;
+    for (int y = y0; y < y1; ++y) std::memset(&bm.rgba[(static_cast<size_t>(y) * bm.w + x0) * 4], 0, static_cast<size_t>(x1 - x0) * 4);
+    ox = x0;
+    oy = y0;
+    ow = x1 - x0;
+    oh = y1 - y0;
+}
+
 void blitFit(Bitmap& bm, const Bitmap& src, const Rect& area) {
     if (src.w <= 0 || src.h <= 0 || area.w() < 2 || area.h() < 2) return;
     float s = std::min(area.w() / src.w, area.h() / src.h);
@@ -400,7 +417,7 @@ void MediaApp::rebuildAlbums() {
     nowPathSeen_.clear();
     albumsDirty_ = false;
     albumT_ = 0;
-    invalidate();
+    if (!theatre_) invalidate();  // the library isn't on screen while a video fills the window
 }
 
 void MediaApp::pump() {
@@ -415,11 +432,11 @@ void MediaApp::pump() {
         } else if (r.kind == MetaResult::Art) {
             if (r.ok) artCache_[r.key] = std::move(r.bmp);
             else artMissing_.insert(r.key);
-            invalidate();
+            if (!theatre_) invalidate();
         } else {
             if (r.ok) thumbCache_[r.key] = std::move(r.bmp);
             else thumbMissing_.insert(r.key);
-            invalidate();
+            if (!theatre_) invalidate();
         }
     }
 }
@@ -478,11 +495,16 @@ void MediaApp::tick(double dt) {
     albumT_ += dt;
 
     NowInfo n = host_.now ? host_.now() : NowInfo();
+    const bool posChanged = static_cast<int>(n.pos) != static_cast<int>(now_.pos);
     const bool changed = n.active != now_.active || n.playing != now_.playing || n.title != now_.title || n.path != now_.path ||
-                         static_cast<int>(n.pos) != static_cast<int>(now_.pos) || n.loading != now_.loading || n.shuffle != now_.shuffle ||
+                         n.loading != now_.loading || n.shuffle != now_.shuffle ||
                          n.repeat != now_.repeat || std::fabs(n.vol - now_.vol) > 0.001f || n.live != now_.live;
     now_ = n;
     if (changed) invalidate();
+    else if (posChanged) {
+        if (skValid_ && !isDirty()) seekDirty_ = true;
+        else invalidate();
+    }
 
     const bool scanning = host_.scanning ? host_.scanning() : false;
     const size_t cnt = host_.count ? host_.count() : 0;
@@ -490,17 +512,32 @@ void MediaApp::tick(double dt) {
     pump();
     if (albumsDirty_ && (albumT_ > 0.8 || tagsOutstanding_ == 0)) rebuildAlbums();
 
-    bool live = false;
-    float raw[32] = {};
-    if (now_.playing && host_.spectrum && host_.spectrum(raw, 32)) live = true;
-    bool bandsMoving = false;
-    for (int i = 0; i < 32; ++i) {
-        const float target = live ? raw[i] : 0.0f;
-        if (target > bands_[i]) bands_[i] += (target - bands_[i]) * std::min(1.0, dt * 22);
-        else bands_[i] = std::max(target, bands_[i] - static_cast<float>(dt) * 1.4f);
-        peaks_[i] = std::max(bands_[i], peaks_[i] - static_cast<float>(dt) * 0.45f);
-        if (bands_[i] > 0.01f || peaks_[i] > 0.01f) bandsMoving = true;
+    // The spectrum is only analysed while the window is visible, and at the same ~25 Hz the window repaints at.
+    specT_ += dt;
+    if (!isOpen()) {
+        specT_ = 0;
+        if (bandsMoving_) {
+            std::fill(std::begin(bands_), std::end(bands_), 0.0f);
+            std::fill(std::begin(peaks_), std::end(peaks_), 0.0f);
+            bandsMoving_ = false;
+        }
+    } else if (!cinema_ && specT_ >= 0.04 || (bandsMoving_ && !now_.playing && specT_ >= 0.02)) {
+        const double sdt = std::min(specT_, 0.1);
+        specT_ = 0;
+        bool live = false;
+        float raw[32] = {};
+        if (now_.playing && host_.spectrum && host_.spectrum(raw, 32)) live = true;
+        bool moving = false;
+        for (int i = 0; i < 32; ++i) {
+            const float target = live ? raw[i] : 0.0f;
+            if (target > bands_[i]) bands_[i] += (target - bands_[i]) * static_cast<float>(std::min(1.0, sdt * 22));
+            else bands_[i] = std::max(target, bands_[i] - static_cast<float>(sdt) * 1.4f);
+            peaks_[i] = std::max(bands_[i], peaks_[i] - static_cast<float>(sdt) * 0.45f);
+            if (bands_[i] > 0.01f || peaks_[i] > 0.01f) moving = true;
+        }
+        bandsMoving_ = moving;
     }
+    const bool bandsMoving = bandsMoving_;
 
     const float d = scrollTarget_ - scroll_;
     bool scrolling = false;
@@ -515,6 +552,7 @@ void MediaApp::tick(double dt) {
     if (theatre_ && ((now_.active && !now_.video) || (!now_.active && videoSeen_))) {
         theatre_ = false;
         videoSeen_ = false;
+        invalidate();
     }
     if (cinema_ && !theatre_) exitCinema();
     if (theatre_ && host_.videoTarget) {
@@ -540,13 +578,16 @@ void MediaApp::tick(double dt) {
         std::vector<uint8_t> px;
         int fw = 0, fh = 0;
         if (host_.videoFrame && host_.videoFrame(px, fw, fh) && fw > 0 && fh > 0 && px.size() >= static_cast<size_t>(fw) * fh * 4) {
+            if (frame_.w != fw || frame_.h != fh) invalidate();  // the picture's rectangle changed: re-cut the hole
             frame_.w = fw;
             frame_.h = fh;
             frame_.rgba = std::move(px);
-            invalidate();
+            vidFresh_ = true;
         }
     }
-    animating_ = bandsMoving || scrolling || now_.loading || watching || (cinema_ && uiFade_ != fadeTarget);
+    const bool barsLive = bandsMoving && !cinema_;  // bars repaint on their own small rect, never the whole window
+    specOnly_ = barsLive && !scrolling && !now_.loading;
+    animating_ = barsLive || seekDirty_ || scrolling || now_.loading || (cinema_ && uiFade_ != fadeTarget);
 }
 
 bool MediaApp::onHover(float x, float y) {
@@ -681,7 +722,7 @@ void MediaApp::paintCinema(Bitmap& bm) {
     const Rect whole{0, 0, static_cast<float>(bm.w), static_cast<float>(bm.h)};
     fillRect(bm, 0, 0, whole.x1, whole.y1, Color8{0, 0, 0, 255});
     if (frame_.w > 0 && frame_.h > 0) {
-        blitFit(bm, frame_, whole);
+        holeFit(bm, frame_.w, frame_.h, whole, vx_, vy_, vw_, vh_);
     } else {
         const std::string s = now_.loading ? "OPENING" : "LOADING VIDEO";
         label(bm, whole.x1 * 0.5f - measureText(s, 30 * k, FontFace::UIBold) * 0.5f, whole.y1 * 0.5f, s, 30 * k, FontFace::UIBold, t.dim);
@@ -754,8 +795,102 @@ void MediaApp::paintCinema(Bitmap& bm) {
     }
 }
 
+void MediaApp::snapshotBackdrop(const Bitmap& bm) {
+    const int x0 = std::max(0, static_cast<int>(spRect_.x0)), x1 = std::min(bm.w, static_cast<int>(spRect_.x1) + 1);
+    const int y0 = std::max(0, static_cast<int>(spRect_.y0)), y1 = std::min(bm.h, static_cast<int>(spRect_.y1) + 1);
+    spValid_ = false;
+    if (x1 <= x0 || y1 <= y0) return;
+    spPx_ = {x0, y0, x1 - x0, y1 - y0};
+    backdrop_.resize(static_cast<size_t>(spPx_.w) * spPx_.h * 4);
+    for (int y = 0; y < spPx_.h; ++y)
+        std::memcpy(&backdrop_[static_cast<size_t>(y) * spPx_.w * 4], &bm.rgba[(static_cast<size_t>(y0 + y) * bm.w + x0) * 4],
+                    static_cast<size_t>(spPx_.w) * 4);
+    spW_ = bm.w;
+    spH_ = bm.h;
+    spValid_ = true;
+}
+
+void MediaApp::drawBars(Bitmap& bm, const ui::Rect& sp) {
+    using namespace ui;
+    const float k = spK_;
+    const int nb = 32;
+    const float bwid = sp.w() / nb;
+    for (int i = 0; i < nb; ++i) {
+        const float v = std::clamp(bands_[i], 0.0f, 1.0f), pk = std::clamp(peaks_[i], 0.0f, 1.0f);
+        const float h = std::max(2.0f * k, v * sp.h());
+        const Color8 col = mix(spA_, spB_, static_cast<float>(i) / nb);
+        const float bx = sp.x0 + i * bwid;
+        fillRect(bm, bx + 1.5f * k, sp.y1 - h, bx + bwid - 1.5f * k, sp.y1, withAlpha(col, v > 0.02f ? 235 : 70));
+        if (pk > 0.04f) fillRect(bm, bx + 1.5f * k, sp.y1 - pk * sp.h() - 3 * k, bx + bwid - 1.5f * k, sp.y1 - pk * sp.h(), spT_);
+    }
+}
+
+const Bitmap* MediaApp::videoLayer(int& x, int& y, int& w, int& h, bool& fresh) {
+    if (!theatre_ || vw_ <= 0 || frame_.w <= 0 || frame_.h <= 0) return nullptr;
+    x = vx_;
+    y = vy_;
+    w = vw_;
+    h = vh_;
+    fresh = vidFresh_;
+    vidFresh_ = false;
+    return &frame_;
+}
+
+void MediaApp::drawSeek(Bitmap& bm) {
+    using namespace ui;
+    const float k = skK_, sy = skY_;
+    const Rect sk{skX0_ + 64 * k, sy, skX1_ - 64 * k, sy + 10 * k};
+    const float frac = skSeekable_ ? std::clamp(static_cast<float>(now_.pos / now_.dur), 0.0f, 1.0f) : 0.0f;
+    bar(bm, sk, now_.live ? 1.0f : frac, now_.live ? withAlpha(skAccent_, 60) : skAccent_);
+    if (skSeekable_) dot(bm, sk.x0 + sk.w() * frac, (sk.y0 + sk.y1) * 0.5f, (hover_ == 15 * 100000 ? 9 : 7) * k, skText_);
+    if (now_.live) {
+        const std::string s = "LIVE";
+        label(bm, (sk.x0 + sk.x1) * 0.5f - measureText(s, 17 * k, FontFace::UIBold) * 0.5f, sy - 8 * k, s, 17 * k, FontFace::UIBold, skAccent_);
+    } else if (now_.active) {
+        label(bm, skX0_, sy + 11 * k, clock(now_.pos), 18 * k, FontFace::UI, skDim_);
+        labelRight(bm, skX1_, sy + 11 * k, now_.dur > 0 ? clock(now_.dur) : "--:--", 18 * k, FontFace::UI, skDim_);
+    }
+}
+
+bool MediaApp::repaintPartial(Bitmap& bm, int& x, int& y, int& w, int& h) {
+    const bool doBars = specOnly_ && spValid_ && bm.w == spW_ && bm.h == spH_;
+    const bool doSeek = seekDirty_ && skValid_ && bm.w == skW_ && bm.h == skH_;
+    if (!doBars && !doSeek) return false;
+    auto restore = [&](const PxRect& r, const std::vector<uint8_t>& src) {
+        for (int i = 0; i < r.h; ++i)
+            std::memcpy(&bm.rgba[(static_cast<size_t>(r.y + i) * bm.w + r.x) * 4], &src[static_cast<size_t>(i) * r.w * 4], static_cast<size_t>(r.w) * 4);
+    };
+    int x0 = bm.w, y0 = bm.h, x1 = 0, y1 = 0;
+    auto grow = [&](const PxRect& r) {
+        x0 = std::min(x0, r.x);
+        y0 = std::min(y0, r.y);
+        x1 = std::max(x1, r.x + r.w);
+        y1 = std::max(y1, r.y + r.h);
+    };
+    if (doBars) {
+        restore(spPx_, backdrop_);
+        drawBars(bm, ui::Rect{spRect_.x0, spRect_.y0 + 4 * spK_, spRect_.x1, spRect_.y1});
+        grow(spPx_);
+    }
+    if (doSeek) {
+        restore(skPx_, skBack_);
+        drawSeek(bm);
+        grow(skPx_);
+        seekDirty_ = false;
+    }
+    x = x0;
+    y = y0;
+    w = x1 - x0;
+    h = y1 - y0;
+    return true;
+}
+
 void MediaApp::paint(Bitmap& bm) {
     using namespace ui;
+    spValid_ = false;
+    skValid_ = false;
+    seekDirty_ = false;
+    vw_ = vh_ = 0;
     const Tokens t = tokens();
     const float k = ph() / 900.0f;
     hits_.clear();
@@ -875,7 +1010,7 @@ void MediaApp::paint(Bitmap& bm) {
         // ---- video theatre: the picture fills the view, a click pauses
         fillRound(L, view.x0, view.y0, view.x1, view.y1, 10 * k, Color8{0, 0, 0, 255});
         if (frame_.w > 0 && frame_.h > 0) {
-            blitFit(L, frame_, view);
+            holeFit(L, frame_.w, frame_.h, view, vx_, vy_, vw_, vh_);
         } else {
             const std::string s = now_.loading ? "OPENING" : "LOADING VIDEO";
             label(L, (view.x0 + view.x1) * 0.5f - measureText(s, 26 * k, FontFace::UIBold) * 0.5f, (view.y0 + view.y1) * 0.5f, s, 26 * k, FontFace::UIBold, t.dim);
@@ -1183,34 +1318,37 @@ void MediaApp::paint(Bitmap& bm) {
         const float sy = barR.y1 - bp - 30 * k;
         const Rect sk{cx0 + 64 * k, sy, cx1 - 64 * k, sy + 10 * k};
         const bool seekable = canMove && now_.dur > 0;
-        const float frac = seekable ? std::clamp(static_cast<float>(now_.pos / now_.dur), 0.0f, 1.0f) : 0.0f;
-        bar(bm, sk, now_.live ? 1.0f : frac, now_.live ? withAlpha(t.accent, 60) : t.accent);
-        if (seekable) {
-            dot(bm, sk.x0 + sk.w() * frac, (sk.y0 + sk.y1) * 0.5f, (hot(15, 0) ? 9 : 7) * k, t.text);
-            addHit(Rect{sk.x0, sk.y0 - 14 * k, sk.x1, sk.y1 + 14 * k}, 15);
+        skK_ = k; skX0_ = cx0; skX1_ = cx1; skY_ = sy; skSeekable_ = seekable;
+        skAccent_ = t.accent; skText_ = t.text; skDim_ = t.dim;
+        {
+            const int sx0 = std::max(0, static_cast<int>(cx0)), sx1 = std::min(bm.w, static_cast<int>(cx1) + 2);
+            const int sy0 = std::max(0, static_cast<int>(sy - 30 * k)), sy1 = std::min(bm.h, static_cast<int>(sy + 26 * k));
+            skValid_ = false;
+            if (sx1 > sx0 && sy1 > sy0) {
+                skPx_ = {sx0, sy0, sx1 - sx0, sy1 - sy0};
+                skBack_.resize(static_cast<size_t>(skPx_.w) * skPx_.h * 4);
+                for (int yy = 0; yy < skPx_.h; ++yy)
+                    std::memcpy(&skBack_[static_cast<size_t>(yy) * skPx_.w * 4], &bm.rgba[(static_cast<size_t>(sy0 + yy) * bm.w + sx0) * 4], static_cast<size_t>(skPx_.w) * 4);
+                skW_ = bm.w;
+                skH_ = bm.h;
+                skValid_ = true;
+            }
         }
-        if (now_.live) {
-            const std::string s = "LIVE";
-            label(bm, (sk.x0 + sk.x1) * 0.5f - measureText(s, 17 * k, FontFace::UIBold) * 0.5f, sy - 8 * k, s, 17 * k, FontFace::UIBold, t.accent);
-        } else if (now_.active) {
-            label(bm, cx0, sy + 11 * k, clock(now_.pos), 18 * k, FontFace::UI, t.dim);
-            labelRight(bm, cx1, sy + 11 * k, now_.dur > 0 ? clock(now_.dur) : "--:--", 18 * k, FontFace::UI, t.dim);
-        }
+        drawSeek(bm);
+        if (seekable) addHit(Rect{sk.x0, sk.y0 - 14 * k, sk.x1, sk.y1 + 14 * k}, 15);
     }
     // spectrum + volume
     {
         const float rx0 = barR.x0 + bw * 0.74f, rx1 = barR.x1 - bp;
         const Rect sp{rx0, barR.y0 + bp, rx1, barR.y1 - bp - 44 * k};
-        const int nb = 32;
-        const float bwid = sp.w() / nb;
-        for (int i = 0; i < nb; ++i) {
-            const float v = std::clamp(bands_[i], 0.0f, 1.0f), pk = std::clamp(peaks_[i], 0.0f, 1.0f);
-            const float h = std::max(2.0f * k, v * sp.h());
-            const Color8 col = mix(t.accent, t.alt, static_cast<float>(i) / nb);
-            const float bx = sp.x0 + i * bwid;
-            fillRect(bm, bx + 1.5f * k, sp.y1 - h, bx + bwid - 1.5f * k, sp.y1, withAlpha(col, v > 0.02f ? 235 : 70));
-            if (pk > 0.04f) fillRect(bm, bx + 1.5f * k, sp.y1 - pk * sp.h() - 3 * k, bx + bwid - 1.5f * k, sp.y1 - pk * sp.h(), t.text);
-        }
+        // Snapshot what sits behind the bars so they can be redrawn alone, without repainting the whole window.
+        spRect_ = Rect{sp.x0, sp.y0 - 4 * k, sp.x1, sp.y1};
+        spK_ = k;
+        spA_ = t.accent;
+        spB_ = t.alt;
+        spT_ = t.text;
+        snapshotBackdrop(bm);
+        drawBars(bm, sp);
         label(bm, rx0, barR.y1 - bp - 8 * k, "VOL", 18 * k, FontFace::UIBold, t.dim);
         const Rect vr{rx0 + 60 * k, barR.y1 - bp - 26 * k, rx1, barR.y1 - bp - 4 * k};
         slider(bm, vr, std::clamp(now_.vol, 0.0f, 1.0f), hot(16, 0) ? State::Hover : State::Normal);

@@ -48,6 +48,7 @@ public:
     float hitDistance(Vec3 origin, Vec3 dir) const;       // distance to the panel (margin included), or -1
     bool bounds(Vec3& centre, Vec3& normal, float& w, float& h) const;
     void invalidate() { dirty_ = true; }
+    bool isDirty() const { return dirty_; }
 
 protected:
     virtual void onOpen() {}
@@ -63,6 +64,11 @@ protected:
     virtual void onCtrl(const std::string&) {}
     virtual void onClose() {}
     virtual bool chromeless() const { return false; }  // fullscreen without the window buttons (video cinema)
+    // Timer repaints may update just a sub-rectangle of the bitmap (true = done, rect filled in); false = repaint everything.
+    // A live picture drawn on its own GPU texture behind the panel bitmap (which must be transparent where it shows), so
+    // new frames never force a repaint. Returns the frame and its target rectangle in bitmap pixels, or null for none.
+    virtual const Bitmap* videoLayer(int& /*x*/, int& /*y*/, int& /*w*/, int& /*h*/, bool& /*fresh*/) { return nullptr; }
+    virtual bool repaintPartial(Bitmap&, int&, int&, int&, int&) { return false; }
     virtual double repaintInterval() const { return 0.0; }  // > 0: also repaint on a timer (animated content)
 
     int pw() const { return w_; }
@@ -94,6 +100,9 @@ private:
     Vec3 fallbackFlat_{0, 0, -1};
     float viewTan_ = 0.577f, viewAspect_ = 1.78f;
     Bitmap bm_;
+    std::shared_ptr<GpuLabel> vlabel_;
+    int vlw_ = 0, vlh_ = 0, vx_ = 0, vy_ = 0, vw_ = 0, vh_ = 0;
+    bool vlActive_ = false;
     std::shared_ptr<GpuLabel> label_;
     std::string themeSig_;
 };

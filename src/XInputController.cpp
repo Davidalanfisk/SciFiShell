@@ -23,7 +23,7 @@ float applyDeadzone(float v, float dz) {
 }  // namespace
 
 struct XInputController::Impl {
-    bool prevA = false, prevB = false, prevUp = false, prevDown = false, prevY = false, prevLeft = false, prevRight = false;
+    bool prevA = false, prevB = false, prevUp = false, prevDown = false, prevY = false, prevLeft = false, prevRight = false, prevX = false, prevLB = false, prevRB = false;
 #ifndef _WIN32
     SDL_GameController* pad = nullptr;
 #endif
@@ -40,7 +40,7 @@ XInputController::~XInputController() {
 
 PadState XInputController::poll() {
     PadState s;
-    bool a = false, b = false, up = false, down = false, y = false, left = false, right = false;
+    bool a = false, b = false, up = false, down = false, y = false, left = false, right = false, x = false, lb = false, rb = false;
 #ifdef _WIN32
     XINPUT_STATE st{};
     if (XInputGetState(0, &st) == ERROR_SUCCESS) {
@@ -59,6 +59,9 @@ PadState XInputController::poll() {
         left = (g.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
         right = (g.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
         y = (g.wButtons & XINPUT_GAMEPAD_Y) != 0;
+        x = (g.wButtons & XINPUT_GAMEPAD_X) != 0;
+        lb = (g.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+        rb = (g.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
     }
 #else
     if (!impl_->pad || !SDL_GameControllerGetAttached(impl_->pad)) {
@@ -84,6 +87,9 @@ PadState XInputController::poll() {
         left = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_DPAD_LEFT) != 0;
         right = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) != 0;
         y = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_Y) != 0;
+        x = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_X) != 0;
+        lb = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0;
+        rb = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
     }
 #endif
     s.yPressed = y && !impl_->prevY;
@@ -94,6 +100,12 @@ PadState XInputController::poll() {
     s.downPressed = down && !impl_->prevDown;
     s.leftPressed = left && !impl_->prevLeft;
     s.rightPressed = right && !impl_->prevRight;
+    s.xPressed = x && !impl_->prevX;
+    s.lbPressed = lb && !impl_->prevLB;
+    s.rbPressed = rb && !impl_->prevRB;
+    impl_->prevX = x;
+    impl_->prevLB = lb;
+    impl_->prevRB = rb;
     impl_->prevLeft = left;
     impl_->prevRight = right;
     impl_->prevA = a;

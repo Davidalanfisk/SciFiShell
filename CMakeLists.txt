@@ -60,6 +60,7 @@ set(SOURCES
     src/UiKit.cpp
     src/PanelApp.cpp
     src/SysMonitor.cpp
+    src/OnScreenKeyboard.cpp
     src/Terminal.cpp
     src/FileBrowser.cpp
     src/TextEditor.cpp
@@ -133,7 +134,7 @@ target_link_libraries(SciFiShell PRIVATE
 
 if(WIN32)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineD3D12-static xinput d3d12 dxgi pdh
-                          mfplat mfreadwrite mfuuid propsys ole32 oleaut32 iphlpapi powrprof ws2_32 psapi)
+                          mfplat mfreadwrite mfuuid d3d11 propsys ole32 oleaut32 iphlpapi powrprof ws2_32 psapi)
 elseif(APPLE)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineMetal-static)
 else()

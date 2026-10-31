@@ -5,6 +5,7 @@
 #define NOMINMAX
 #include <SDL.h>
 #include <windows.h>
+#include <d3d11_4.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfidl.h>
@@ -35,37 +36,62 @@ constexpr size_t kVideoQueue = 6;                 // decoded frames kept ahead o
 constexpr double kAudioAhead = 0.3;               // seconds of audio kept queued
 using Clock = std::chrono::steady_clock;
 
-void fft(std::vector<float>& re, std::vector<float>& im) {
-    const size_t n = re.size();
-    for (size_t i = 1, j = 0; i < n; ++i) {
-        size_t bit = n >> 1;
-        for (; j & bit; bit >>= 1) j ^= bit;
-        j ^= bit;
+// In-place radix-2 FFT for the fixed spectrum size, with twiddle factors, bit-reversal and window computed once.
+constexpr int kFftN = 1024;
+struct FftTables {
+    float cosT[kFftN / 2], sinT[kFftN / 2];
+    uint16_t rev[kFftN];
+    float window[kFftN];
+    int k0[64], k1[64];
+    int bands = 0;
+    FftTables() {
+        for (int i = 0; i < kFftN / 2; ++i) {
+            cosT[i] = std::cos(-6.2831853f * i / kFftN);
+            sinT[i] = std::sin(-6.2831853f * i / kFftN);
+        }
+        for (int i = 0, j = 0; i < kFftN; ++i) {
+            rev[i] = static_cast<uint16_t>(j);
+            int bit = kFftN >> 1;
+            for (; j & bit; bit >>= 1) j ^= bit;
+            j ^= bit;
+        }
+        for (int i = 0; i < kFftN; ++i) window[i] = 0.5f - 0.5f * std::cos(6.2831853f * i / (kFftN - 1));
+    }
+    void setBands(int nb) {
+        if (nb == bands || nb > 64) return;
+        bands = nb;
+        const float lo = 50.0f, hi = 16000.0f, binHz = 48000.0f / kFftN;
+        for (int b = 0; b < nb; ++b) {
+            const float f0 = lo * std::pow(hi / lo, static_cast<float>(b) / nb), f1 = lo * std::pow(hi / lo, static_cast<float>(b + 1) / nb);
+            k0[b] = std::clamp(static_cast<int>(f0 / binHz), 1, kFftN / 2 - 1);
+            k1[b] = std::clamp(static_cast<int>(f1 / binHz), k0[b], kFftN / 2 - 1);
+        }
+    }
+};
+
+void fft(float* re, float* im, const FftTables& T) {
+    for (int i = 0; i < kFftN; ++i) {
+        const int j = T.rev[i];
         if (i < j) {
             std::swap(re[i], re[j]);
             std::swap(im[i], im[j]);
         }
     }
-    for (size_t len = 2; len <= n; len <<= 1) {
-        const float ang = -6.2831853f / static_cast<float>(len);
-        const float wr = std::cos(ang), wi = std::sin(ang);
-        for (size_t i = 0; i < n; i += len) {
-            float cr = 1, ci = 0;
-            for (size_t k = 0; k < len / 2; ++k) {
-                const size_t a = i + k, b = i + k + len / 2;
+    for (int len = 2; len <= kFftN; len <<= 1) {
+        const int half = len / 2, step = kFftN / len;
+        for (int i = 0; i < kFftN; i += len) {
+            for (int k = 0; k < half; ++k) {
+                const float cr = T.cosT[k * step], ci = T.sinT[k * step];
+                const int a = i + k, b = a + half;
                 const float tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
                 re[b] = re[a] - tr;
                 im[b] = im[a] - ti;
                 re[a] += tr;
                 im[a] += ti;
-                const float nr = cr * wr - ci * wi;
-                ci = cr * wi + ci * wr;
-                cr = nr;
             }
         }
     }
-}
-}  // namespace
+}}  // namespace
 
 struct MediaPlayer::Impl {
     struct Frame {
@@ -112,6 +138,140 @@ struct MediaPlayer::Impl {
     bool vEos = false, aEos = false;
     std::atomic<int> maxW{0}, maxH{0};
 
+    // Hardware decode: the decoder (DXVA) writes NV12 surfaces on its own D3D11 device; only the picture at its displayed
+    // size is read back and colour-converted on the CPU.
+    bool hw = false;
+    ComPtr<ID3D11Device> d3d;
+    ComPtr<ID3D11DeviceContext> d3dCtx;
+    ComPtr<IMFDXGIDeviceManager> dxgiMgr;
+    ComPtr<ID3D11Texture2D> staging;
+
+    bool createDevice() {
+        if (d3d) return true;
+        const D3D_FEATURE_LEVEL lv[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+        if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                                     lv, 2, D3D11_SDK_VERSION, &d3d, nullptr, &d3dCtx)))
+            return false;
+        ComPtr<ID3D11Multithread> mt;
+        if (SUCCEEDED(d3d.As(&mt))) mt->SetMultithreadProtected(TRUE);
+        UINT token = 0;
+        if (FAILED(MFCreateDXGIDeviceManager(&token, &dxgiMgr)) || FAILED(dxgiMgr->ResetDevice(d3d.Get(), token))) return false;
+        return true;
+    }
+
+    void resetStream() {
+        reader.Reset();
+        staging.Reset();
+        vIdx = aIdx = -1;
+        hasV = hasA = false;
+        vw = vh = cw = ch = 0;
+        vStride = 0;
+        dur = 0;
+    }
+
+    // Reads the NV12 surface behind a hardware-decoded sample into a (possibly downscaled) RGBA frame.
+    bool convertHw(IMFSample* sample, Frame& f) {
+        ComPtr<IMFMediaBuffer> buf;
+        if (FAILED(sample->GetBufferByIndex(0, &buf))) return false;
+        ComPtr<IMFDXGIBuffer> dx;
+        if (FAILED(buf.As(&dx))) return false;
+        ComPtr<ID3D11Texture2D> tex;
+        UINT sub = 0;
+        if (FAILED(dx->GetResource(IID_PPV_ARGS(&tex))) || FAILED(dx->GetSubresourceIndex(&sub))) return false;
+        D3D11_TEXTURE2D_DESC d{};
+        tex->GetDesc(&d);
+        if (d.Format != DXGI_FORMAT_NV12) return false;
+        bool fresh = !staging;
+        if (staging) {
+            D3D11_TEXTURE2D_DESC sd{};
+            staging->GetDesc(&sd);
+            fresh = sd.Width != d.Width || sd.Height != d.Height;
+        }
+        if (fresh) {
+            staging.Reset();
+            D3D11_TEXTURE2D_DESC sd = d;
+            sd.Usage = D3D11_USAGE_STAGING;
+            sd.BindFlags = 0;
+            sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            sd.MiscFlags = 0;
+            sd.ArraySize = 1;
+            sd.MipLevels = 1;
+            if (FAILED(d3d->CreateTexture2D(&sd, nullptr, &staging))) return false;
+        }
+        int w, h;
+        {
+            std::lock_guard<std::mutex> lk(m);
+            w = vw;
+            h = vh;
+        }
+        if (w <= 0 || h <= 0 || static_cast<UINT>(w) > d.Width || static_cast<UINT>(h) > d.Height) return false;
+        d3dCtx->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, tex.Get(), sub, nullptr);
+        D3D11_MAPPED_SUBRESOURCE ms{};
+        if (FAILED(d3dCtx->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &ms))) return false;
+        const uint8_t* yp = static_cast<const uint8_t*>(ms.pData);
+        const uint8_t* uvp = yp + static_cast<size_t>(ms.RowPitch) * d.Height;
+
+        int ow = w, oh = h;
+        const int mw = maxW.load(), mh = maxH.load();
+        if (mw > 0 && mh > 0) {
+            const double s = std::min(1.0, std::min(static_cast<double>(mw) / w, static_cast<double>(mh) / h));
+            ow = std::max(2, static_cast<int>(w * s) & ~1);
+            oh = std::max(2, static_cast<int>(h * s) & ~1);
+        }
+        f.w = ow;
+        f.h = oh;
+        f.rgba.resize(static_cast<size_t>(ow) * oh * 4);
+        const bool hd = h >= 720 || w >= 1280;
+        const int crv = hd ? 459 : 409, cgu = hd ? 55 : 100, cgv = hd ? 137 : 208, cbu = hd ? 541 : 516;
+        const double fx = static_cast<double>(w) / ow, fy = static_cast<double>(h) / oh;
+        std::vector<int> xa(static_cast<size_t>(ow)), xb(static_cast<size_t>(ow));
+        for (int x = 0; x < ow; ++x) {
+            xa[static_cast<size_t>(x)] = std::min(w - 1, static_cast<int>((x + 0.25) * fx));
+            xb[static_cast<size_t>(x)] = std::min(w - 1, static_cast<int>((x + 0.75) * fx));
+        }
+        for (int y = 0; y < oh; ++y) {
+            const int ya = std::min(h - 1, static_cast<int>((y + 0.25) * fy)), yb = std::min(h - 1, static_cast<int>((y + 0.75) * fy));
+            const uint8_t* r0 = yp + static_cast<size_t>(ya) * ms.RowPitch;
+            const uint8_t* r1 = yp + static_cast<size_t>(yb) * ms.RowPitch;
+            const uint8_t* cr = uvp + static_cast<size_t>((ya + yb) / 4) * ms.RowPitch;
+            uint8_t* o = &f.rgba[static_cast<size_t>(y) * ow * 4];
+            for (int x = 0; x < ow; ++x, o += 4) {
+                const int a = xa[static_cast<size_t>(x)], b = xb[static_cast<size_t>(x)];
+                const int c = ((r0[a] + r0[b] + r1[a] + r1[b]) >> 2) - 16;
+                const int ci = ((a + b) >> 2) * 2;
+                const int u = cr[ci] - 128, v = cr[ci + 1] - 128;
+                const int yy = 298 * c + 128;
+                o[0] = static_cast<uint8_t>(std::clamp((yy + crv * v) >> 8, 0, 255));
+                o[1] = static_cast<uint8_t>(std::clamp((yy - cgu * u - cgv * v) >> 8, 0, 255));
+                o[2] = static_cast<uint8_t>(std::clamp((yy + cbu * u) >> 8, 0, 255));
+                o[3] = 255;
+            }
+        }
+        d3dCtx->Unmap(staging.Get(), 0);
+        return true;
+    }
+
+    // Decodes the first frame through the hardware path, to be sure it works before committing to it.
+    bool probeHw() {
+        for (int tries = 0; tries < 40; ++tries) {
+            DWORD si = 0, fl = 0;
+            LONGLONG ts = 0;
+            ComPtr<IMFSample> s;
+            if (FAILED(reader->ReadSample(static_cast<DWORD>(vIdx), 0, &si, &fl, &ts, &s)) || (fl & (MF_SOURCE_READERF_ERROR | MF_SOURCE_READERF_ENDOFSTREAM)))
+                return false;
+            if (fl & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) refreshVideoType();
+            if (!s) continue;
+            Frame f;
+            if (!convertHw(s.Get(), f)) return false;
+            PROPVARIANT pos;
+            PropVariantInit(&pos);
+            pos.vt = VT_I8;
+            pos.hVal.QuadPart = 0;
+            reader->SetCurrentPosition(GUID_NULL, pos);
+            return true;
+        }
+        return false;
+    }
     ~Impl() { stop(); }
 
     void stop() {
@@ -159,15 +319,22 @@ struct MediaPlayer::Impl {
         return true;
     }
 
-    bool openReader() {
+    bool openReader(bool tryHw) {
+        hw = false;
         int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
         if (wlen <= 0) return false;
         std::wstring wpath(static_cast<size_t>(wlen), L'\0');
         MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wlen);
 
         ComPtr<IMFAttributes> attrs;
-        if (FAILED(MFCreateAttributes(&attrs, 2))) return false;
-        attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+        if (FAILED(MFCreateAttributes(&attrs, 4))) return false;
+        if (tryHw && createDevice()) {
+            attrs->SetUnknown(MF_SOURCE_READER_D3D_MANAGER, dxgiMgr.Get());
+            attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
+            hw = true;
+        } else {
+            attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+        }
         if (FAILED(MFCreateSourceReaderFromURL(wpath.c_str(), attrs.Get(), &reader))) return false;
 
         for (DWORD i = 0;; ++i) {
@@ -184,7 +351,7 @@ struct MediaPlayer::Impl {
             ComPtr<IMFMediaType> want;
             MFCreateMediaType(&want);
             want->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-            want->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+            want->SetGUID(MF_MT_SUBTYPE, hw ? MFVideoFormat_NV12 : MFVideoFormat_RGB32);
             if (SUCCEEDED(reader->SetCurrentMediaType(static_cast<DWORD>(vIdx), nullptr, want.Get())) && refreshVideoType()) {
                 reader->SetStreamSelection(static_cast<DWORD>(vIdx), TRUE);
                 hasV = true;
@@ -218,7 +385,16 @@ struct MediaPlayer::Impl {
     }
 
     void queueVideo(IMFSample* sample, double pts) {
-        ComPtr<IMFMediaBuffer> buffer;
+        if (hw) {
+            Frame f;
+            f.pts = pts;
+            if (!convertHw(sample, f)) return;
+            std::lock_guard<std::mutex> lk(m);
+            frames.push_back(std::move(f));
+            if (frames.size() > kVideoQueue * 4) frames.pop_front();
+            wantFrame = false;
+            return;
+        }        ComPtr<IMFMediaBuffer> buffer;
         if (FAILED(sample->ConvertToContiguousBuffer(&buffer))) return;
         int w, h, cwid, chgt;
         LONG stride;
@@ -317,8 +493,15 @@ struct MediaPlayer::Impl {
     void run() {
         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         bool mf = SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE));
-        bool ok = mf && openReader();
-        {
+        bool ok = false;
+        if (mf) {
+            const bool allowHw = !std::getenv("SCIFI_SW_VIDEO");
+            ok = openReader(allowHw);
+            if (ok && hw && hasV && !probeHw()) {
+                resetStream();
+                ok = openReader(false);
+            }
+        }        {
             std::lock_guard<std::mutex> lk(m);
             openOk = ok;
             openDone = true;
@@ -332,6 +515,10 @@ struct MediaPlayer::Impl {
             loop();
         }
         reader.Reset();
+        staging.Reset();
+        dxgiMgr.Reset();
+        d3dCtx.Reset();
+        d3d.Reset();
         if (mf) MFShutdown();
         CoUninitialize();
     }
@@ -542,8 +729,10 @@ bool MediaPlayer::ended() const {
 bool MediaPlayer::spectrum(float* bands, int nb) {
     if (!impl_ || nb <= 0) return false;
     Impl& I = *impl_;
-    constexpr int N = 1024;
-    std::vector<float> re(N, 0.0f), im(N, 0.0f);
+    constexpr int N = kFftN;
+    static FftTables T;
+    T.setBands(nb);
+    float re[N] = {}, im[N] = {};
     {
         std::lock_guard<std::mutex> lk(I.m);
         if (!I.hasA || !I.dev || !I.playing) return false;
@@ -564,15 +753,12 @@ bool MediaPlayer::spectrum(float* bands, int nb) {
             I.hist.pop_front();
         }
     }
-    for (int i = 0; i < N; ++i) re[static_cast<size_t>(i)] *= 0.5f - 0.5f * std::cos(6.2831853f * i / (N - 1));
-    fft(re, im);
-    const float lo = 50.0f, hi = 16000.0f, binHz = 48000.0f / N;
+    for (int i = 0; i < N; ++i) re[i] *= T.window[i];
+    fft(re, im, T);
     for (int b = 0; b < nb; ++b) {
-        const float f0 = lo * std::pow(hi / lo, static_cast<float>(b) / nb), f1 = lo * std::pow(hi / lo, static_cast<float>(b + 1) / nb);
-        const int k0 = std::clamp(static_cast<int>(f0 / binHz), 1, N / 2 - 1);
-        const int k1 = std::clamp(static_cast<int>(f1 / binHz), k0, N / 2 - 1);
-        float mag = 0;
-        for (int k = k0; k <= k1; ++k) mag = std::max(mag, std::sqrt(re[static_cast<size_t>(k)] * re[static_cast<size_t>(k)] + im[static_cast<size_t>(k)] * im[static_cast<size_t>(k)]));
+        float m2 = 0;
+        for (int k = T.k0[b]; k <= T.k1[b]; ++k) m2 = std::max(m2, re[k] * re[k] + im[k] * im[k]);
+        const float mag = std::sqrt(m2);
         const float db = 20.0f * std::log10(mag / (N * 0.25f) + 1e-6f) + static_cast<float>(b) * 0.45f;
         bands[b] = std::clamp((db + 62.0f) / 52.0f, 0.0f, 1.0f);
     }

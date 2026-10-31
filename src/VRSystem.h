@@ -23,6 +23,12 @@ struct VRInput {
     bool selectPressed = false;   // right trigger edge
     bool backPressed = false;     // right B / menu edge
     bool menuPressed = false;     // left Y / B / menu edge (tool ring)
+    float lookX = 0, lookY = 0;   // right thumbstick / trackpad: turn and climb
+    bool kbdPressed = false;      // left grip or X / A edge (on-screen keyboard)
+    bool switchPressed = false;   // right grip edge (window switcher)
+    bool active() const {         // a controller is being used right now
+        return selectPressed || backPressed || menuPressed || kbdPressed || switchPressed || moveX != 0 || moveY != 0 || lookX != 0 || lookY != 0;
+    }
 };
 
 class VRSystem {

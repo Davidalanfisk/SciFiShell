@@ -69,6 +69,7 @@ FrameInput InputSystem::poll() {
                 if (e.key.keysym.sym == SDLK_F5) in.reload = true;
                 if (e.key.keysym.sym == SDLK_F2) in.ring = true;
                 if (e.key.keysym.sym == SDLK_F6) in.themeCycle = true;
+                if (e.key.keysym.sym == SDLK_F7) in.osk = true;
                 if ((e.key.keysym.mod & KMOD_ALT) && e.key.keysym.sym == SDLK_LEFT) in.navBack = true;
                 if ((e.key.keysym.mod & KMOD_ALT) && e.key.keysym.sym == SDLK_RIGHT) in.navForward = true;
                 if (e.key.keysym.sym == SDLK_b && !ctrl) in.browser = true;

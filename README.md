@@ -35,10 +35,14 @@ and just *fly around inside your own machine*.
 | Edit text file / save | `E` / `Ctrl+S` |
 | Cycle colour theme | `F6` |
 | Toggle VR | `V` |
+| On-screen keyboard | `F7` |
 | Screenshot | `F12` (saved to `Pictures\SciFiShell`) |
 
-**Xbox controller:** left stick move · right stick look · **A** select · **B** back · **Y** command ring
-**VR (OpenXR):** ray + trigger to select · left thumbstick to move · menu button for the ring
+**Xbox controller:** left stick move · right stick look (snap turn in VR) · **RT / LT** up / down · **A** select · **B** back · **Y** command ring · **X** on-screen keyboard · **LB / RB** previous / next window (then **A**)
+
+**VR headset only (no controllers needed):** a gaze reticle aims; use mouse, keyboard or Xbox pad for everything else. The on-screen keyboard (`F7`) floats in front of you and pops up when a text field is focused. Picking up a controller switches aiming to its ray; touching mouse, keyboard or pad switches back to gaze.
+
+**VR controllers (OpenXR):** right ray + trigger select · left stick / trackpad move (the way you face) · right stick / trackpad: left-right snap turn, up-down altitude · left menu / Y / B command ring · right menu / B back · left grip or X / A on-screen keyboard · right grip window switcher (trigger confirms)
 
 ## Quick tutorial
 

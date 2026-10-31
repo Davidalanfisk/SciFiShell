@@ -72,6 +72,8 @@ protected:
     void onText(const std::string& s) override;
     void onCtrl(const std::string& s) override;
     double repaintInterval() const override { return animating_ ? 0.04 : 0.0; }
+    bool repaintPartial(Bitmap& bm, int& x, int& y, int& w, int& h) override;
+    const Bitmap* videoLayer(int& x, int& y, int& w, int& h, bool& fresh) override;
 
 private:
     struct Item {
@@ -134,7 +136,27 @@ private:
     int hover_ = -1;
     float scroll_ = 0, scrollTarget_ = 0, scrollMax_ = 0;
     float bands_[32] = {}, peaks_[32] = {};
-    bool animating_ = false;
+    bool animating_ = false, bandsMoving_ = false;
+    double specT_ = 0;
+    int vx_ = 0, vy_ = 0, vw_ = 0, vh_ = 0;
+    bool vidFresh_ = false;
+    bool specOnly_ = false, spValid_ = false;
+    ui::Rect spRect_{};
+    float spK_ = 1;
+    Color8 spA_{}, spB_{}, spT_{};
+    struct PxRect { int x = 0, y = 0, w = 0, h = 0; } spPx_;
+    int spW_ = 0, spH_ = 0;
+    std::vector<uint8_t> backdrop_;
+    void snapshotBackdrop(const Bitmap& bm);
+    void drawBars(Bitmap& bm, const ui::Rect& sp);
+    // The clock and seek bar tick once a second; they repaint alone so the rest of the window (and the video) never stalls.
+    bool seekDirty_ = false, skValid_ = false, skSeekable_ = false;
+    PxRect skPx_;
+    int skW_ = 0, skH_ = 0;
+    std::vector<uint8_t> skBack_;
+    float skK_ = 1, skX0_ = 0, skX1_ = 0, skY_ = 0;
+    Color8 skAccent_{}, skText_{}, skDim_{};
+    void drawSeek(Bitmap& bm);
     NowInfo now_;
     std::string nowPathSeen_;
     int nowAlbum_ = -1;

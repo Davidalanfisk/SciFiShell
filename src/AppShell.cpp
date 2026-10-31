@@ -119,6 +119,7 @@ bool AppShell::init() {
     switcher_ = std::make_unique<TaskSwitcher>(renderer_);
     settings_.load();
     settingsPanel_ = std::make_unique<SettingsHub>(renderer_);
+    osk_ = std::make_unique<OnScreenKeyboard>(renderer_);
     monitor_ = std::make_unique<SysMonitor>(renderer_, [this] { return city_ ? city_->sysStats() : SystemStats{}; });
     if (!mediaLib_) mediaLib_ = std::make_unique<MediaLibrary>();
     {
@@ -821,7 +822,7 @@ void AppShell::flyToWin(const WinRef& t) {
     vy_ = 0.0f;
     n.y = 0;
     n = length(n) > 1e-4f ? normalize(n) : Vec3{0, 0, 1};
-    if (dot(n, camera_.position - c) < 0) n = n * -1.0f;
+    // n is the window's front (+z); always glide to that side, even when the user is behind it.
     const float dist = fitDistance(bw, bh, renderer_.aspect(), std::tan(kFovY * 0.5f));
     const float eyeHi = cityMode_ ? 450.0f : (room_->building() ? room_->maxEye() : 24.0f);
     const float eyeY = clampf(c.y, 0.35f, eyeHi);
@@ -1037,7 +1038,9 @@ bool AppShell::scriptExec(const std::string& line) {
         else if (v == "edtype") { std::string s; std::getline(is >> std::ws, s); editor2d_->text(s); }
         else if (v == "edkey") { editor2d_->key(EditKey::Enter); }
         else if (v == "edsave") { editor2d_->key(EditKey::Save); }
-        else if (v == "fs") { if (focus_.p) winToggleFull(focus_); }
+        else if (v == "fs") { if (focus_.p) winToggleFull(focus_); else if (!winOrder_.empty()) winToggleFull(winOrder_.back()); }
+        else if (v == "osk") toggleKeyboard();
+        else if (v == "mediafs") { if (media_) media_->toggleFullscreen(); }
         else if (v == "termtype") { std::string s; std::getline(is >> std::ws, s); terminal_->text(s + "\r"); }
         else if (v == "media") runTool(Tool::Media);
         else if (v == "page") { std::string pg; std::getline(is >> std::ws, pg); settingsPanel_->openPage(pg); }
@@ -1312,6 +1315,10 @@ void AppShell::stopTour() {
     mv_.on = false;
     tourActive_ = false;
 }
+void AppShell::toggleKeyboard() {
+    osk_->toggle(vrOn_ ? head_.eye : camera_.position, vrOn_ ? head_.forward : camera_.forward());
+}
+
 void AppShell::toggleVR() {
     if (vrOn_) {
         vr_.stop();
@@ -1322,6 +1329,9 @@ void AppShell::toggleVR() {
         std::string error;
         if (vr_.start(renderer_, error)) {
             vrOn_ = true;
+            vrHeadY_ = 0.0f;
+            vrGaze_ = true;
+            vrAnchor_ = {0, 0, 0};
             menu_->setStatus("VR active");
         } else {
             menu_->setStatus("VR error: " + error);
@@ -1341,11 +1351,23 @@ Vec3 AppShell::mouseRayDirection(int mx, int my) const {
 }
 
 void AppShell::updateCamera(double dt, float moveX, float moveY, float moveZ, float lookX, float lookY, float speedMul) {
+    const bool inVR = vrOn_ && head_.vr;
+    if (inVR && lookX != 0.0f) {
+        // Turn the tracking space about the head, not its own origin, so the view pivots in place.
+        Vec3 off = camera_.position - head_.eye;
+        off.y = 0.0f;
+        const Vec3 turned = Mat4::rotateY(-lookX).transformDir(off);
+        camera_.position.x += turned.x - off.x;
+        camera_.position.z += turned.z - off.z;
+    }
     camera_.yaw -= lookX;
     camera_.pitch = clampf(camera_.pitch - lookY, -1.4f, 1.4f);
     const float speed = 3.0f * speedMul * (!cityMode_ && room_->building() ? room_->speedBoost() : 1.0f);
-    Vec3 fwd{-std::sin(camera_.yaw), 0, -std::cos(camera_.yaw)};
-    Vec3 right{std::cos(camera_.yaw), 0, -std::sin(camera_.yaw)};
+    // In VR you walk the way your head faces.
+    float moveYaw = camera_.yaw;
+    if (inVR && std::hypot(head_.forward.x, head_.forward.z) > 0.2f) moveYaw = std::atan2(-head_.forward.x, -head_.forward.z);
+    Vec3 fwd{-std::sin(moveYaw), 0, -std::cos(moveYaw)};
+    Vec3 right{std::cos(moveYaw), 0, -std::sin(moveYaw)};
     Vec3 p = camera_.position + fwd * (moveY * speed * static_cast<float>(dt)) +
              right * (moveX * speed * static_cast<float>(dt));
     const bool inBuilding = !cityMode_ && room_->building();
@@ -1531,13 +1553,14 @@ void AppShell::handleSwitcher(FrameInput& in, PadState& pad) {
     if (in.left || pad.leftPressed) switcher_->step(-1);
     if (in.right || pad.rightPressed) switcher_->step(1);
     if (in.wheel != 0.0f) switcher_->step(in.wheel > 0 ? -1 : 1);
-    if (in.modReleased || in.select || in.space || pad.aPressed || in.click) {
+    if (in.modReleased || in.select || in.space || pad.aPressed || in.click || vrInput_.selectPressed) {
         const int id = switcher_->selectedId();
         switcher_->close();
         switchTo(id);
-    } else if (in.escape || in.back || pad.bPressed) {
+    } else if (in.escape || in.back || pad.bPressed || vrInput_.backPressed) {
         switcher_->close();
     }
+    vrInput_.selectPressed = vrInput_.backPressed = false;
     in.keys.clear();
     in.text.clear();
     in.click = false;
@@ -1570,6 +1593,32 @@ void AppShell::tick(double dt) {
     const bool winTypingNow = focus_.p && winTyping(focus_);
     PadState pad = pad_.poll();
     if (in.quit) running_ = false;
+    {
+        // What the on-screen keyboard typed arrives like real key presses.
+        OnScreenKeyboard::Typed typed = osk_->take();
+        in.keys.insert(in.keys.end(), typed.keys.begin(), typed.keys.end());
+        in.text += typed.text;
+        if (typed.escape) in.escape = true;
+        const bool kbm = in.click || in.lookX != 0 || in.lookY != 0 || in.moveX != 0 || in.moveY != 0 || in.moveZ != 0 || !in.keys.empty() ||
+                         !in.text.empty() || in.select || in.back || in.space;
+        const bool padUsed = pad.aPressed || pad.bPressed || pad.xPressed || pad.yPressed || pad.lbPressed || pad.rbPressed ||
+                             std::fabs(pad.lx) + std::fabs(pad.ly) + std::fabs(pad.rx) + std::fabs(pad.ry) + pad.lt + pad.rt > 0.3f;
+        if (kbm) lastSource_ = 0;
+        else if (padUsed) lastSource_ = 1;
+        else if (vrInput_.active()) lastSource_ = 2;
+        if (vrOn_ && vrInput_.valid) {
+            // The headset aims until a controller is used; an idle controller lying on the desk is ignored.
+            if (length(vrAnchor_) < 0.5f || ((kbm || padUsed) && vrGaze_)) vrAnchor_ = vrInput_.pointerDir;
+            if (kbm || padUsed) vrGaze_ = true;
+            else if (vrGaze_ && (vrInput_.active() || dot(vrInput_.pointerDir, vrAnchor_) < 0.9976f)) vrGaze_ = false;
+        }
+        if (state_ == State::FileRoom && (in.osk || pad.xPressed || vrInput_.kbdPressed)) toggleKeyboard();
+        // A text field taking focus brings the keyboard up for gamepad and VR controller users.
+        if (winTypingNow && !wasTyping_ && lastSource_ != 0 && !osk_->isOpen()) toggleKeyboard();
+        wasTyping_ = winTypingNow;
+        if (pad.rbPressed || vrInput_.switchPressed) in.tabStep += 1;
+        if (pad.lbPressed) in.tabStep -= 1;
+    }
     {
         std::vector<std::string> picked = std::move(in.dropped);
         std::vector<std::string> more;
@@ -1611,17 +1660,27 @@ void AppShell::tick(double dt) {
     const bool kbMove = !typing || (SDL_GetModState() & KMOD_ALT) != 0;
     float kbX = kbMove ? in.moveX : 0.0f, kbY = kbMove ? in.moveY : 0.0f, kbZ = kbMove ? in.moveZ : 0.0f;
     if (viewer_->active() && !viewer_->isText()) kbZ = std::min(kbZ, 0.0f);  // Space is play/pause in the media viewer
-    kbZ = clampf(kbZ + pad.rt - pad.lt, -1, 1);  // right trigger = up, left trigger = down
+    kbZ = clampf(kbZ + pad.rt - pad.lt + vrInput_.lookY, -1, 1);  // right trigger = up, left trigger = down; VR right stick up / down climbs
     float moveX = clampf(kbX + pad.lx + vrInput_.moveX, -1, 1);
     float moveY = clampf(kbY + pad.ly + vrInput_.moveY, -1, 1);
     const float freeSpeed = (in.shift ? (cityMode_ ? 4.05f : 1.69f) : 1.0f) * settings_.speedScale() * (cityMode_ ? 4.0f : 1.0f);
-    float lookX = in.lookX * 0.0025f * settings_.lookScale() + pad.rx * 2.2f * fdt * settings_.lookScale();
+    float lookX = in.lookX * 0.0025f * settings_.lookScale() + (vrOn_ ? 0.0f : pad.rx * 2.2f * fdt * settings_.lookScale());
+    if (vrOn_) {
+        // Snap turning (30 degrees per flick of the right stick / pad) is far kinder in a headset than a smooth spin.
+        const float turn = vrInput_.lookX + pad.rx;
+        if (std::fabs(turn) > 0.6f && !snapLatch_) {
+            lookX += turn > 0 ? 0.5236f : -0.5236f;
+            snapLatch_ = true;
+        } else if (std::fabs(turn) < 0.3f) {
+            snapLatch_ = false;
+        }
+    }
     float lookY = (in.lookY * 0.0025f - pad.ry * 2.2f * fdt) * settings_.lookScale() * (settings_.invertY ? -1.0f : 1.0f);
     bool up = in.up || pad.upPressed, down = in.down || pad.downPressed;
     bool keySelect = in.select || pad.aPressed || (state_ == State::Menu && in.space);
     bool pointerSelect = in.click || vrInput_.selectPressed;
     bool back = in.back || pad.bPressed || vrInput_.backPressed;
-    bool vrPointer = vrOn_ && vrInput_.valid;
+    bool vrPointer = vrOn_ && vrInput_.valid && !vrGaze_;
     const bool ringToggle = in.ring || pad.yPressed || vrInput_.menuPressed;
     if (in.themeCycle) cycleTheme();
     if (in.screenshot) shotPending_ = true;    const bool ringWasOpen = ring_->isOpen();
@@ -1661,6 +1720,9 @@ void AppShell::tick(double dt) {
         if (vrPointer) {
             o = vrInput_.pointerOrigin;
             d = vrInput_.pointerDir;
+        } else if (vrOn_) {
+            o = head_.eye;
+            d = head_.forward;
         }
         Node* hit = pickNode(menu_->root(), o, d);
         if (hit && (in.mouseMoved || vrPointer)) menu_->select(hit);
@@ -1673,6 +1735,9 @@ void AppShell::tick(double dt) {
         if (vrPointer) {
             o = vrInput_.pointerOrigin;
             d = vrInput_.pointerDir;
+        } else if (vrOn_) {
+            o = head_.eye;
+            d = head_.forward;
         }
         aimDir_ = d;
         // Windows are persistent and stacked: the frontmost window under the aim takes the pointer, clicking raises and
@@ -1747,6 +1812,18 @@ void AppShell::tick(double dt) {
             aimDir_ = d;
             if (!overlayBusy) top = topWinAt(o, d);
         }
+        bool oskHit = false;
+        if (osk_->isOpen() && !overlayBusy && !winModal) {
+            // The keyboard floats in front of the windows: it takes the pointer where it is nearer than the window behind it.
+            const float od = osk_->hitDistance(o, d), wd = top.p ? winHit(top, o, d) : -1.0f;
+            oskHit = osk_->busy() || (od >= 0.0f && (wd < 0.0f || od <= wd));
+            if (oskHit) {
+                osk_->pointer(o, d);
+                top = {};
+            } else {
+                osk_->leave();
+            }
+        }
         if (!overlayBusy) {
             for (const WinRef& w : winOrder_) {
                 if (fsw.p && w != fsw) winLeave(w, o, d);
@@ -1813,7 +1890,15 @@ void AppShell::tick(double dt) {
                     up = down = in.left = in.right = in.select = pad.leftPressed = pad.rightPressed = false;
                 }
             }
-            const bool clickEv = in.click || pad.aPressed || vrInput_.selectPressed;
+            bool clickEv = in.click || pad.aPressed || vrInput_.selectPressed;
+            if (clickEv && oskHit) {
+                osk_->click(o, d);
+                if (!in.click) osk_->releaseButton();
+                in.click = pointerSelect = keySelect = false;
+                pad.aPressed = false;
+                vrInput_.selectPressed = false;
+                clickEv = false;
+            }
             if (clickEv) {
                 if (top.p) {
                     raiseFocus(top);
@@ -1830,8 +1915,10 @@ void AppShell::tick(double dt) {
                     vrInput_.selectPressed = false;
                 }
             }
-            if (in.clickUp)
+            if (in.clickUp) {
+                osk_->releaseButton();
                 for (const WinRef& w : winOrder_) winRelease(w);
+            }
             if (in.wheel != 0.0f && top.p) {
                 winWheel(top, in.wheel);
                 in.wheel = 0.0f;
@@ -1858,7 +1945,7 @@ void AppShell::tick(double dt) {
             }
 #endif
         }
-        const bool overWin = top.p && !winModal;
+        const bool overWin = (top.p && !winModal) || oskHit;
         if (appsPanel_->isOpen()) {
             updateCamera(dt, 0, 0, 0, lookX, lookY);
             room_->setHover(nullptr);
@@ -2087,6 +2174,7 @@ void AppShell::tick(double dt) {
         ring_->update(dt, time_);
         settingsPanel_->update(dt, time_);
         monitor_->update(dt);
+        osk_->update(dt);
         terminal_->update(dt);
         files2d_->update(dt);
         editor2d_->update(dt);
@@ -2193,6 +2281,10 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
             renderer_.clearDepth();
             winRender(w);
         }
+    if (state_ == State::FileRoom && osk_->isOpen()) {
+        renderer_.clearDepth();
+        osk_->render();
+    }
     if (state_ == State::FileRoom && ring_->active()) {
         renderer_.clearDepth();
         ring_->render(renderer_);
@@ -2228,11 +2320,11 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         renderer_.drawPanel(*fpsLabel_, view.rigidInverse() * Mat4::translate(at) * Mat4::scale({w, h, 1.0f}),
                             currentTheme().accent, pp);
     }
-    if (vrOn_ && vrInput_.valid) {
+    if (vrOn_ && vrInput_.valid && !vrGaze_) {
         renderer_.drawCube(*crosshair_, alignZ(vrInput_.pointerOrigin + vrInput_.pointerDir * 1.5f, vrInput_.pointerDir,
                                                 {0.006f, 0.006f, 3.0f}),
                            {1.0f, 0.7f, 0.2f});
-    } else if (state_ == State::FileRoom && settings_.crosshair) {
+    } else if (state_ == State::FileRoom && (settings_.crosshair || vrOn_)) {
         Vec3 p = eye + aimDir_ * 2.0f;
         renderer_.drawPointer(*crosshair_, pointerMatrix(p, aimDir_, {0, 1, 0}, 0.12f), currentTheme().accent);
     }
@@ -2248,12 +2340,15 @@ int AppShell::run() {
         tick(dt);
 
         if (vrOn_) {
-            // In VR the rig is the tracking-space origin: floor level, at the player's position and heading.
-            Mat4 rig = Mat4::translate({camera_.position.x, 0, camera_.position.z}) * Mat4::rotateY(camera_.yaw);
+            // In VR the rig is the tracking-space origin: at the player's position and heading, and at the flown altitude
+            // minus the head's own height, so the headset follows the same height the desktop view shows.
+            const float rigY = std::max(0.0f, camera_.position.y - vrHeadY_);
+            Mat4 rig = Mat4::translate({camera_.position.x, rigY, camera_.position.z}) * Mat4::rotateY(camera_.yaw);
             vr_.frame(
                 renderer_, rig,
                 [&](const EyeView& ev) {
                     Vec3 eyePos = ev.view.rigidInverse().transformPoint({0, 0, 0});
+                    if (vrHeadY_ < 0.3f) vrHeadY_ = std::clamp(eyePos.y - rigY, 0.0f, 2.5f);
                     renderScene(ev.view, ev.proj, eyePos, false);
                 },
                 vrInput_);

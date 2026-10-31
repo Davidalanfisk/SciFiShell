@@ -8,6 +8,7 @@ struct PadState {
     float lt = 0, rt = 0;                  // analogue triggers, 0..1
     bool aPressed = false, bPressed = false, upPressed = false, downPressed = false, yPressed = false;  // edges
     bool leftPressed = false, rightPressed = false;
+    bool xPressed = false, lbPressed = false, rbPressed = false;  // X: on-screen keyboard, LB / RB: previous / next window
 };
 
 class XInputController {

@@ -209,8 +209,30 @@ void PanelApp::update(double dt) {
         dirty_ = true;
     }
     const double iv = repaintInterval();
-    if (iv > 0 && sincePaint_ >= iv) dirty_ = true;
+    if (iv > 0 && sincePaint_ >= iv) {
+        int px = 0, py = 0, pw = 0, ph = 0;
+        if (!dirty_ && label_ && repaintPartial(bm_, px, py, pw, ph)) {
+            renderer_.updateLabelRect(*label_, px, py, pw, ph, bm_.rgba.data() + (static_cast<size_t>(py) * w_ + px) * 4, static_cast<size_t>(w_) * 4);
+            sincePaint_ = 0;
+        } else {
+            dirty_ = true;
+        }
+    }
     if (dirty_ || !label_) repaint();
+    {
+        bool fresh = false;
+        const Bitmap* vb = videoLayer(vx_, vy_, vw_, vh_, fresh);
+        vlActive_ = vb && vb->w > 0 && vb->h > 0 && vw_ > 0 && vh_ > 0;
+        if (vlActive_) {
+            if (!vlabel_ || vlw_ != vb->w || vlh_ != vb->h) {
+                vlabel_ = renderer_.createDynamicLabel(vb->w, vb->h);
+                vlw_ = vb->w;
+                vlh_ = vb->h;
+                fresh = true;
+            }
+            if (fresh && vlabel_) renderer_.updateLabel(*vlabel_, vb->rgba.data(), vb->w, vb->h);
+        }
+    }
     if (fullscreen_) applyFullscreen();
 }
 
@@ -226,8 +248,13 @@ void PanelApp::render() {
         const float fw = worldW_ + pad * 2, fh = h + pad * 2;
         renderer_.drawGlass(base_ * Mat4::translate({0, 0, -0.01f}) * Mat4::scale({fw, fh, 1}), fw / fh, 0.03f / fh);
     }
+    if (vlActive_ && vlabel_) {
+        const float cx = (vx_ + vw_ * 0.5f) / w_ - 0.5f, cy = 0.5f - (vy_ + vh_ * 0.5f) / h_;
+        renderer_.drawWebRegion(*vlabel_, base_ * Mat4::translate({cx * worldW_, cy * h, 0.0f}) * Mat4::scale({worldW_ * vw_ / w_, h * vh_ / h_, 1}), uv,
+                                static_cast<float>(vw_) / vh_, 0.0f, 0.0f, 1.0f, white);
+    }
     renderer_.drawWebRegion(*label_, base_ * Mat4::scale({worldW_, h, 1}), uv, static_cast<float>(w_) / h_, fullscreen_ ? 0.0f : 0.004f / h,
-                            0.0f, fullscreen_ ? 1.0f : 0.94f, white);
+                            vlActive_ ? -1.0f : 0.0f, (fullscreen_ || vlActive_) ? 1.0f : 0.94f, white);
 }
 
 float PanelApp::hitDistance(Vec3 o, Vec3 d) const {

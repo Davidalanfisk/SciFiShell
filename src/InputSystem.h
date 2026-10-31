@@ -32,6 +32,7 @@ struct FrameInput {
     bool ring = false;              // middle click / F2: summon the tool ring
     bool pin = false;               // right click: pin the view to the window under the aim (or release it)
     bool themeCycle = false;        // F6: next colour theme
+    bool osk = false;               // F7: show / hide the on-screen keyboard
     bool navBack = false, navForward = false;  // Alt+Left / Alt+Right
     int tabStep = 0;                // Alt+Tab / Ctrl+Tab: +1 next task, -1 previous (with Shift)
     bool modReleased = false;       // Alt or Ctrl released (commits the task switcher)
