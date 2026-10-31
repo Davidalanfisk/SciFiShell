@@ -108,6 +108,7 @@ private:
     void mediaPlayAt(int index, int dir);
     void mediaNext(int dir);
     void mediaPlayList(const std::vector<std::string>& paths, int start);
+    void mediaOpenFile(const std::string& path);  // plays an audio/video file in the media player window, queueing its folder
     void mediaPlayStream(const std::string& name, const std::string& url);
     NowInfo mediaNow();
     std::unique_ptr<MediaApp> media_;

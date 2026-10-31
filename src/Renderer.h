@@ -61,7 +61,7 @@ public:
     void drawHudText(const GpuLabel& label, const Mat4& world);
     // glow: -1 = no edge light (plain block), 0 = resting edge light, 1 = hovered. grid = the glowing floor.
     void drawCube(const GpuLabel& label, const Mat4& world, Vec3 color, bool grid = false, bool imageMode = false,
-                  float glow = -1.0f);
+                  float glow = -1.0f, bool interior = false);
     // Procedural city block (axis-aligned box; world = translate * scale). kind: 3 tower, 4 fill bar, 5 road,
     // 6 platform, 7 beam. emerge 0..1 rise glow, fill 0..1 level, flash -1..1 change pulse.
     void drawBuilding(const GpuLabel& any, const Mat4& world, Vec3 neon, float seed, int kind, float emerge,

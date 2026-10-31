@@ -198,6 +198,10 @@ bool AppShell::init() {
         req.path = path;
         req.name = fs::u8path(path).filename().u8string();
         req.kind = k;
+        if (k == FileKind::Video || k == FileKind::Audio) {
+            mediaOpenFile(path);
+            return;
+        }
         const Vec3 f = camera_.forward();
         req.cardPos = camera_.position + f * 2.0f;
         req.cardYaw = camera_.yaw;
@@ -242,7 +246,10 @@ bool AppShell::init() {
     browser_ = std::make_unique<WebBrowser>(renderer_);
     browser_->setQuality(settings_.webQuality);
 #endif
-    room_->onOpenMedia = [this](const OpenRequest& req) { viewer_->open(req, head_); };
+    room_->onOpenMedia = [this](const OpenRequest& req) {
+        if (req.kind == FileKind::Video || req.kind == FileKind::Audio) mediaOpenFile(req.path);
+        else viewer_->open(req, head_);
+    };
     room_->onOpenFile = [this](const DirEntry& e) { openFileRoom(e); };
     room_->onExitBuilding = [this] { toggleCity(true); };
     viewer_->onStep = [this](int dir) { room_->stepFrom(viewer_->path(), dir); };

@@ -43,6 +43,9 @@ private:
     std::shared_ptr<GpuLabel> face_;
     Renderer* r_;
     std::string text_;
+public:
+    bool leavesBuilding = false;
+private:
     std::vector<std::string> info_;
     std::shared_ptr<GpuLabel> label_;
     std::shared_ptr<GpuLabel> thumb_;
@@ -107,6 +110,7 @@ private:
     void resetScene();
     CardNode* addCard(std::unique_ptr<CardNode> card);
     void buildCorridor();
+    bool soloRoom_ = false;  // a building with a single room: entered directly, and its door leaves the building
     void enterRoom(int idx, bool setSpawn = true);
     void exitRoom();
     void fillRoomInfo(int r);

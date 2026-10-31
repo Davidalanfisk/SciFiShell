@@ -150,6 +150,13 @@ private:
     std::vector<float> shownCore_;
     Monument mon_[3];
     int labelBudget_ = 0;
+    struct PendingLabel {
+        GpuLabel* label;
+        Mat4 world;
+        float aspect, dist;
+    };
+    std::vector<PendingLabel> pendingLabels_;  // blended text is drawn after all opaque geometry, far to near
+    void flushLabels(Renderer& r);
     uint64_t lastRebuildVersion_ = 0;
     double lastRefresh_ = 0;
     std::vector<CityDrive> snap_;

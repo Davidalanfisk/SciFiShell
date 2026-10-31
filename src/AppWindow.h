@@ -61,6 +61,7 @@ public:
     void setView(float aspect, float tanHalfFov) { viewAspect_ = aspect; viewTan_ = tanHalfFov; }
 
 private:
+    void lendForeground();
     enum class Hit { None, Hide, Close, Full, Title };
     Hit barHit(float px, float py) const;
     bool rayToPlane(Vec3 origin, Vec3 dir, float& hx, float& hy) const;

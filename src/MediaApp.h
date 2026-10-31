@@ -53,6 +53,7 @@ public:
     bool back() override;
 public:
     void scriptClick(int id, int arg) { if (id < 0) theatre_ = true; else click(id, arg, 0, 0); invalidate(); }
+    void showPlaying(bool video) { theatre_ = video; manage_ = false; invalidate(); }
     void enterCinema() { theatre_ = true; click(63, 0, 0, 0); }
 private:
     bool chromeless() const override { return cinema_ && theatre_ && fullscreen(); }

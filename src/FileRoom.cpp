@@ -49,13 +49,15 @@ public:
     void render(Renderer& r) override {
         const float range = r.mirror() ? 30.0f : 220.0f;
         for (const Box& b : boxes) {
-            if (b.glow < -1.5f) continue;
+            if (b.glow < -1.5f && b.glow > -2.5f) continue;
+            const bool mirrorFloor = b.glow < -2.5f;  // -3: a reflective floor slab
+            if (mirrorFloor && r.mirror()) continue;
             if (!b.always && std::fabs(b.c.z - eye_->z) - b.s.z * 0.5f > range) continue;
-            r.drawCube(*label_, Mat4::translate({b.c.x, b.c.y + yOffset, b.c.z}) * Mat4::scale(b.s), b.color, false, false, b.glow);
+            r.drawCube(*label_, Mat4::translate({b.c.x, b.c.y + yOffset, b.c.z}) * Mat4::scale(b.s), b.color, mirrorFloor, false, mirrorFloor ? -1.0f : b.glow, true);
         }
         // Transparent glass panes (glow -2) go last, as two back-to-back quads so they read from both sides.
         for (const Box& b : boxes) {
-            if (b.glow >= -1.5f) continue;
+            if (b.glow >= -1.5f || b.glow < -2.5f) continue;
             const bool alongX = b.s.x > b.s.z;
             const float len = alongX ? b.s.x : b.s.z, yaw = alongX ? 0.0f : kPi * 0.5f;
             for (int side = 0; side < 2; ++side)
@@ -245,7 +247,7 @@ void CardNode::bakeDoor() {
     } else {
         bm = composeDoorBase(spec);
     }
-    const std::string title = isParentLink ? (roomIndex == -2 ? "Back to lobby" : "Leave building") : text_;
+    const std::string title = isParentLink ? (roomIndex == -2 && !leavesBuilding ? "Back to lobby" : "Leave building") : text_;
     maxScroll_ = drawDoorText(bm, title, info_, shownHover_, scroll_, accent);
     face_ = r_->createLabel(bm, true);
     doorDirty_ = false;
@@ -361,7 +363,9 @@ void FileRoom::load(std::string path) {
             r.path = dirs[i].path;
             rooms_.push_back(std::move(r));
         }
+        soloRoom_ = rooms_.size() == 1;
         buildCorridor();
+        if (soloRoom_) enterRoom(0);
         return;
     }
 
@@ -502,7 +506,7 @@ void FileRoom::buildCorridor() {
     } else {
         add({0, H * 0.5f, -d - 0.2f}, {hw * 2 + 0.8f, H, 0.4f}, wall, 0.0f, true);
     }
-    add({0, 0.0f, zm}, {hw * 2, 0.04f, zl}, carpet, -1.0f, true);
+    add({0, 0.0f, zm}, {hw * 2, 0.04f, zl}, carpet, -3.0f, true);
     const float rug = std::min(16.0f, hw * 2 - 8.0f);
     add({0, 0.035f, fz}, {rug, 0.02f, rug}, {0.075f, 0.07f, 0.085f}, -1.0f, true);
     add({0, 0.04f, fz}, {rug - 1.2f, 0.02f, rug - 1.2f}, carpet * 1.15f, -1.0f, true);
@@ -622,10 +626,6 @@ void FileRoom::buildCorridor() {
                     add({cx, 1.0f, z}, {0.8f, 0.08f, 0.8f}, rim * 1.5f, -1.0f, true);
                     add({cx, H - 1.0f, z}, {0.8f, 0.08f, 0.8f}, rim * 1.5f, -1.0f, true);
                 }
-        } else if (lay == 2 && L < 3) {
-            add({0, 0.2f, fz}, {6.0f, 0.4f, 6.0f}, wall * 3.0f, 0.0f, true);
-            add({0, 0.42f, fz}, {5.6f, 0.04f, 5.6f}, rim, -1.0f, true);
-            add({0, H * 0.5f, fz}, {0.12f, H, 0.12f}, rim * 1.3f, -1.0f, true);
         }
     }
     // A skylight over the fountain.
@@ -801,7 +801,29 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     add({-h - 0.2f, H * 0.5f, 0}, {0.4f, H, S + 0.8f}, wall);
     add({h + 0.2f, H * 0.5f, 0}, {0.4f, H, S + 0.8f}, wall);
     add({0, H + 0.1f, 0}, {S + 0.8f, 0.2f, S + 0.8f}, wall * 0.7f, -1.0f);
-    add({0, 0.03f, 0}, {S - 0.2f, 0.04f, S - 0.2f}, Vec3{0.036f, 0.038f, 0.043f} + kc * 0.004f, -1.0f);
+    add({0, 0.0f, 0}, {S - 0.2f, 0.04f, S - 0.2f}, Vec3{0.036f, 0.038f, 0.043f}, -3.0f);
+    // Dressing: skirting, ledges under each tier of cards, ceiling light strips and corner pillars.
+    {
+        const Vec3 dark = wall * 2.6f;
+        for (int e : {-1, 1}) {
+            add({0, 0.14f, e * (h - 0.05f)}, {S, 0.28f, 0.1f}, dark);
+            add({e * (h - 0.05f), 0.14f, 0}, {0.1f, 0.28f, S}, dark);
+            add({0, 0.29f, e * (h - 0.03f)}, {S, 0.025f, 0.03f}, kc * 0.9f, -1.0f);
+            add({e * (h - 0.03f), 0.29f, 0}, {0.03f, 0.025f, S}, kc * 0.9f, -1.0f);
+            for (int ex : {-1, 1}) {
+                add({ex * (h - 0.3f), H * 0.5f, e * (h - 0.3f)}, {0.6f, H, 0.6f}, dark);
+                add({ex * (h - 0.62f), H * 0.5f, e * (h - 0.3f)}, {0.03f, H - 0.4f, 0.1f}, kc * 0.8f, -1.0f);
+            }
+        }
+        for (int t = 0; t < tiers; ++t) {
+            const float ly = 1.35f + t * tierH - 0.72f;
+            add({0, ly, -h + 0.02f}, {S - 1.4f, 0.035f, 0.04f}, kc * 0.55f, -1.0f);
+            add({h - 0.02f, ly, 0}, {0.04f, 0.035f, S - 1.4f}, kc * 0.55f, -1.0f);
+            add({-h + 0.02f, ly, 0}, {0.04f, 0.035f, S - 1.4f}, kc * 0.55f, -1.0f);
+        }
+        for (int i = -1; i <= 1; ++i) add({i * S * 0.25f, H - 0.03f, 0}, {0.22f, 0.05f, S - 2.0f}, light * 0.45f, -1.0f);
+        for (float z = -h + 2.0f; z < h - 1.0f; z += 4.0f) add({0, H - 0.12f, z}, {S - 0.6f, 0.2f, 0.3f}, dark);
+    }
     for (int e : {-1, 1}) add({e * 1.66f, 1.95f, h - 0.04f}, {0.1f, 3.9f, 0.08f}, kc * 1.4f, -1.0f);
     add({0, 3.9f, h - 0.04f}, {3.42f, 0.1f, 0.08f}, kc * 1.4f, -1.0f);
     root_->add(std::move(shell));
@@ -815,7 +837,12 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     door->roomIndex = -2;
     door->tall = true;
     door->accent = {120, 235, 255, 255};
-    door->setDoorStats("BACK", "to the lobby");
+    if (soloRoom_) {
+        door->setDoorStats("EXIT", "back to the city");
+        door->leavesBuilding = true;
+    } else {
+        door->setDoorStats("BACK", "to the lobby");
+    }
     door->position = {0, 1.95f, h - 0.04f};
     door->yaw = kPi;
     door->scale = {3.0f, 3.75f, 0.06f};
@@ -993,7 +1020,7 @@ void FileRoom::pump() {
 
 std::string FileRoom::goUp() {
     if (!loaded_) return "";
-    if (inRoom_) {
+    if (inRoom_ && !soloRoom_) {
         exitRoom();
         return "Back in the lobby";
     }
@@ -1029,6 +1056,10 @@ std::string FileRoom::activate(Node* node) {
     if (card->roomIndex <= -10) {
         liftTarget_ = std::clamp(-10 - card->roomIndex, 0, std::max(0, levels_ - 1));
         return liftTarget_ == 0 ? "Lift: ground floor" : "Lift: level " + std::to_string(liftTarget_);
+    }
+    if (card->roomIndex == -2 && soloRoom_ && onExitBuilding) {
+        onExitBuilding();
+        return "Back to the city";
     }
     if (card->roomIndex == -2) {
         exitRoom();

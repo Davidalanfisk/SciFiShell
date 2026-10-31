@@ -93,6 +93,29 @@ void AppShell::mediaPlayList(const std::vector<std::string>& paths, int start) {
     mediaPlayAt(std::clamp(start, 0, static_cast<int>(paths.size()) - 1), 1);
 }
 
+void AppShell::mediaOpenFile(const std::string& path) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> list;
+    int start = 0;
+    std::error_code ec;
+    const fs::path file = fs::u8path(path);
+    for (const auto& e : fs::directory_iterator(file.parent_path(), ec)) {
+        if (!e.is_regular_file(ec)) continue;
+        const std::string p = e.path().u8string();
+        if (p != path && !MediaLibrary::isMediaFile(p)) continue;
+        if (p == path) start = static_cast<int>(list.size());
+        list.push_back(p);
+    }
+    if (list.empty()) list.push_back(path);
+    if (media_ && !media_->isOpen()) openPanel(media_.get());
+    mediaPlayList(list, start);
+    if (media_) {
+        bool video = false;
+        MediaLibrary::isMediaFile(path, &video);
+        media_->showPlaying(video);
+    }
+}
+
 void AppShell::mediaPlayStream(const std::string& name, const std::string& url) {
     mediaPlayer_.close();
     queue_.clear();

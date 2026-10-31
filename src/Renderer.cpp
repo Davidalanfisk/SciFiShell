@@ -660,9 +660,9 @@ void Renderer::drawRing(const GpuLabel& label, const Mat4& world, int segments, 
     draw(webPipeline_, label.webSRB, quad_, world, color, params, extra);
 }
 
-void Renderer::drawCube(const GpuLabel& label, const Mat4& world, Vec3 c, bool grid, bool imageMode, float glow) {
+void Renderer::drawCube(const GpuLabel& label, const Mat4& world, Vec3 c, bool grid, bool imageMode, float glow, bool interior) {
     float color[4] = {c.x, c.y, c.z, 1.0f};
-    const float params[4] = {glow, imageMode ? 1.0f : 0.0f, 1, grid ? 1.0f : 0.0f};
+    const float params[4] = {glow, imageMode ? 1.0f : 0.0f, interior ? 2.0f : 1.0f, grid ? 1.0f : 0.0f};
     Vec3 eye = view_.rigidInverse().transformPoint({0, 0, 0});
     const float eyeL[4] = {eye.x, eye.y, eye.z, 0};  // the floor shader needs the eye for its reflection
     if (grid) {

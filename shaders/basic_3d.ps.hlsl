@@ -60,13 +60,40 @@ float3 mistColor(float3 accent)
     return float3(0.002, 0.003, 0.006) + accent * 0.016;
 }
 
+// Seamless ring of far mountains: periodic value noise around the horizon (P = whole cells per full turn).
+float ringNoise(float u, float P, float seed)
+{
+    float x = u * P;
+    float i = floor(x);
+    float f = frac(x);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = frac(sin((i >= P ? i - P : i) * 127.1 + seed * 311.7) * 43758.5453);
+    float b = frac(sin((i + 1.0 >= P - 0.5 ? i + 1.0 - P : i + 1.0) * 127.1 + seed * 311.7) * 43758.5453);
+    return lerp(a, b, f);
+}
+
+// Elevation (as the sine of the angle) of the skyline in this direction.
+float skylineHeight(float3 d)
+{
+    float u = atan2(d.x, d.z) / 6.2831853 + 0.5;
+    // Ridged octaves give pointed peaks with concave slopes (value noise alone makes flat-topped cliffs).
+    float base = ringNoise(u, 5.0, 1.0);
+    float r = 0.55 * (1.0 - abs(2.0 * ringNoise(u, 7.0, 5.0) - 1.0)) + 0.28 * (1.0 - abs(2.0 * ringNoise(u, 19.0, 6.0) - 1.0)) + 0.12 * (1.0 - abs(2.0 * ringNoise(u, 47.0, 7.0) - 1.0)) + 0.05 * (1.0 - abs(2.0 * ringNoise(u, 113.0, 8.0) - 1.0));
+    return 0.010 + 0.012 * base + 0.085 * pow(saturate(r), 1.5) * (0.45 + 0.55 * base);
+}
+
 // Sky: drifting soft puffs ("particles") on two layers, slowly shifting colour, plus twinkling motes.
 float3 skyColor(float3 d, float t, float3 accent, float3 alt)
 {
     float3 base = mistColor(accent) + accent * 0.07 * (exp(-max(d.y, 0.0) * 9.0) - 1.0);
     base += accent * 0.045 * exp(-abs(d.y) * 28.0);  // thin glowing horizon line
     base *= 1.0 - 0.35 * saturate(d.y * 1.4);  // the zenith sinks into near black
-    if (d.y < 0.015) return base;
+    // Far mountain silhouettes ringing the whole horizon: darker than the glowing haze behind them, melting into it at the foot.
+    const float skyline = skylineHeight(d);
+    const float ridge = 1.0 - smoothstep(skyline - 0.0012, skyline + 0.0012, d.y);
+    const float3 rock = mistColor(accent) * 0.15 + accent * 0.0015;
+    const float3 mountain = lerp(base * 0.85, rock, smoothstep(0.0, 0.035, d.y));
+    if (d.y < 0.015) return lerp(base, mountain, ridge * step(0.0, d.y));
     float up = d.y;
     float2 plane = d.xz / (up + 0.12);
     float3 sum = float3(0, 0, 0);
@@ -101,7 +128,7 @@ float3 skyColor(float3 d, float t, float3 accent, float3 alt)
     float2 sf = frac(sp) - 0.2 - 0.6 * sr;
     float tw = 0.5 + 0.5 * sin(t * (1.0 + 2.0 * sr.x) + sr.y * 40.0);
     col += step(0.985, sr.x) * exp(-dot(sf, sf) * 700.0) * tw * vis * 1.2;
-    return base + col;
+    return lerp(base + col, mountain, ridge);
 }
 
 // City buildings (axis-aligned boxes). Params: x = emergence 0..1, y = fill fraction, z = flash (+add / -remove),
@@ -373,6 +400,28 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
     else if (g_Params.y > 2.5)
     {
         light = 1.0;
+    }
+
+    // Interior shell blocks (g_Params.z == 2): dark panelled walls with seams, per-panel tone, grime and a gloomy falloff.
+    if (g_Params.z > 1.5 && g_Params.y < 0.5 && max(g_Color.r, max(g_Color.g, g_Color.b)) < 0.2)
+    {
+        float2 uv2 = abs(n.y) > 0.5 ? In.WPos.xz : (abs(n.x) > 0.5 ? In.WPos.zy : In.WPos.xy);
+        float2 cell = uv2 / float2(1.6, 1.2);
+        float2 fc = frac(cell);
+        float2 fwp = max(fwidth(cell), 1e-4);
+        float2 sd = min(fc, 1.0 - fc) / fwp;
+        float seam = 1.0 - smoothstep(0.0, 1.6, min(sd.x, sd.y) );
+        float2 pid = floor(cell);
+        float tone = 0.75 + 0.5 * hash12(pid + floor(In.WPos.x * 0.13 + In.WPos.z * 0.29) * 7.0);
+        float detailK = 1.0 - smoothstep(0.02, 0.12, max(fwp.x, fwp.y));
+        float grime = vnoise(uv2 * 3.0) * 0.6 + vnoise(uv2 * 17.0) * 0.4;
+        base *= lerp(1.0, tone * (0.6 + 0.8 * grime), detailK);
+        base *= 1.0 - 0.7 * seam * detailK;
+        // Hairline accent light running along every fourth seam row of the walls.
+        float lineRow = (fmod(pid.y, 3.0) < 0.5 && abs(n.y) < 0.5) ? 1.0 : 0.0;
+        base += g_Accent.rgb * 0.05 * seam * lineRow * detailK;
+        float below = smoothstep(0.0, 2.6, In.WPos.y);
+        light = (0.12 + 0.28 * diffuse) * (abs(n.y) > 0.5 ? 1.0 : (0.45 + 0.55 * below));
     }
 
     float3 outCol = base * light;

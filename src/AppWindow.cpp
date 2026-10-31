@@ -31,6 +31,19 @@ namespace sf {
 namespace {
 constexpr int kTexW = 3840, kTexH = 2160;       // GPU texture; the program's window is copied into its top-left corner
 constexpr int kWinW = 1600, kWinH = 960;        // size the program's window is given
+static long long nowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static void forceForeground(HWND h) {
+    if (!h || GetForegroundWindow() == h) return;
+    const DWORD me = GetCurrentThreadId();
+    const DWORD fgThread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+    if (fgThread && fgThread != me) AttachThreadInput(me, fgThread, TRUE);
+    SetForegroundWindow(h);
+    if (fgThread && fgThread != me) AttachThreadInput(me, fgThread, FALSE);
+}
+
 constexpr int kOffX = 40, kOffY = 40;  // parked on-screen, behind the shell: the compositor only renders windows that are on a monitor
 constexpr int kBarW = 1920, kBarH = 80;
 constexpr float kBarRatio = static_cast<float>(kBarH) / kBarW;
@@ -260,6 +273,7 @@ struct AppWindowState {
     std::vector<POINT> clicks;      // panel clicks on XAML chrome, handled by the UI Automation thread; guarded by m
     POINT pendingPos{0, 0};         // panel position for the next flyout to appear; guarded by m
     std::atomic<bool> uiaStop{false};
+    std::atomic<long long> returnAtMs{0};  // when the hosted program should hand the foreground back to the shell (0 = not holding it)
     std::atomic<int> wantW{kWinW}, wantH{kWinH};  // size the program's window should have (changes in fullscreen)
 };
 
@@ -410,6 +424,10 @@ static void workerMain(AppWindowState* s) {
     } uiaThread(s);
     while (!s->stop) {
         HWND h = reinterpret_cast<HWND>(s->hwnd.load());
+        if (const long long ra = s->returnAtMs.load(); ra && nowMs() >= ra) {
+            s->returnAtMs = 0;
+            if (h && s->owner && GetForegroundWindow() == h) forceForeground(s->owner);
+        }
         if (!h) {
             struct Ctx {
                 AppWindowState* s;
@@ -926,6 +944,36 @@ void AppWindow::sendMouse(int msg, int wparam, bool wheelDelta, int delta) {
                  MAKELPARAM(static_cast<short>(cp.x), static_cast<short>(cp.y)));
 }
 
+// Many programs (Notepad's RichEdit, Qt, Electron menus) only accept input while their window is the active one. The shell
+// lends them the foreground for a moment around each click or key; the worker thread hands it straight back.
+void AppWindow::lendForeground() {
+    HWND top = reinterpret_cast<HWND>(s_->hwnd.load());
+    if (!top || !IsWindow(top)) return;
+    forceForeground(top);
+    s_->returnAtMs = nowMs() + 250;
+}
+
+// Classic menus (bar and drop-downs) ignore posted messages and need the real mouse. The window sits on-screen under the
+// shell, so a brief genuine click is made there, then the cursor and the foreground window are put back.
+static void realClick(POINT sp, HWND top, HWND giveBack) {
+    std::thread([sp, top, giveBack] {
+        const LONG_PTR ex = GetWindowLongPtrW(top, GWL_EXSTYLE);
+        forceForeground(top);
+        SetWindowLongPtrW(top, GWL_EXSTYLE, ex & ~static_cast<LONG_PTR>(WS_EX_TRANSPARENT));
+        POINT old{};
+        GetCursorPos(&old);
+        SetCursorPos(sp.x, sp.y);
+        Sleep(15);
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+        Sleep(40);
+        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+        Sleep(60);
+        SetCursorPos(old.x, old.y);
+        if (IsWindow(top)) SetWindowLongPtrW(top, GWL_EXSTYLE, ex);
+        if (giveBack && IsWindow(giveBack)) SetForegroundWindow(giveBack);
+    }).detach();
+}
+
 void AppWindow::pointer(Vec3 origin, Vec3 dir) {
     if (!visible_) return;
     if (fullscreen_) applyFullscreenLayout();
@@ -1006,7 +1054,15 @@ void AppWindow::press(bool autoRelease) {
     {
         std::lock_guard<std::mutex> lock(s_->m);
         for (const auto& p : s_->popups)
-            if (s_->mouseX >= p.cx && s_->mouseX < p.cx + p.w && s_->mouseY >= p.cy && s_->mouseY < p.cy + p.hgt) inFlyout = true;
+            if (s_->mouseX >= p.cx && s_->mouseX < p.cx + p.w && s_->mouseY >= p.cy && s_->mouseY < p.cy + p.hgt) {
+                inFlyout = true;
+                wchar_t cls[64] = {};
+                GetClassNameW(p.h, cls, 64);
+                if (std::wcscmp(cls, L"#32768") == 0) {
+                    realClick(POINT{p.sr.left + s_->mouseX - p.cx, p.sr.top + s_->mouseY - p.cy}, top, s_->owner);
+                    return;
+                }
+            }
         if (top && (inFlyout || (s_->lastTarget && IsWindow(s_->lastTarget) && isHostClass(s_->lastTarget)) || !s_->popups.empty())) {
             s_->clicks.push_back(POINT{s_->mouseX, s_->mouseY});
             return;
@@ -1023,11 +1079,11 @@ void AppWindow::press(bool autoRelease) {
         const POINT sp{mr.left + s_->mouseX, mr.top + s_->mouseY};
         if (SendMessageTimeoutW(top, WM_NCHITTEST, 0, MAKELPARAM(static_cast<short>(sp.x), static_cast<short>(sp.y)), SMTO_ABORTIFHUNG, 50, &hit) &&
             hit == HTMENU) {
-            std::lock_guard<std::mutex> lock(s_->m);
-            s_->clicks.push_back(POINT{s_->mouseX, s_->mouseY});
+            realClick(sp, top, s_->owner);
             return;
         }
     }
+    lendForeground();
     sendMouse(WM_LBUTTONDOWN, MK_LBUTTON);
     mouseDown_ = true;
     releasePending_ = autoRelease;
@@ -1076,6 +1132,7 @@ void postKey(HWND t, UINT vk, bool extended) {
 void AppWindow::key(EditKey k) {
     HWND top = reinterpret_cast<HWND>(s_->hwnd.load());
     if (!top || !focused_) return;
+    lendForeground();
     HWND t = keyTarget(top, s_->lastTarget);
     switch (k) {
         case EditKey::Paste: PostMessageW(t, WM_PASTE, 0, 0); break;
@@ -1119,6 +1176,7 @@ void AppWindow::key(EditKey k) {
 void AppWindow::text(const std::string& utf8) {
     HWND top = reinterpret_cast<HWND>(s_->hwnd.load());
     if (!top || !focused_) return;
+    lendForeground();
     HWND t = keyTarget(top, s_->lastTarget);
     for (wchar_t ch : widen(utf8)) PostMessageW(t, WM_CHAR, ch, 1);
 }

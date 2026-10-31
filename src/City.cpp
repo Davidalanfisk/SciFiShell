@@ -449,9 +449,16 @@ void City::drawLabel(Renderer& r, GpuLabel& l, Vec3 at, float h, Vec3 eye, Vec3 
     pp.radius = 0.3f;
     pp.selected = 0;
     pp.segments = 0;
-    // Floating white text only: no frame, the texture alpha shapes it.
+    (void)r;
+    pendingLabels_.push_back({&l, Mat4::translate(at) * Mat4::rotateY(yaw) * Mat4::scale({w, h, 1.0f}), l.aspect,
+                              (eye.x - at.x) * (eye.x - at.x) + (eye.y - at.y) * (eye.y - at.y) + (eye.z - at.z) * (eye.z - at.z)});
+}
+
+void City::flushLabels(Renderer& r) {
+    std::sort(pendingLabels_.begin(), pendingLabels_.end(), [](const PendingLabel& a, const PendingLabel& b) { return a.dist > b.dist; });
     const float white[3] = {1, 1, 1}, uvAll[4] = {0, 0, 1, 1};
-    r.drawWebRegion(l, Mat4::translate(at) * Mat4::rotateY(yaw) * Mat4::scale({w, h, 1.0f}), uvAll, l.aspect, 0.0f, -1.0f, 1.0f, white);
+    for (const PendingLabel& p : pendingLabels_) r.drawWebRegion(*p.label, p.world, uvAll, p.aspect, 0.0f, -1.0f, 1.0f, white);
+    pendingLabels_.clear();
 }
 
 // Same face as the lobby doors: a folder panel above the building name, which shrinks to fit.
@@ -666,6 +673,7 @@ void City::renderCycle(Renderer& r, Vec3 pos, float yaw, const std::vector<Vec3>
 
 void City::render(Renderer& r, Vec3 eye) {
     labelBudget_ = 2;
+    pendingLabels_.clear();
     renderMonuments(r, eye);
     // While the file system is still being read, square scan pulses ripple out of the hub across the ground.
     bool scanning = !built_;
@@ -919,6 +927,7 @@ void City::render(Renderer& r, Vec3 eye) {
             }
         }
     }
+    flushLabels(r);
 }
 
 
