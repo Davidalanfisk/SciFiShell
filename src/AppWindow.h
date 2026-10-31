@@ -46,6 +46,8 @@ public:
     void pointer(Vec3 origin, Vec3 dir);
     void press(bool autoRelease);
     void releaseButton();
+    void scriptClick(int px, int py);  // test hook: click at content pixel
+    void scriptTextKeys(const std::string& utf8);
     void scrollNotches(float notches);
     void key(EditKey key);
     void text(const std::string& utf8);

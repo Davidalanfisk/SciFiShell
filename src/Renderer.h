@@ -57,6 +57,8 @@ public:
     // imageMode: the texture is an opaque thumbnail; color.r is a brightness multiplier.
     std::shared_ptr<GpuLabel> createLabel(const Bitmap& bitmap, bool srgbImage = false);
     void drawPanel(const GpuLabel& label, const Mat4& world, Vec3 color, const PanelParams& params);
+    // White text with a soft shadow and no panel behind it; the label fills the quad.
+    void drawHudText(const GpuLabel& label, const Mat4& world);
     // glow: -1 = no edge light (plain block), 0 = resting edge light, 1 = hovered. grid = the glowing floor.
     void drawCube(const GpuLabel& label, const Mat4& world, Vec3 color, bool grid = false, bool imageMode = false,
                   float glow = -1.0f);

@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "AppWindow.h"
+#include "WinCapture.h"
 
 #include <windows.h>
 
@@ -30,7 +31,7 @@ namespace sf {
 namespace {
 constexpr int kTexW = 3840, kTexH = 2160;       // GPU texture; the program's window is copied into its top-left corner
 constexpr int kWinW = 1600, kWinH = 960;        // size the program's window is given
-constexpr int kOffX = -24000, kOffY = 200;      // parked off-screen position
+constexpr int kOffX = 40, kOffY = 40;  // parked on-screen, behind the shell: the compositor only renders windows that are on a monitor
 constexpr int kBarW = 1920, kBarH = 80;
 constexpr float kBarRatio = static_cast<float>(kBarH) / kBarW;
 
@@ -245,6 +246,7 @@ struct AppWindowState {
     int contentW = 0, contentH = 0;  // main thread only: last uploaded size
     int mouseX = -1, mouseY = -1;
     HWND lastTarget = nullptr;
+    std::atomic<bool> userClosed{false};  // the user pressed close: do not look for a replacement window
     std::string status;
     std::string shownTitle;
 
@@ -384,7 +386,11 @@ static void workerMain(AppWindowState* s) {
     Dib mainDib, popDib;
     int appliedW = kWinW, appliedH = kWinH;
     std::vector<uint32_t> canvas;
-    const auto started = std::chrono::steady_clock::now();
+    WinCapture wgcCap;
+    HWND wgcFor = nullptr;
+    std::vector<uint32_t> wgcBuf;
+    auto started = std::chrono::steady_clock::now();
+    bool handoff = false;  // the hosted window vanished: a launcher (Chrome profile picker) may open the real one next
     auto lastFrame = started;
     std::map<HWND, POINT> popPos;  // where each flyout is drawn on the panel
     std::vector<HWND> popList;
@@ -422,15 +428,23 @@ static void workerMain(AppWindowState* s) {
             if (ctx.found) {
                 // Park the window off-screen at a known size and hand focus straight back to the shell.
                 if (IsIconic(ctx.found) || IsZoomed(ctx.found)) ShowWindow(ctx.found, SW_RESTORE);
-                SetWindowPos(ctx.found, HWND_BOTTOM, kOffX, kOffY, kWinW, kWinH, SWP_NOACTIVATE);
-                // A non-activating window can't pull the foreground (and the shell's mouse capture) away on a click.
-                SetWindowLongPtrW(ctx.found, GWL_EXSTYLE, GetWindowLongPtrW(ctx.found, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
+                // Chromium and UWP stop painting windows they think are covered, so the program sits on top of the shell but is
+                // all-but-invisible (alpha 1) and click-through. A non-activating window also can't pull the foreground
+                // (and the shell's mouse capture) away on a click.
+                SetWindowLongPtrW(ctx.found, GWL_EXSTYLE,
+                                  GetWindowLongPtrW(ctx.found, GWL_EXSTYLE) | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT);
+                SetLayeredWindowAttributes(ctx.found, 0, 1, LWA_ALPHA);
+                SetWindowPos(ctx.found, HWND_TOPMOST, kOffX, kOffY, kWinW, kWinH, SWP_NOACTIVATE);
                 if (s->owner) SetForegroundWindow(s->owner);
                 claim(ctx.found);
                 s->hwnd = reinterpret_cast<uintptr_t>(ctx.found);
                 continue;
             }
-            if (std::chrono::steady_clock::now() - started > std::chrono::seconds(20)) {
+            if (handoff && std::chrono::steady_clock::now() - started > std::chrono::seconds(10)) {
+                s->exited = true;
+                return;
+            }
+            if (!handoff && std::chrono::steady_clock::now() - started > std::chrono::seconds(20)) {
                 s->failed = true;
                 return;
             }
@@ -438,8 +452,18 @@ static void workerMain(AppWindowState* s) {
             continue;
         }
         if (!IsWindow(h)) {
-            s->exited = true;
-            return;
+            if (s->userClosed) {
+                s->exited = true;
+                return;
+            }
+            // Launchers and profile pickers close their window and start the real one: keep watching for a new window.
+            unclaim(h);
+            wgcCap.stop();
+            wgcFor = nullptr;
+            s->hwnd = 0;
+            handoff = true;
+            started = std::chrono::steady_clock::now();
+            continue;
         }
         if (!s->capturing) {
             Sleep(40);
@@ -465,13 +489,39 @@ static void workerMain(AppWindowState* s) {
             SetWindowPos(h, nullptr, 0, 0, std::min(w, kWinW), std::min(hh, kWinH), SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
             continue;
         }
-        if (w <= 0 || hh <= 0 || !grab(mainDib, h, w, hh)) {
-            Sleep(30);
-            continue;
+        // Prefer compositor capture (works for GPU-drawn windows); PrintWindow stays as the fallback.
+        if (wgcFor != h) {
+            wgcFor = h;
+            wgcCap.start(h);
         }
-        canvas.resize(static_cast<size_t>(w) * hh);
-        const uint32_t* src = static_cast<const uint32_t*>(mainDib.bits);
-        for (size_t i = 0; i < canvas.size(); ++i) canvas[i] = bgraToRgba(src[i]);
+        bool viaWgc = false;
+        int cw = 0, ch = 0;
+        if (w > 0 && hh > 0 && wgcCap.active() && wgcCap.latest(wgcBuf, cw, ch) && cw > 0 && ch > 0) {
+            // The capture covers the visible frame, which is inset from GetWindowRect by the invisible resize border.
+            RECT fb{};
+            if (FAILED(DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, &fb, sizeof fb))) fb = r;
+            const int ox = fb.left - r.left, oy = fb.top - r.top;
+            canvas.assign(static_cast<size_t>(w) * hh, 0xFF000000u);
+            for (int y = 0; y < ch; ++y) {
+                const int dy = y + oy;
+                if (dy < 0 || dy >= hh) continue;
+                for (int x = 0; x < cw; ++x) {
+                    const int dx2 = x + ox;
+                    if (dx2 < 0 || dx2 >= w) continue;
+                    canvas[static_cast<size_t>(dy) * w + dx2] = bgraToRgba(wgcBuf[static_cast<size_t>(y) * cw + x] | 0xFF000000u);
+                }
+            }
+            viaWgc = true;
+        }
+        if (!viaWgc) {
+            if (w <= 0 || hh <= 0 || !grab(mainDib, h, w, hh)) {
+                Sleep(30);
+                continue;
+            }
+            canvas.resize(static_cast<size_t>(w) * hh);
+            const uint32_t* src = static_cast<const uint32_t*>(mainDib.bits);
+            for (size_t i = 0; i < canvas.size(); ++i) canvas[i] = bgraToRgba(src[i]);
+        }
 
         // A modal dialog (save prompt, file picker) is a separate owned window: composite it over the main one.
         RECT pr{};
@@ -520,7 +570,7 @@ static void workerMain(AppWindowState* s) {
                         if (!IsWindowVisible(w2)) return TRUE;
                         wchar_t cls[64] = {};
                         GetClassNameW(w2, cls, 64);
-                        if (std::wcscmp(cls, L"Microsoft.UI.Content.PopupWindowSiteBridge") != 0) return TRUE;
+                        if (std::wcscmp(cls, L"Microsoft.UI.Content.PopupWindowSiteBridge") != 0 && std::wcscmp(cls, L"#32768") != 0) return TRUE;
                         DWORD p = 0;
                         GetWindowThreadProcessId(w2, &p);
                         if (p == c->pid) c->list.push_back(w2);
@@ -603,8 +653,9 @@ void AppWindow::release() {
     HWND h = reinterpret_cast<HWND>(s_->hwnd.load());
     if (h) unclaim(h);
     if (h && IsWindow(h)) {
-        SetWindowLongPtrW(h, GWL_EXSTYLE, GetWindowLongPtrW(h, GWL_EXSTYLE) & ~static_cast<LONG_PTR>(WS_EX_NOACTIVATE));
-        SetWindowPos(h, HWND_TOP, 160, 120, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowLongPtrW(h, GWL_EXSTYLE,
+                          GetWindowLongPtrW(h, GWL_EXSTYLE) & ~static_cast<LONG_PTR>(WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT));
+        SetWindowPos(h, HWND_NOTOPMOST, 160, 120, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
     }
     s_->hwnd = 0;
     visible_ = false;
@@ -660,6 +711,7 @@ void AppWindow::open(Vec3 eye, Vec3 forward, bool vr) {
             s_->failed = true;
         } else {
             s_->status = "Launching...";
+            s_->userClosed = false;
             s_->worker = std::thread(workerMain, s_.get());
         }
     }
@@ -718,6 +770,7 @@ void AppWindow::applyFullscreenLayout() {
 
 void AppWindow::closeProgram() {
     HWND h = reinterpret_cast<HWND>(s_->hwnd.load());
+    s_->userClosed = true;
     if (h) PostMessageW(h, WM_CLOSE, 0, 0);
     else hide();
 }
@@ -959,6 +1012,22 @@ void AppWindow::press(bool autoRelease) {
             return;
         }
     }
+    if (top && s_->lastTarget == top) {
+        // The classic menu bar is non-client area: posted client clicks do nothing, so UI Automation presses it.
+        RECT mr;
+        {
+            std::lock_guard<std::mutex> lock(s_->m);
+            mr = s_->mainRect;
+        }
+        DWORD_PTR hit = 0;
+        const POINT sp{mr.left + s_->mouseX, mr.top + s_->mouseY};
+        if (SendMessageTimeoutW(top, WM_NCHITTEST, 0, MAKELPARAM(static_cast<short>(sp.x), static_cast<short>(sp.y)), SMTO_ABORTIFHUNG, 50, &hit) &&
+            hit == HTMENU) {
+            std::lock_guard<std::mutex> lock(s_->m);
+            s_->clicks.push_back(POINT{s_->mouseX, s_->mouseY});
+            return;
+        }
+    }
     sendMouse(WM_LBUTTONDOWN, MK_LBUTTON);
     mouseDown_ = true;
     releasePending_ = autoRelease;
@@ -970,6 +1039,14 @@ void AppWindow::releaseButton() {
     mouseDown_ = false;
     if (s_->mouseX >= 0) sendMouse(WM_LBUTTONUP, 0);
     else if (s_->lastTarget && IsWindow(s_->lastTarget)) PostMessageW(s_->lastTarget, WM_LBUTTONUP, 0, 0);
+}
+
+void AppWindow::scriptClick(int px, int py) {
+    s_->mouseX = px;
+    s_->mouseY = py;
+    sendMouse(WM_MOUSEMOVE, 0);
+    press(true);
+    releaseButton();
 }
 
 void AppWindow::scrollNotches(float notches) {

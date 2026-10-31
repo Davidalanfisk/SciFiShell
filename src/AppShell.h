@@ -225,6 +225,9 @@ private:
     Vec3 aimDir_{0, 0, -1};
     bool vDrag_ = false;
     std::shared_ptr<GpuLabel> fpsLabel_;
+    // Plain white HUD: clock and date, plus the name of the building under the aim while in the city.
+    std::shared_ptr<GpuLabel> hudTimeLabel_, hudDateLabel_, hudTargetLabel_;
+    std::string hudTimeText_, hudDateText_, hudTargetShown_, hudTarget_;
     double fpsAccum_ = 0;
     int fpsFrames_ = 0;
 

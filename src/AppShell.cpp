@@ -69,6 +69,9 @@ AppShell::~AppShell() {
     menu_.reset();
     crosshair_.reset();
     fpsLabel_.reset();
+    hudTimeLabel_.reset();
+    hudDateLabel_.reset();
+    hudTargetLabel_.reset();
     renderer_.shutdown();
     if (window_) SDL_DestroyWindow(window_);
     SDL_Quit();
@@ -1040,6 +1043,10 @@ bool AppShell::scriptExec(const std::string& line) {
         else if (v == "edsave") { editor2d_->key(EditKey::Save); }
         else if (v == "fs") { if (focus_.p) winToggleFull(focus_); else if (!winOrder_.empty()) winToggleFull(winOrder_.back()); }
         else if (v == "osk") toggleKeyboard();
+#ifdef _WIN32
+        else if (v == "appclick") { int x = 0, y = 0; is >> x >> y; if (app_) app_->scriptClick(x, y); }
+        else if (v == "apptype") { std::string s; std::getline(is >> std::ws, s); if (app_) app_->text(s); }
+#endif
         else if (v == "mediafs") { if (media_) media_->toggleFullscreen(); }
         else if (v == "termtype") { std::string s; std::getline(is >> std::ws, s); terminal_->text(s + "\r"); }
         else if (v == "media") runTool(Tool::Media);
@@ -2095,11 +2102,13 @@ void AppShell::tick(double dt) {
                 camera_.pitch = 0.0f;
                 camera_.yaw = 0.0f;
             }
+            hudTarget_.clear();
             if (cityMode_) {
                 room_->setHover(nullptr);
                 std::string path, name;
                 std::vector<Vec3> routePath;
                 if (!overWin && city_ && city_->pick(o, d, path, name)) {
+                    hudTarget_ = name;
                     if ((pointerSelect || keySelect) && !deferred_) {
                         city_->markEntered();
                         city_->clearHover();
@@ -2118,6 +2127,9 @@ void AppShell::tick(double dt) {
                         };
                         deferDelay_ = 3;
                     }
+                } else if (!overWin && city_ && !riding_ && city_->pickMonument(o, d) >= 0 && !(pointerSelect || keySelect)) {
+                    static const char* const kMon[] = {"CPU", "RAM", "GPU"};
+                    hudTarget_ = kMon[std::clamp(city_->pickMonument(o, d), 0, 2)];
                 } else if (!overWin && city_ && (pointerSelect || keySelect) && !riding_ && city_->pickMonument(o, d) >= 0) {
                     monitor_->setFocus(city_->pickMonument(o, d));
                     openPanel(monitor_.get());
@@ -2157,6 +2169,27 @@ void AppShell::tick(double dt) {
         if (!want && loaderA_ < 0.01f) loaderA_ = 0.0f;
     }
     time_ += dt;
+    {
+        const std::time_t nowT = std::time(nullptr);
+        std::tm lt{};
+        localtime_s(&lt, &nowT);
+        char tb[16], db[64];
+        std::strftime(tb, sizeof tb, "%H:%M", &lt);
+        std::strftime(db, sizeof db, "%A %d %B %Y", &lt);
+        if (!hudTimeLabel_ || hudTimeText_ != tb) {
+            hudTimeText_ = tb;
+            hudTimeLabel_ = renderer_.createLabel(makeLabel(hudTimeText_, 64.0f, FontFace::UI, Color8{}, 96, 4));
+        }
+        if (!hudDateLabel_ || hudDateText_ != db) {
+            hudDateText_ = db;
+            hudDateLabel_ = renderer_.createLabel(makeLabel(hudDateText_, 36.0f, FontFace::UI, Color8{}, 64, 4));
+        }
+        const std::string want = cityMode_ ? hudTarget_ : std::string();
+        if (want != hudTargetShown_) {
+            hudTargetShown_ = want;
+            hudTargetLabel_ = want.empty() ? nullptr : renderer_.createLabel(makeLabel(want, 54.0f, FontFace::UI, Color8{}, 96, 4));
+        }
+    }
     fpsAccum_ += dt;
     ++fpsFrames_;
     if (fpsAccum_ >= 0.5) {
@@ -2304,6 +2337,22 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         renderer_.drawRing(*loadLabel_, view.rigidInverse() * Mat4::translate(at) * Mat4::scale({dia, dia, 1.0f}), 12,
                            std::floor(std::fmod(t * 9.0f, 12.0f)), t * 1.2f, loaderA_, 0.5f + 0.5f * std::sin(t * 6.0f));
         renderer_.setTheme(currentTheme().accent, currentTheme().alt);
+    }
+    if (hudTimeLabel_ && hudDateLabel_) {
+        renderer_.clearDepth();
+        const float dist = 1.2f, halfH = std::tan(kFovY * 0.5f) * dist, halfW = halfH * renderer_.aspect();
+        auto put = [&](const GpuLabel& lab, float h, Vec3 at) {
+            renderer_.drawHudText(lab, view.rigidInverse() * Mat4::translate(at) * Mat4::scale({h * lab.aspect, h, 1.0f}));
+        };
+        const float th = 0.07f, dh = 0.04f;
+        const float tw = th * hudTimeLabel_->aspect, dw = dh * hudDateLabel_->aspect;
+        const float rx = vrOn_ ? 0.3f : halfW - 0.05f, ty = vrOn_ ? 0.2f : halfH - 0.04f - th * 0.5f;
+        put(*hudTimeLabel_, th, {rx - tw * 0.5f, ty, -dist});
+        put(*hudDateLabel_, dh, {rx - dw * 0.5f, ty - th * 0.5f - dh * 0.5f, -dist});
+        if (hudTargetLabel_) {
+            const float gh = 0.06f;
+            put(*hudTargetLabel_, gh, {0.0f, vrOn_ ? -0.22f : -halfH * 0.62f, -dist});
+        }
     }
     if (settings_.showFps && fpsLabel_) {
         // Head-locked readout in the top-left of the view.

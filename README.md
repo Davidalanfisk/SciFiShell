@@ -44,6 +44,8 @@ and just *fly around inside your own machine*.
 
 **VR controllers (OpenXR):** right ray + trigger select · left stick / trackpad move (the way you face) · right stick / trackpad: left-right snap turn, up-down altitude · left menu / Y / B command ring · right menu / B back · left grip or X / A on-screen keyboard · right grip window switcher (trigger confirms)
 
+**HUD:** a plain white readout shows the time and date (top right). In the city, the name of the building or monument under your aim appears below the crosshair.
+
 ## Quick tutorial
 
 You start in the city, standing at the hub. The big tower in the middle is your **system core**, and the districts

@@ -159,16 +159,47 @@ void CardNode::ensureLabel() {
         label_ = r_->createLabel(bm);
         return;
     }
-    std::vector<std::string> lines = wrapText(text_, 56.0f, FontFace::UI, 460.0f, 3);
+    // Shrink the type until the whole name fits; only then trim the middle of the name so the extension survives.
+    const float sizes[] = {56.0f, 48.0f, 40.0f, 34.0f};
+    const int maxLinesFor[] = {3, 3, 4, 5};
+    const float boxW = 450.0f, boxH = 270.0f;
+    float px = sizes[3];
+    std::vector<std::string> lines;
+    std::string shown = text_;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        bool fit = false;
+        for (int s = 0; s < 4 && !fit; ++s) {
+            std::vector<std::string> l = wrapText(shown, sizes[s], FontFace::UI, boxW, maxLinesFor[s] + 1);
+            if (static_cast<int>(l.size()) <= maxLinesFor[s] && textLineHeight(sizes[s], FontFace::UI) * l.size() <= boxH && l.back().find("...") == std::string::npos) {
+                px = sizes[s];
+                lines = std::move(l);
+                fit = true;
+            }
+        }
+        if (fit) break;
+        const size_t dot = shown.rfind('.');
+        const std::string ext = (dot != std::string::npos && dot > 0 && shown.size() - dot <= 8) ? shown.substr(dot) : std::string();
+        std::string stem = shown.substr(0, shown.size() - ext.size());
+        const size_t keep = 34;  // characters of the stem kept at each end
+        if (stem.size() > keep) {
+            size_t head = keep - 10, tail = 10;
+            while (head > 0 && (static_cast<unsigned char>(stem[head]) & 0xC0) == 0x80) --head;
+            size_t tailStart = stem.size() - tail;
+            while (tailStart < stem.size() && (static_cast<unsigned char>(stem[tailStart]) & 0xC0) == 0x80) ++tailStart;
+            shown = stem.substr(0, head) + "..." + stem.substr(tailStart) + ext;
+        }
+        lines = wrapText(shown, sizes[3], FontFace::UI, boxW, maxLinesFor[3]);
+        px = sizes[3];
+    }
     Bitmap bm;
     bm.w = 520;
     bm.h = 332;
     bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 0);
-    float lineH = textLineHeight(56.0f, FontFace::UI);
+    float lineH = textLineHeight(px, FontFace::UI);
     float top = (bm.h - lineH * lines.size()) * 0.5f;
     for (size_t i = 0; i < lines.size(); ++i) {
-        float w = measureText(lines[i], 56.0f, FontFace::UI);
-        drawText(bm, (bm.w - w) * 0.5f, top + lineH * i + textAscent(56.0f, FontFace::UI), lines[i], 56.0f,
+        float w = measureText(lines[i], px, FontFace::UI);
+        drawText(bm, (bm.w - w) * 0.5f, top + lineH * i + textAscent(px, FontFace::UI), lines[i], px,
                  FontFace::UI, Color8{});
     }
     label_ = r_->createLabel(bm);

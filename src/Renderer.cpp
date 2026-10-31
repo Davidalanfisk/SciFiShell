@@ -638,6 +638,13 @@ void Renderer::drawPanel(const GpuLabel& label, const Mat4& world, Vec3 c, const
     draw(panelPipeline_, label.panelSRB, quad_, world, color, params, light);
 }
 
+void Renderer::drawHudText(const GpuLabel& label, const Mat4& world) {
+    const float color[4] = {1, 1, 1, 1};
+    const float params[4] = {0, 0, 1, -1.0f};
+    const float light[4] = {0, label.aspect, 0, 0};
+    draw(panelPipeline_, label.panelSRB, quad_, world, color, params, light);
+}
+
 void Renderer::setTheme(Vec3 accent, Vec3 alt) {
     accent_[0] = accent.x; accent_[1] = accent.y; accent_[2] = accent.z;
     alt_[0] = alt.x; alt_[1] = alt.y; alt_[2] = alt.z;

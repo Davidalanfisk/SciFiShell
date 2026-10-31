@@ -86,7 +86,7 @@ set(SOURCES
     src/ModelLoader.cpp
     src/StbImpl.cpp)
 if(WIN32)
-    list(APPEND SOURCES src/AppWindow.cpp src/AppCatalog.cpp src/OsSettings.cpp)
+    list(APPEND SOURCES src/AppWindow.cpp src/WinCapture.cpp src/AppCatalog.cpp src/OsSettings.cpp)
 endif()
 
 # ---- Chromium Embedded Framework (Windows only for now) ----------------------------------------
@@ -134,7 +134,7 @@ target_link_libraries(SciFiShell PRIVATE
 
 if(WIN32)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineD3D12-static xinput d3d12 dxgi pdh
-                          mfplat mfreadwrite mfuuid d3d11 propsys ole32 oleaut32 iphlpapi powrprof ws2_32 psapi)
+                          mfplat mfreadwrite mfuuid d3d11 dwmapi windowsapp propsys ole32 oleaut32 iphlpapi powrprof ws2_32 psapi)
 elseif(APPLE)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineMetal-static)
 else()

@@ -23,6 +23,16 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
 {
     float aspect = g_Params.z;
     float sel    = g_Params.w;
+    if (sel < -0.5)
+    {
+        // Text only (HUD): the label fills the quad, white, with a soft dark drop shadow so it reads on any background.
+        float a = g_Tex.Sample(g_Tex_sampler, In.UV).a;
+        float sa = g_Tex.Sample(g_Tex_sampler, In.UV - float2(0.004, -0.04)).a * 0.7;
+        float oa = a + sa * (1.0 - a);
+        if (oa <= 0.003) discard;
+        Color = float4(float3(1, 1, 1) * (a / oa), oa * g_Color.a);
+        return;
+    }
     float2 halfSize = float2(aspect, 1.0) * 0.5;
     float2 p = (In.UV - 0.5) * float2(aspect, 1.0);
 
