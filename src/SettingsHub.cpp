@@ -220,7 +220,7 @@ void SettingsHub::toggleFullscreen() {
         applyFullscreen();
     } else {
         base_ = savedBase_;
-        worldW_ = kWorldW;
+        worldW_ = userW_;
         W_ = kW;
         H_ = kH;
         aspect_ = static_cast<float>(W_) / H_;

@@ -885,6 +885,15 @@ bool AppWindow::bounds(Vec3& centre, Vec3& normal, float& w, float& h) const {
     return true;
 }
 
+Mat4 AppWindow::placement() const { return s_->base; }
+void AppWindow::setPlacement(const Mat4& m) { s_->base = savedBase_ = m; }
+float AppWindow::worldWidth() const { return s_->worldW; }
+void AppWindow::setWorldWidth(float w) {
+    if (s_->worldW > 1e-4f) s_->worldH *= w / s_->worldW;
+    s_->worldW = savedW_ = w;
+    s_->barH = w * kBarRatio;
+}
+
 float AppWindow::distanceTo(Vec3 eye) const { return length(s_->base.transformPoint({0, 0, 0}) - eye); }
 
 void AppWindow::blur() {

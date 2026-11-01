@@ -58,6 +58,12 @@ public:
     bool busy() const { return dragging_ || mouseDown_; }
     void toggleFullscreen();
     bool fullscreen() const { return fullscreen_; }
+    Mat4 placement() const;
+    void setPlacement(const Mat4& m);
+    float worldWidth() const;
+    void setWorldWidth(float w);
+    bool moving() const { return dragging_; }
+    void pushPull(float d) { grabDist_ = clampf(grabDist_ + d, 0.8f, 8.0f); }
     void setView(float aspect, float tanHalfFov) { viewAspect_ = aspect; viewTan_ = tanHalfFov; }
     void navigate(const std::string& input);
     void goBack();

@@ -50,6 +50,12 @@ public:
     bool busy() const { return dragging_; }
     bool overTitle() const { return open_ && !fullscreen_ && hoverTitle_; }
     bool fullscreen() const { return fullscreen_; }
+    Mat4 placement() const { return base_; }
+    void setPlacement(const Mat4& m) { base_ = m; savedBase_ = m; }
+    float worldWidth() const { return worldW_; }
+    void setWorldWidth(float w) { worldW_ = userW_ = w; }
+    bool moving() const { return dragging_; }
+    void pushPull(float d) { grabDist_ = clampf(grabDist_ + d, 0.8f, 8.0f); }
     void toggleFullscreen();
     void setView(float tanHalf, float aspect) { viewTan_ = tanHalf; viewAspect_ = aspect; }
 
@@ -85,7 +91,7 @@ public:
     int drawnHover_ = 0;
     bool fullscreen_ = false;
     Mat4 savedBase_;
-    float worldW_ = 2.0f;
+    float worldW_ = 2.0f, userW_ = 2.0f;
     float viewTan_ = 0.577f, viewAspect_ = 1.78f;
 
     Renderer& renderer_;

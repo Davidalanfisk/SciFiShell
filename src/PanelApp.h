@@ -30,6 +30,13 @@ public:
     bool busy() const { return dragging_; }
     bool overTitle() const { return open_ && !fullscreen_ && mx_ >= 0 && my_ < 86 && hoverBtn_ == 0; }
     bool fullscreen() const { return fullscreen_; }
+    // Window manager access: the placement matrix (translation + yaw), world width, and drag state.
+    Mat4 placement() const { return base_; }
+    void setPlacement(const Mat4& m) { base_ = m; savedBase_ = m; }
+    float worldWidth() const { return worldW_; }
+    void setWorldWidth(float w) { worldW_ = baseWorldW_ = w; }
+    bool moving() const { return dragging_; }
+    void pushPull(float d) { grabDist_ = clampf(grabDist_ + d, 0.8f, 8.0f); }
     void toggleFullscreen();
     void setView(float tanHalf, float aspect) { viewTan_ = tanHalf; viewAspect_ = aspect; }
 

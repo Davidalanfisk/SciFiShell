@@ -59,6 +59,14 @@ FrameInput InputSystem::poll() {
                     default: break;
                 }
                 if (e.key.repeat) break;
+                if (capturing) {
+                    const SDL_Keycode k = e.key.keysym.sym;
+                    if (k >= SDLK_LCTRL && k <= SDLK_RGUI) break;  // modifiers alone cannot be the key
+                    capturing = false;
+                    if (k != SDLK_ESCAPE) in.keyCaptured = static_cast<int>(k);
+                    in.escape = false;
+                    break;
+                }
                 if (e.key.keysym.sym == SDLK_TAB && (e.key.keysym.mod & (KMOD_ALT | KMOD_CTRL)))
                     in.tabStep = (e.key.keysym.mod & KMOD_SHIFT) ? -1 : 1;
                 if (e.key.keysym.sym == SDLK_F11) in.appFullscreen = true;
@@ -70,6 +78,7 @@ FrameInput InputSystem::poll() {
                 if (e.key.keysym.sym == SDLK_F2) in.ring = true;
                 if (e.key.keysym.sym == SDLK_F6) in.themeCycle = true;
                 if (e.key.keysym.sym == SDLK_F7) in.osk = true;
+                if (e.key.keysym.sym == arrangeKey) in.arrange = true;
                 if ((e.key.keysym.mod & KMOD_ALT) && e.key.keysym.sym == SDLK_LEFT) in.navBack = true;
                 if ((e.key.keysym.mod & KMOD_ALT) && e.key.keysym.sym == SDLK_RIGHT) in.navForward = true;
                 if (e.key.keysym.sym == SDLK_b && !ctrl) in.browser = true;

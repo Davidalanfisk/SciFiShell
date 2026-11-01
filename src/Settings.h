@@ -15,6 +15,9 @@ struct Settings {
     bool reflections = true;
     bool postFx = true;   // bloom, light streaks, grade
     bool vsync = true;
+    bool carryWins = true;  // windows follow you between the city, lobbies and rooms
+    int arrangeKey = 0;     // SDL keycode that arranges windows; 0 = the default, F8
+    bool snapWins = true;   // dragged windows snap to the edges and height of their neighbours
     static constexpr float kDistScale[4] = {0.4f, 0.65f, 1.0f, 1.3f};
     float distScale() const { return kDistScale[distIdx]; }
 

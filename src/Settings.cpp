@@ -31,6 +31,13 @@ void Settings::load() {
             reflections = r != 0;
             postFx = p != 0;
             vsync = v != 0;
+            int cw = 1, sw = 1;
+            if (f >> cw >> sw) {
+                carryWins = cw != 0;
+                snapWins = sw != 0;
+                int ak = 0;
+                if (f >> ak) arrangeKey = ak;
+            }
         }
     }
     aaIdx = std::clamp(aaIdx, 0, 2);
@@ -45,7 +52,7 @@ void Settings::save() const {
     if (p.empty()) return;
     std::error_code ec;
     std::filesystem::create_directories(p.parent_path(), ec);
-    std::ofstream(p) << lookIdx << ' ' << speedIdx << ' ' << (invertY ? 1 : 0) << ' ' << (crosshair ? 1 : 0) << ' ' << (showFps ? 1 : 0) << ' ' << webQuality << ' ' << aaIdx << ' ' << distIdx << ' ' << (reflections ? 1 : 0) << ' ' << (postFx ? 1 : 0) << ' ' << (vsync ? 1 : 0);
+    std::ofstream(p) << lookIdx << ' ' << speedIdx << ' ' << (invertY ? 1 : 0) << ' ' << (crosshair ? 1 : 0) << ' ' << (showFps ? 1 : 0) << ' ' << webQuality << ' ' << aaIdx << ' ' << distIdx << ' ' << (reflections ? 1 : 0) << ' ' << (postFx ? 1 : 0) << ' ' << (vsync ? 1 : 0) << ' ' << (carryWins ? 1 : 0) << ' ' << (snapWins ? 1 : 0) << ' ' << arrangeKey;
 }
 
 }  // namespace sf

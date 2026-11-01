@@ -141,6 +141,7 @@ private:
     void openPanel(PanelApp* p);
     void openSettingsWin();
     // Window manager: every browser / program / panel / settings window is persistent, stacked back to front in winOrder_.
+public:
     enum { kWinBrowser, kWinApp, kWinPanel, kWinSettings };
     struct WinRef {
         int kind = -1;
@@ -148,6 +149,12 @@ private:
         bool operator==(const WinRef& o) const { return kind == o.kind && p == o.p; }
         bool operator!=(const WinRef& o) const { return !(*this == o); }
     };
+    struct WinFrame {
+        Vec3 c{}, n{0, 0, 1};
+        float yaw = 0, w = 0, h = 0, ww = 0;  // frame centre, facing, frame size, content world width
+    };
+
+private:
     std::vector<WinRef> winOrder_;  // open windows, back to front
     WinRef focus_;                  // the window that owns the keyboard
     std::vector<WinRef> allWins();
@@ -174,6 +181,54 @@ private:
     void winRender(WinRef w);
     bool winEscape(WinRef w);  // the window's own Escape action (leave address bar / fullscreen / sub-page); false if it had none
     bool winBack(WinRef w);    // gamepad B / VR back: step back inside the window, else minimise it
+    // Window layout (see AppShellWindows.cpp): glide, arrange, carry between environments, snap, resize.
+    struct WinAnim {
+        WinRef w;
+        Vec3 c0{}, c1{};
+        float yaw0 = 0, yaw1 = 0, w0 = 0, w1 = 0, t = 0;
+    };
+    struct WinRel {
+        WinRef w;
+        float bearing = 0, dist = 0, dy = 0, yawRel = 0;
+    };
+    std::vector<WinAnim> winAnims_;
+    std::vector<WinRel> winRel_;  // each window's place relative to the viewer, remembered so it can follow
+    Vec3 lastEye_{}, relEye_{};
+    float sizeK_ = 1.0f;
+    std::string lastEnv_;
+    bool envKnown_ = false;
+    int arrangeNext_ = 0;
+    WinRef sizing_;                // window being resized from its corner handle
+    bool sizingHold_ = false;      // mouse: resize while the button is held; otherwise click to grab, click to drop
+    WinRef handleHover_;
+    Vec3 sizeAnchor_{};            // top-left corner of the window when resizing began
+    float sizeYaw_ = 0, sizeW0_ = 0, sizeFw0_ = 0, sizeFh0_ = 0;
+    std::shared_ptr<GpuLabel> handleLabel_;
+    bool winFrameOf(WinRef w, WinFrame& f);
+    void winMoveTo(WinRef w, Vec3 centre, float yaw, float width);
+    void winGlideTo(WinRef w, Vec3 centre, float yaw, float width);
+    void winAnimStep(float dt);
+    float winWidthOf(WinRef w);
+    bool winMoving(WinRef w);
+    void winPushPull(WinRef w, float d);
+    Vec3 viewEye() const { return vrOn_ ? head_.eye : camera_.position; }
+    Vec3 viewFlat() const;
+    std::vector<WinRef> arrangeable();
+    void arrangeArc();
+    void arrangeTile();
+    void arrangeCycle();
+    void minimiseAll();
+    void winCarryTrack();
+    void winCarryApply(const Vec3& eye, const Vec3& flat);
+    void winTick(float dt);
+    void snapDragged(WinRef w);
+    bool handleAt(WinRef w, const Vec3& o, const Vec3& d, float& t);
+    void resizeStep(const Vec3& o, const Vec3& d);
+    bool resizeInput(const Vec3& o, const Vec3& d, bool clickEv, bool mouseClick, bool clickUp, bool blocked);
+    template <class F> void winVisit(WinRef w, F&& f);
+    float carryTimer_ = -1.0f;
+    void scriptWin(const std::string& arg);
+    void renderHandle(WinRef w);
     Vec3 winForward() const;   // where a new window should appear (cascaded so windows do not stack exactly)
     std::unique_ptr<SettingsPanel> appsPanel_;
 #ifdef _WIN32

@@ -399,6 +399,22 @@ void AppShell::buildSettingsHub() {
                          [this, save] { settings_.vsync = !settings_.vsync; save(); }});
     cats.push_back(std::move(gfx));
 
+    SettingsCategory wm{"WINDOWS", "Arrange and move windows", "SHELL", {}};
+    wm.items.push_back({"ARRANGE IN ARC", "Curve open windows around you", nullptr, [this] { arrangeArc(); }});
+    wm.items.push_back({"TILE WINDOWS", "Lay open windows out in a grid", nullptr, [this] { arrangeTile(); }});
+    wm.items.push_back({"MINIMISE ALL", "Tuck every window away", nullptr, [this] { minimiseAll(); }});
+    wm.items.push_back({"ARRANGE KEY", "Press to change, then tap the new key (Esc cancels)",
+                        [this] {
+                            if (input_.capturing) return std::string("PRESS A KEY...");
+                            return std::string(SDL_GetKeyName(settings_.arrangeKey ? settings_.arrangeKey : SDLK_F8));
+                        },
+                        [this] { input_.capturing = true; }});
+    wm.items.push_back({"CARRY WINDOWS", "Windows follow you between city, lobby and rooms", [this, onOff] { return onOff(settings_.carryWins); },
+                        [this, save] { settings_.carryWins = !settings_.carryWins; save(); }});
+    wm.items.push_back({"SNAPPING", "Dragged windows snap to neighbours and eye height", [this, onOff] { return onOff(settings_.snapWins); },
+                        [this, save] { settings_.snapWins = !settings_.snapWins; save(); }});
+    cats.push_back(std::move(wm));
+
 #ifdef _WIN32
     // Windows options, all native: no hosted Windows pages.
     auto info = [](const char* title, const char* hint, std::function<std::string()> value) {
@@ -1060,6 +1076,10 @@ bool AppShell::scriptExec(const std::string& line) {
         int id = 0;
         is >> id;
         switchTo(id);
+    } else if (cmd == "win") {
+        std::string v;
+        is >> v;
+        scriptWin(v);
     } else if (cmd == "tool") {
         std::string v;
         is >> v;
@@ -1610,6 +1630,7 @@ void AppShell::handleSwitcher(FrameInput& in, PadState& pad) {
 
 void AppShell::tick(double dt) {
     syncWins();
+    winTick(static_cast<float>(dt));
 #ifdef SCIFI_HAS_CEF
     WebBrowser::pump();
     const bool browserOpen = browser_ && browser_->active();
@@ -1628,6 +1649,12 @@ void AppShell::tick(double dt) {
     if (!app_ && !apps_.empty()) app_ = apps_[0].get();
 #endif
     FrameInput in = input_.poll();
+    if (in.keyCaptured) {
+        settings_.arrangeKey = in.keyCaptured;
+        settings_.save();
+    }
+    input_.arrangeKey = settings_.arrangeKey ? settings_.arrangeKey : SDLK_F8;
+    if (in.arrange && !((focus_.p && winTyping(focus_)) && input_.arrangeKey < 256)) arrangeCycle();
     // Only the focused window can take typed text; otherwise the keyboard walks the camera.
     const bool winTypingNow = focus_.p && winTyping(focus_);
     PadState pad = pad_.poll();
@@ -1873,6 +1900,8 @@ void AppShell::tick(double dt) {
                 room_->setHover(nullptr);
                 if (city_) city_->clearHover();
             }
+            for (const WinRef& w : winOrder_)
+                if (winMoving(w)) snapDragged(w);
             if (renaming_) {
                 for (EditKey k : in.keys) {
                     if (k == EditKey::Backspace) {
@@ -1938,6 +1967,12 @@ void AppShell::tick(double dt) {
                 vrInput_.selectPressed = false;
                 clickEv = false;
             }
+            if (resizeInput(o, d, clickEv, in.click, in.clickUp, winModal || oskHit)) {
+                in.click = pointerSelect = keySelect = false;
+                pad.aPressed = false;
+                vrInput_.selectPressed = false;
+                clickEv = false;
+            }
             if (clickEv) {
                 if (top.p) {
                     raiseFocus(top);
@@ -1958,6 +1993,11 @@ void AppShell::tick(double dt) {
                 osk_->releaseButton();
                 for (const WinRef& w : winOrder_) winRelease(w);
             }
+            for (const WinRef& w : winOrder_)
+                if (in.wheel != 0.0f && winMoving(w)) {
+                    winPushPull(w, in.wheel > 0 ? 0.25f : -0.25f);
+                    in.wheel = 0.0f;
+                }
             if (in.wheel != 0.0f && top.p) {
                 winWheel(top, in.wheel);
                 in.wheel = 0.0f;
@@ -2349,6 +2389,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         for (const WinRef& w : winOrder_) {
             renderer_.clearDepth();
             winRender(w);
+            renderHandle(w);
         }
     if (state_ == State::FileRoom && osk_->isOpen()) {
         renderer_.clearDepth();

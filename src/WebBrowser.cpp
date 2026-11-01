@@ -534,6 +534,15 @@ bool WebBrowser::bounds(Vec3& centre, Vec3& normal, float& w, float& h) const {
     return true;
 }
 
+Mat4 WebBrowser::placement() const { return s_->base; }
+void WebBrowser::setPlacement(const Mat4& m) { s_->base = m; }
+float WebBrowser::worldWidth() const { return s_->worldW; }
+void WebBrowser::setWorldWidth(float w) {
+    s_->worldW = w;
+    s_->worldH = w * s_->vh / s_->vw;
+    s_->barH = w * kBarH / kBarW;
+}
+
 bool WebBrowser::rayToPlane(Vec3 origin, Vec3 dir, float& hx, float& hy) const {
     Mat4 inv = s_->base.rigidInverse();
     Vec3 o = inv.transformPoint(origin), d = inv.transformDir(dir);

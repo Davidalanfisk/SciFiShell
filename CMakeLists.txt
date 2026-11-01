@@ -80,6 +80,7 @@ set(SOURCES
     src/MediaApp.cpp
     src/FolderPicker.cpp
     src/AppShellMedia.cpp
+    src/AppShellWindows.cpp
     src/CodeEditor.cpp
     src/Viewer.cpp
     src/VideoFrame.cpp

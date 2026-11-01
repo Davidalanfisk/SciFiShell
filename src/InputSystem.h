@@ -32,6 +32,8 @@ struct FrameInput {
     bool ring = false;              // middle click / F2: summon the tool ring
     bool pin = false;               // right click: pin the view to the window under the aim (or release it)
     bool themeCycle = false;        // F6: next colour theme
+    int keyCaptured = 0;            // the key pressed while a remap was waiting for one
+    bool arrange = false;           // F8: arrange the open windows (arc, then tiled, then arc ...)
     bool osk = false;               // F7: show / hide the on-screen keyboard
     bool navBack = false, navForward = false;  // Alt+Left / Alt+Right
     int tabStep = 0;                // Alt+Tab / Ctrl+Tab: +1 next task, -1 previous (with Shift)
@@ -52,6 +54,8 @@ public:
     FrameInput poll();
     void setRelativeMouse(bool enabled);
     bool relativeMouse() const { return relative_; }
+    int arrangeKey = SDLK_F8;  // remappable key for arranging windows
+    bool capturing = false;    // when set, the next key press is reported in keyCaptured instead of acting
     void setTextInput(bool enabled);  // SDL text input (IME / typed characters) for the editor
 
 private:

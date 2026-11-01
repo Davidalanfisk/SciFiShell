@@ -36,6 +36,7 @@ and just *fly around inside your own machine*.
 | Cycle colour theme | `F6` |
 | Toggle VR | `V` |
 | On-screen keyboard | `F7` |
+| Arrange windows (arc, then tiles) | `F8` (remap in Settings → Windows → Arrange Key) |
 | Screenshot | `F12` (saved to `Pictures\SciFiShell`) |
 
 **Xbox controller:** left stick move · right stick look (snap turn in VR) · **RT / LT** up / down · **A** select · **B** back · **Y** command ring · **X** on-screen keyboard · **LB / RB** previous / next window (then **A**)
@@ -43,6 +44,8 @@ and just *fly around inside your own machine*.
 **VR headset only (no controllers needed):** a gaze reticle aims; use mouse, keyboard or Xbox pad for everything else. The on-screen keyboard (`F7`) floats in front of you and pops up when a text field is focused. Picking up a controller switches aiming to its ray; touching mouse, keyboard or pad switches back to gaze.
 
 **VR controllers (OpenXR):** right ray + trigger select · left stick / trackpad move (the way you face) · right stick / trackpad: left-right snap turn, up-down altitude · left menu / Y / B command ring · right menu / B back · left grip or X / A on-screen keyboard · right grip window switcher (trigger confirms)
+
+**Window management:** open windows follow you between the city, lobbies and rooms, gliding to a comfortable spot in front of you. Aim at the bracket at a window's bottom-right corner to resize it (hold and drag with the mouse; with a pad or VR controller click to grab, move, click to drop). While dragging a window the mouse wheel pushes it away or pulls it closer, and it snaps to the edges, plane and eye height of its neighbours. `F8` or **Settings → Windows** curves every open window around you in an arc, or lays them out as tiles. Carrying and snapping can be switched off there too.
 
 **HUD:** a plain white readout shows the time and date (top right). In the city, the name of the building or monument under your aim appears below the crosshair.
 
