@@ -38,6 +38,7 @@ public:
     bool pickRoute(Vec3 origin, Vec3 dir, std::vector<Vec3>& path) const;
     void routes(std::vector<std::vector<Vec3>>& out) const;
     float clearHeight(float x, float z, float r) const;
+    void setDrawScale(float s) { drawScale_ = s; }  // graphics option: scales every draw-distance cut-off
     void tourPoints(std::vector<Vec3>& out) const;  // monuments + storage regions for the idle fly-through
     void clearHover() { hoverP_ = hoverB_ = hoverT_ = -1; }
     // Remembers the hovered building as the one being entered; exitSpawn() is street level in front of its door.
@@ -168,6 +169,7 @@ private:
     Monument hubLabel_, pylonLabel_[4];
     float shownDiskR_ = 0, shownDiskW_ = 0, shownNetRx_ = 0, shownNetTx_ = 0;
     int labelBudget_ = 0;
+    float drawScale_ = 1.0f;
     struct PendingLabel {
         GpuLabel* label;
         Mat4 world;

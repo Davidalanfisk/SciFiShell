@@ -31,6 +31,7 @@ struct Constants {
     float light[4];
     float accent[4];  // theme accent rgb + time
     float alt[4];     // theme alert colour
+    float lights[96]; // interior light points: xyz + intensity, read by basic_3d.ps only
 };
 constexpr TEXTURE_FORMAT kColorFormat = TEX_FORMAT_RGBA8_UNORM_SRGB;
 constexpr TEXTURE_FORMAT kDepthFormat = TEX_FORMAT_D32_FLOAT;
@@ -117,7 +118,10 @@ bool Renderer::init(SDL_Window* window, const std::string& shaderDir) {
     {
         const Uint32 mask = static_cast<Uint32>(device_->GetTextureFormatInfoExt(kColorFormat).SampleCounts) &
                             static_cast<Uint32>(device_->GetTextureFormatInfoExt(kDepthFormat).SampleCounts);
-        samples_ = (mask & SAMPLE_COUNT_4) ? 4 : 1;  // 4x MSAA when the GPU supports it
+        samples_ = 1;
+        if (msaaPref_ >= 2 && (mask & SAMPLE_COUNT_4)) samples_ = 4;
+        else if (msaaPref_ >= 1 && (mask & SAMPLE_COUNT_2)) samples_ = 2;
+        else if (msaaPref_ >= 1 && (mask & SAMPLE_COUNT_4)) samples_ = 4;
     }
     factory_->CreateDefaultShaderSourceStreamFactory(shaderDir.c_str(), &shaderFactory_);
     if (!shaderFactory_) return false;
@@ -617,6 +621,7 @@ void Renderer::draw(Pipeline& pipeline, IShaderResourceBinding* srb, const Mesh&
         std::memcpy(cb->light, light, sizeof(cb->light));
         std::memcpy(cb->accent, accent_, sizeof(cb->accent));
         std::memcpy(cb->alt, alt_, sizeof(cb->alt));
+        std::memcpy(cb->lights, lights_, sizeof(cb->lights));
     }
     context_->SetPipelineState(pipeline.pso);
     context_->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -629,6 +634,32 @@ void Renderer::draw(Pipeline& pipeline, IShaderResourceBinding* srb, const Mesh&
     da.NumIndices = mesh.indexCount;
     da.Flags = DRAW_FLAG_VERIFY_ALL;
     context_->DrawIndexed(da);
+}
+
+bool Renderer::visible(Vec3 c, float radius) const {
+    float key[32];
+    std::memcpy(key, view_.m, sizeof(float) * 16);
+    std::memcpy(key + 16, proj_.m, sizeof(float) * 16);
+    if (!frustumValid_ || std::memcmp(key, frustumKey_, sizeof key) != 0) {
+        std::memcpy(frustumKey_, key, sizeof key);
+        const Mat4 vp = proj_ * view_;
+        auto row = [&](int i, float out[4]) { for (int k = 0; k < 4; ++k) out[k] = vp.m[k * 4 + i]; };
+        float r0[4], r1[4], r2[4], r3[4];
+        row(0, r0); row(1, r1); row(2, r2); row(3, r3);
+        const float* src[5][2] = {{r3, r0}, {r3, r0}, {r3, r1}, {r3, r1}, {r2, nullptr}};
+        const float sg[5] = {1, -1, 1, -1, 0};
+        for (int p = 0; p < 5; ++p) {
+            float* o = planes_[p];
+            for (int k = 0; k < 4; ++k) o[k] = p == 4 ? r2[k] : src[p][0][k] + sg[p] * src[p][1][k];
+            const float l = std::sqrt(o[0] * o[0] + o[1] * o[1] + o[2] * o[2]);
+            if (l > 1e-6f) for (int k = 0; k < 4; ++k) o[k] /= l;
+        }
+        frustumValid_ = true;
+    }
+    if (mirror_) c.y = -c.y;
+    for (int p = 0; p < 5; ++p)
+        if (planes_[p][0] * c.x + planes_[p][1] * c.y + planes_[p][2] * c.z + planes_[p][3] < -radius) return false;
+    return true;
 }
 
 void Renderer::drawPanel(const GpuLabel& label, const Mat4& world, Vec3 c, const PanelParams& p) {

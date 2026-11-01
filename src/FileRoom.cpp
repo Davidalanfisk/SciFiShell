@@ -103,6 +103,42 @@ private:
     std::shared_ptr<GpuLabel> label_;
 };
 
+// A lit wall sign in the style of an old exit sign: a dark housing with glowing lettering, flush against the wall.
+class SignNode : public Node {
+public:
+    SignNode(Renderer& r, std::string text, float w, float h) : r_(r), text_(std::move(text)), w_(w), h_(h) {
+        blank_ = r.createLabel(rasterizeLines({""}, 1, 4, 4));
+    }
+    void render(Renderer& r) override {
+        if (!face_) build();
+        r.drawCube(*blank_, worldMatrix() * Mat4::translate({0, 0, -0.03f}) * Mat4::scale({w_ + 0.34f, h_ + 0.26f, 0.1f}), Vec3{0.012f, 0.014f, 0.018f}, false, false, 0.0f, true);
+        r.drawCube(*face_, worldMatrix() * Mat4::scale({w_, h_, 0.06f}), Vec3{1.0f, 1.0f, 1.0f}, false, true, 3.0f);  // glow 3 = no card edge rim
+    }
+
+private:
+    void build() {
+        Bitmap bm;
+        bm.w = 1536;
+        bm.h = static_cast<int>(bm.w * h_ / w_);
+        bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 0);
+        for (size_t i = 0; i < bm.rgba.size(); i += 4) {
+            bm.rgba[i] = 2;
+            bm.rgba[i + 1] = 10;
+            bm.rgba[i + 2] = 14;
+            bm.rgba[i + 3] = 255;
+        }
+        float px = bm.h * 0.5f;
+        while (px > 12.0f && measureText(text_, px, FontFace::UI) > bm.w - 120.0f) px -= 4.0f;
+        const float tw = measureText(text_, px, FontFace::UI);
+        drawText(bm, (bm.w - tw) * 0.5f, bm.h * 0.5f + textAscent(px, FontFace::UI) * 0.36f, text_, px, FontFace::UI, Color8{200, 248, 255, 255});
+        face_ = r_.createLabel(bm, true);
+    }
+    Renderer& r_;
+    std::string text_;
+    float w_, h_;
+    std::shared_ptr<GpuLabel> blank_, face_;
+};
+
 // A slowly turning hologram of a glTF model, used as lobby decor.
 class ModelNode : public Node {
 public:
@@ -129,7 +165,7 @@ private:
 };
 
 std::string clip(const std::string& s, size_t n) { return s.size() <= n ? s : s.substr(0, n - 1) + "."; }
-const Vec3 kPalette[5] = {{0.1f, 0.35f, 0.7f}, {0.7f, 0.2f, 0.55f}, {0.75f, 0.45f, 0.1f}, {0.15f, 0.65f, 0.4f}, {0.45f, 0.6f, 0.25f}};
+const Vec3 kPalette[5] = {{0.1f, 0.45f, 0.7f}, {0.55f, 0.65f, 0.7f}, {0.1f, 0.6f, 0.65f}, {0.4f, 0.7f, 0.8f}, {0.15f, 0.5f, 0.55f}};
 }  // namespace
 
 CardNode::CardNode(Renderer& renderer, const DirEntry& e, const std::string& text) : entry(e), r_(&renderer), text_(text) {
@@ -267,7 +303,7 @@ void CardNode::render(Renderer& renderer) {
         return;
     }
     ensureLabel();
-    Vec3 base = tall ? Vec3{0.02f, 0.035f, 0.06f} : isParentLink ? Vec3{0.28f, 0.24f, 0.5f} : (entry.isDir ? Vec3{0.1f, 0.28f, 0.52f} : Vec3{0.14f, 0.17f, 0.23f});
+    Vec3 base = tall ? Vec3{0.02f, 0.035f, 0.06f} : isParentLink ? Vec3{0.2f, 0.3f, 0.36f} : (entry.isDir ? Vec3{0.1f, 0.28f, 0.52f} : Vec3{0.14f, 0.17f, 0.23f});
     if (tall && isParentLink) base = {0.55f, 0.95f, 1.0f};  // the exit glows
     Vec3 color = hover ? base * 1.4f : base;
     renderer.drawCube(*label_, w, color, false, false, tall ? -1.0f : (hover ? 1.0f : 0.0f));  // doors draw their own outline
@@ -300,8 +336,10 @@ void FileRoom::resetScene() {
     cards_.clear();
     requested_.clear();
     header_ = nullptr;
+    sign_ = nullptr;
     generation_ = loader_.reset();
     root_->clearChildren();
+    emitters_.clear();
     addSky();
     auto floor = std::make_unique<BlockNode>(renderer_, Vec3{0.05f, 0.07f, 0.12f}, true);
     floor->position = {0, -0.05f, 0};
@@ -459,23 +497,23 @@ void FileRoom::buildCorridor() {
     // Each building gets one of twelve looks, picked from its path.
     struct Look { Vec3 wall, carpet, rim; };
     static const Look looks[12] = {
-        {{0.014f, 0.022f, 0.04f}, {0.036f, 0.038f, 0.043f}, {0.3f, 0.8f, 1.2f}},
-        {{0.03f, 0.014f, 0.034f}, {0.045f, 0.03f, 0.05f}, {1.1f, 0.3f, 0.95f}},
-        {{0.03f, 0.02f, 0.012f}, {0.05f, 0.04f, 0.03f}, {1.2f, 0.75f, 0.2f}},
-        {{0.012f, 0.03f, 0.02f}, {0.03f, 0.05f, 0.04f}, {0.25f, 1.1f, 0.6f}},
-        {{0.03f, 0.012f, 0.012f}, {0.05f, 0.03f, 0.03f}, {1.2f, 0.3f, 0.25f}},
-        {{0.02f, 0.02f, 0.04f}, {0.03f, 0.03f, 0.06f}, {0.5f, 0.5f, 1.3f}},
-        {{0.012f, 0.026f, 0.03f}, {0.02f, 0.045f, 0.05f}, {0.2f, 1.1f, 1.1f}},
-        {{0.026f, 0.026f, 0.03f}, {0.05f, 0.05f, 0.055f}, {1.0f, 1.0f, 1.1f}},
-        {{0.03f, 0.024f, 0.01f}, {0.045f, 0.045f, 0.02f}, {1.0f, 1.0f, 0.3f}},
-        {{0.024f, 0.012f, 0.03f}, {0.04f, 0.025f, 0.05f}, {0.7f, 0.35f, 1.3f}},
-        {{0.01f, 0.026f, 0.04f}, {0.02f, 0.04f, 0.06f}, {0.2f, 0.65f, 1.4f}},
-        {{0.03f, 0.016f, 0.02f}, {0.05f, 0.03f, 0.035f}, {1.2f, 0.4f, 0.6f}}};
+        {{0.012f, 0.02f, 0.03f}, {0.03f, 0.034f, 0.04f}, {0.3f, 0.8f, 1.2f}},
+        {{0.014f, 0.016f, 0.02f}, {0.034f, 0.036f, 0.04f}, {0.85f, 0.95f, 1.1f}},
+        {{0.01f, 0.022f, 0.03f}, {0.026f, 0.034f, 0.04f}, {0.15f, 0.7f, 0.85f}},
+        {{0.016f, 0.018f, 0.022f}, {0.04f, 0.042f, 0.046f}, {0.5f, 0.95f, 1.2f}},
+        {{0.008f, 0.018f, 0.026f}, {0.022f, 0.03f, 0.038f}, {0.1f, 0.55f, 1.0f}},
+        {{0.012f, 0.014f, 0.016f}, {0.03f, 0.032f, 0.034f}, {0.7f, 0.9f, 1.0f}},
+        {{0.01f, 0.026f, 0.03f}, {0.02f, 0.04f, 0.045f}, {0.2f, 1.1f, 1.1f}},
+        {{0.02f, 0.022f, 0.026f}, {0.046f, 0.048f, 0.05f}, {1.0f, 1.0f, 1.1f}},
+        {{0.01f, 0.02f, 0.026f}, {0.024f, 0.03f, 0.036f}, {0.4f, 0.85f, 1.0f}},
+        {{0.014f, 0.02f, 0.028f}, {0.032f, 0.036f, 0.042f}, {0.25f, 0.9f, 1.3f}},
+        {{0.01f, 0.024f, 0.036f}, {0.02f, 0.036f, 0.05f}, {0.2f, 0.65f, 1.4f}},
+        {{0.018f, 0.02f, 0.024f}, {0.04f, 0.042f, 0.046f}, {0.6f, 1.0f, 1.2f}}};
     const size_t pathHash = std::hash<std::string>{}(path_);
     const int lookIdx = static_cast<int>(pathHash % 12);
     const Look& lk = looks[lookIdx];
     const Vec3 wall = lk.wall, light{1.6f, 1.8f, 2.0f}, carpet = lk.carpet, rim = lk.rim;
-    const Vec3 stone{0.1f, 0.11f, 0.13f}, water{0.08f, 0.42f, 0.7f}, glass{0.5f, 0.8f, 1.0f};
+    const Vec3 stone{0.07f, 0.08f, 0.09f}, water{0.06f, 0.4f, 0.6f}, glass{0.5f, 0.8f, 1.0f};
     auto add = [&](Vec3 c, Vec3 s, Vec3 col, float glow = 0.0f, bool always = false) { B.push_back({c, s, col, glow, always}); };
     const float zm = (kFrontZ - d) * 0.5f, zl = d + kFrontZ, H = multi ? L * kLevelH + 1.2f : 7.5f, fz = fountainZ(d);
 
@@ -492,7 +530,6 @@ void FileRoom::buildCorridor() {
         const Vec3 neon{0.85f, 0.92f, 1.0f};
         for (float sgn : {-1.0f, 1.0f}) add({sgn * 2.3f, 2.6f, kFrontZ - 0.12f}, {0.3f, 5.2f, 0.2f}, neon * 2.0f, -1.0f, true);
         add({0, 5.2f, kFrontZ - 0.12f}, {4.9f, 0.3f, 0.2f}, neon * 2.0f, -1.0f, true);
-        add({0, 0.05f, kFrontZ - 1.4f}, {4.4f, 0.02f, 2.6f}, neon * 0.2f, -1.0f, true);
     }
 
     // Shell: walls, ceiling, carpet and a rug under the fountain.
@@ -507,10 +544,6 @@ void FileRoom::buildCorridor() {
         add({0, H * 0.5f, -d - 0.2f}, {hw * 2 + 0.8f, H, 0.4f}, wall, 0.0f, true);
     }
     add({0, 0.0f, zm}, {hw * 2, 0.04f, zl}, carpet, -3.0f, true);
-    const float rug = std::min(16.0f, hw * 2 - 8.0f);
-    add({0, 0.035f, fz}, {rug, 0.02f, rug}, {0.075f, 0.07f, 0.085f}, -1.0f, true);
-    add({0, 0.04f, fz}, {rug - 1.2f, 0.02f, rug - 1.2f}, carpet * 1.15f, -1.0f, true);
-    add({0, 0.035f, (fz + kFrontZ) * 0.5f + 0.5f}, {2.4f, 0.02f, kFrontZ - fz}, {0.075f, 0.07f, 0.085f}, -1.0f, true);
 
     if (multi) {
         const float ix = hw - kStrip, z0 = -d + kStrip, z1 = kFrontZ - kStrip;
@@ -592,11 +625,6 @@ void FileRoom::buildCorridor() {
             add({sgn * (hw - 0.012f), by, zm}, {0.02f, 0.06f, zl - 1.0f}, rim * 0.4f, -1.0f, true);
             if (pat >= 2) add({sgn * (hw - 0.012f), by + 0.7f, zm}, {0.02f, 0.03f, zl - 1.0f}, rim * 0.2f, -1.0f, true);
         }
-        add({0, 0.05f, zm}, {0.08f, 0.01f, zl - 1.0f}, rim * 0.8f, -1.0f, true);
-        if (pat == 1 || pat == 2)
-            for (float sgn : {-1.0f, 1.0f}) add({sgn * (hw - kStrip), 0.05f, zm}, {0.08f, 0.01f, zl - 1.0f}, rim * 0.5f, -1.0f, true);
-        if (pat == 0 || pat == 3)
-            for (float z = kFrontZ - 4.0f; z > -d + 2.0f; z -= 4.0f) add({0, 0.05f, z}, {hw * 1.2f, 0.01f, 0.06f}, rim * 0.35f, -1.0f, true);
     }
 
     // The exit: a layered frame, chevrons leading to it, a header bar and glowing steps.
@@ -608,11 +636,6 @@ void FileRoom::buildCorridor() {
             add({sgn * 3.4f, 2.0f, kFrontZ - 0.3f}, {0.5f, 4.0f, 0.5f}, wall * 3.0f, 0.0f, true);
             add({sgn * 3.4f, 4.1f, kFrontZ - 0.3f}, {0.3f, 0.12f, 0.3f}, neon * 2.0f, -1.0f, true);
         }
-        for (int i = 0; i < 4; ++i) {
-            const float cz = kFrontZ - 1.6f - i * 1.1f, w = 3.0f - i * 0.3f;
-            add({0, 0.06f, cz}, {w, 0.02f, 0.14f}, neon * (1.6f - i * 0.3f), -1.0f, true);
-        }
-        add({0, 0.03f, kFrontZ - 0.5f}, {4.6f, 0.02f, 0.3f}, rim * 1.4f, -1.0f, true);
     }
 
     // Layout variants: some looks add colonnades or a central plinth so lobbies differ in shape, not just colour.
@@ -638,13 +661,12 @@ void FileRoom::buildCorridor() {
         const float y0 = sl.level * kLevelH, nx = std::sin(sl.yaw), nz = std::cos(sl.yaw), tx = std::cos(sl.yaw), tz = -std::sin(sl.yaw);
         auto at = [&](float n, float tt, float y) { return Vec3{sl.x + nx * n + tx * tt, y0 + y, sl.z + nz * n + tz * tt}; };
         auto sz = [&](float along, float h, float thick) { return std::fabs(nx) > 0.5f ? Vec3{thick, h, along} : Vec3{along, h, thick}; };
-        add(at(1.3f, 0, 0.05f), sz(3.4f, 0.03f, 2.0f), kc * 0.25f, -1.0f);
 
         auto door = std::make_unique<CardNode>(renderer_, DirEntry{rooms_[r].name, rooms_[r].path, true}, rooms_[r].name);
         door->roomIndex = r;
         door->tall = true;
         {
-            static const Color8 accents[5] = {{60, 180, 255, 255}, {255, 90, 200, 255}, {255, 170, 60, 255}, {70, 255, 170, 255}, {170, 120, 255, 255}};
+            static const Color8 accents[5] = {{60, 190, 255, 255}, {235, 245, 255, 255}, {90, 230, 235, 255}, {150, 215, 255, 255}, {40, 150, 200, 255}};
             size_t h = 0;
             for (unsigned char ch : rooms_[r].name) h = h * 131 + ch;
             door->accent = accents[h % 5];
@@ -683,14 +705,25 @@ void FileRoom::buildCorridor() {
 
     rows_ = static_cast<int>(d / 6.0f);
     extent_ = std::max(hw * 2.0f, d) + 20.0f;
+    for (const Box& b : shell->boxes) {
+        const float m = std::max(b.color.x, std::max(b.color.y, b.color.z));
+        if (b.glow == -1.0f && m > 0.9f) emitters_.push_back({b.c, b.s * 0.5f, std::min(m, 2.0f) * 1.0f});
+    }
     root_->add(std::move(shell));
 
-    if (!header_) {
-        auto header = std::make_unique<PanelNode>(renderer_, "File room  " + clip(path_, 22), Vec3{0.45f, 0.6f, 1.0f}, 5.0f, 0.5f, 0);
-        header_ = static_cast<PanelNode*>(root_->add(std::move(header)));
+    {
+        if (header_) {
+            header_->visible = false;
+            header_ = nullptr;
+        }
+        std::string nm = path_;
+        const size_t cut = nm.find_last_of("\\/");
+        if (cut != std::string::npos && cut + 1 < nm.size()) nm = nm.substr(cut + 1);
+        auto sign = std::make_unique<SignNode>(renderer_, clip(nm.empty() ? std::string("THIS PC") : nm, 28), 6.4f, 1.0f);
+        sign->position = {0, 6.5f, -d + 0.07f};
+        sign_ = root_->add(std::move(sign));
+        emitters_.push_back({{0, 6.5f, -d + 0.07f}, {3.2f, 0.5f, 0.1f}, 1.0f});
     }
-    header_->position = {0, 4.3f, kFrontZ - 0.25f};
-    header_->yaw = kPi;
 }
 
 float FileRoom::roomDoorZ(int r) const { return slots_[r].z; }
@@ -822,10 +855,12 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
             add({-h + 0.02f, ly, 0}, {0.04f, 0.035f, S - 1.4f}, kc * 0.55f, -1.0f);
         }
         for (int i = -1; i <= 1; ++i) add({i * S * 0.25f, H - 0.03f, 0}, {0.22f, 0.05f, S - 2.0f}, light * 0.45f, -1.0f);
-        for (float z = -h + 2.0f; z < h - 1.0f; z += 4.0f) add({0, H - 0.12f, z}, {S - 0.6f, 0.2f, 0.3f}, dark);
     }
     for (int e : {-1, 1}) add({e * 1.66f, 1.95f, h - 0.04f}, {0.1f, 3.9f, 0.08f}, kc * 1.4f, -1.0f);
-    add({0, 3.9f, h - 0.04f}, {3.42f, 0.1f, 0.08f}, kc * 1.4f, -1.0f);
+    for (const Box& b : shell->boxes) {
+        const float m = std::max(b.color.x, std::max(b.color.y, b.color.z));
+        if (b.glow == -1.0f && m > 0.9f) emitters_.push_back({b.c, b.s * 0.5f, std::min(m, 2.0f) * 0.5f});
+    }
     root_->add(std::move(shell));
 
     DirEntry back;
@@ -859,9 +894,12 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
         addCard(std::move(card));
     }
 
-    auto header = std::make_unique<PanelNode>(renderer_, clip(ri.name, 22) + "  " + std::to_string(n), kc * 1.3f, 5.0f, 0.5f, 0);
-    header->position = {0, H - 0.6f, -h + 0.25f};
-    header_ = static_cast<PanelNode*>(root_->add(std::move(header)));
+    {
+        auto sign = std::make_unique<SignNode>(renderer_, clip(ri.name, 24) + "  -  " + std::to_string(n), 6.0f, 0.75f);
+        sign->position = {0, H - 0.5f, -h + 0.02f};
+        sign_ = root_->add(std::move(sign));
+        emitters_.push_back({{0, H - 0.5f, -h + 0.02f}, {3.0f, 0.38f, 0.1f}, 1.0f});
+    }
 
     walk_.push_back({-h + 0.5f, h - 0.5f, -h + 0.5f, h - 0.5f});
     rows_ = static_cast<int>(S * 0.5f);
@@ -971,7 +1009,43 @@ float FileRoom::maxEye() const {
     return levels_ > 1 ? (levels_ - 1) * kLevelH + 3.5f : 6.0f;
 }
 
+// Picks the 24 emitters nearest the eye (strips and frames by closest point, file previews and doors by their face)
+// and hands them to the renderer as light points for the wall and floor shaders.
+void FileRoom::updateLights() {
+    if (!building_ || !cardsVisible_) { renderer_.clearLights(); return; }
+    struct L { float score; Vec3 p; float k; };
+    // Each light fades smoothly to nothing at kReach metres, so lights never pop on as the eye nears them; the pick is by actual contribution.
+    std::vector<L> c;
+    c.reserve(emitters_.size() + cards_.size());
+    auto add = [&](Vec3 p, float k) {
+        const Vec3 d = p - eye_;
+        const float r2 = d.x * d.x + d.y * d.y + d.z * d.z, kReach = 22.0f;
+        const float f = std::max(0.0f, 1.0f - std::sqrt(r2) / kReach);
+        const float ke = k * f * f;
+        c.push_back({-ke / (1.0f + r2 * 0.14f), p, ke});
+    };
+    for (const Emitter& e : emitters_) {
+        const Vec3 p{std::clamp(eye_.x, e.c.x - e.h.x, e.c.x + e.h.x), std::clamp(eye_.y, e.c.y - e.h.y, e.c.y + e.h.y),
+                     std::clamp(eye_.z, e.c.z - e.h.z, e.c.z + e.h.z)};
+        add(p, e.k);
+    }
+    for (CardNode* cd : cards_) {
+        if (!cd->visible) continue;
+        const bool preview = cd->thumbnail() || cd->isDoor();
+        if (!preview) continue;
+        const Vec3 d = cd->position - eye_;
+        if (d.x * d.x + d.z * d.z > 22.0f * 22.0f) continue;
+        add(cd->position + Vec3{std::sin(cd->yaw), 0.0f, std::cos(cd->yaw)} * 0.7f, cd->isDoor() ? 1.8f : 1.4f);
+    }
+    const size_t n = std::min<size_t>(24, c.size());
+    std::partial_sort(c.begin(), c.begin() + n, c.end(), [](const L& a, const L& b) { return a.score < b.score; });
+    float out[96] = {};
+    for (size_t i = 0; i < n; ++i) { out[i * 4] = c[i].p.x; out[i * 4 + 1] = c[i].p.y; out[i * 4 + 2] = c[i].p.z; out[i * 4 + 3] = c[i].k; }
+    renderer_.setLights(out);
+}
+
 void FileRoom::pump() {
+    updateLights();
     if (building_ && cardsVisible_) {
         int budget = 40;
         for (size_t i = 0; i < cards_.size(); ++i) {

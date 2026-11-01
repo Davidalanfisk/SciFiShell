@@ -40,6 +40,8 @@ public:
     void resize();
     // Full-screen finishing pass on the desktop view (bloom, light streaks, vignette, chromatic fringe, grain).
     void setPostFx(bool on) { postFx_ = on; }
+    void setMsaaPreference(int idx) { msaaPref_ = idx; }  // 0 off, 1 2x, 2 4x; read when the device is created
+    uint32_t msaaSamples() const { return samples_; }
     // Call once the 3D world is drawn and before any UI: applies the post effects to the world only, so UI stays crisp.
     void postWorld();
     void beginDesktopFrame();
@@ -73,6 +75,9 @@ public:
     // Theme colours used by the grid floor, card edge lights and the tool ring.
     void setTheme(Vec3 accent, Vec3 alt);
     void setTime(float t);
+    // Up to eight interior light points (xyz + intensity) that spill onto walls and the floor; intensity 0 = unused.
+    void setLights(const float* xyzw32) { std::copy(xyzw32, xyzw32 + 96, lights_); }
+    void clearLights() { std::fill(lights_, lights_ + 96, 0.0f); }
     // Procedural radial tool ring on a unit quad (any label supplies the required SRB).
     void drawRing(const GpuLabel& label, const Mat4& world, int segments, float hover, float rotation, float open,
                   float pulse);
@@ -85,6 +90,8 @@ public:
     void endReflection();
     void setMirror(bool on) { mirror_ = on; }
     bool mirror() const { return mirror_; }
+    // Conservative view-frustum test for a bounding sphere in world space (handles the mirror pass and asymmetric VR eyes).
+    bool visible(Vec3 c, float radius) const;
     void drawImage(const GpuLabel& label, const Mat4& world, float brightness = 1.0f);
     void drawFlat(const GpuLabel& label, const Mat4& world, Vec3 color);
     // Pyramid whose apex sits at the world matrix origin and whose body extends along local -Z.
@@ -148,6 +155,7 @@ private:
     bool mirror_ = false;
     void bindLabel(GpuLabel& label);
     uint32_t samples_ = 1;
+    int msaaPref_ = 2;
     MsaaTargets msaa_[3];  // [0] desktop, [1] VR eye, [2] reflection
     Diligent::RefCntAutoPtr<Diligent::ITexture> reflTex_;  // resolved reflection image sampled by the floor
     uint32_t reflW_ = 0, reflH_ = 0, curW_ = 0, curH_ = 0;
@@ -164,8 +172,12 @@ private:
     std::vector<std::pair<std::string, int>> modelIds_;
     std::shared_ptr<GpuLabel> glassLabel_;
     Mat4 view_ = Mat4::identity(), proj_ = Mat4::identity();
+    mutable float frustumKey_[32] = {};
+    mutable float planes_[5][4] = {};
+    mutable bool frustumValid_ = false;
     float lightDir_[4] = {-0.4f, -1.0f, -0.6f, 0.0f};
     float accent_[4] = {0.1f, 0.85f, 1.0f, 0.0f};
+    float lights_[96] = {};
     float alt_[4] = {1.0f, 0.65f, 0.1f, 0.0f};
 };
 

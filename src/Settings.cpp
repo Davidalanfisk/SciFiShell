@@ -26,7 +26,15 @@ void Settings::load() {
         int fps = 0;
         if (f >> fps) showFps = fps != 0;
         f >> webQuality;
+        int r = 1, p = 1, v = 1;
+        if (f >> aaIdx >> distIdx >> r >> p >> v) {
+            reflections = r != 0;
+            postFx = p != 0;
+            vsync = v != 0;
+        }
     }
+    aaIdx = std::clamp(aaIdx, 0, 2);
+    distIdx = std::clamp(distIdx, 0, 3);
     webQuality = std::clamp(webQuality, 0, 3);
     lookIdx = std::clamp(lookIdx, 0, kSteps - 1);
     speedIdx = std::clamp(speedIdx, 0, kSteps - 1);
@@ -37,7 +45,7 @@ void Settings::save() const {
     if (p.empty()) return;
     std::error_code ec;
     std::filesystem::create_directories(p.parent_path(), ec);
-    std::ofstream(p) << lookIdx << ' ' << speedIdx << ' ' << (invertY ? 1 : 0) << ' ' << (crosshair ? 1 : 0) << ' ' << (showFps ? 1 : 0) << ' ' << webQuality;
+    std::ofstream(p) << lookIdx << ' ' << speedIdx << ' ' << (invertY ? 1 : 0) << ' ' << (crosshair ? 1 : 0) << ' ' << (showFps ? 1 : 0) << ' ' << webQuality << ' ' << aaIdx << ' ' << distIdx << ' ' << (reflections ? 1 : 0) << ' ' << (postFx ? 1 : 0) << ' ' << (vsync ? 1 : 0);
 }
 
 }  // namespace sf

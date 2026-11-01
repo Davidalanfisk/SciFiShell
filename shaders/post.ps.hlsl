@@ -58,10 +58,11 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
     // Bloom: a golden-angle spiral of taps, brightness-thresholded, wider than a pixel blur so neon lines bleed light.
     float aspect = px.y / px.x;
     float3 glow = float3(0, 0, 0);
-    const int taps = 24;
+    const int taps = 10;
+    float jit = hash(In.Pos.xy) * 6.2831;
     for (int i = 0; i < taps; ++i)
     {
-        float a = (float)i * 2.39996;
+        float a = (float)i * 2.39996 + jit;
         float rad = sqrt((i + 0.5) / taps);
         float2 d = float2(cos(a), sin(a)) * rad * float2(1.0, aspect) * 0.0075;
         glow += bright(fetch(uv + d));
@@ -71,12 +72,12 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
     // Anamorphic streak: a thin horizontal smear of the brightest highlights, the classic sci-fi lens flare.
     float3 streak = float3(0, 0, 0);
     [unroll]
-    for (int k = -8; k <= 8; ++k)
+    for (int k = -4; k <= 4; ++k)
     {
-        float w = exp(-0.05 * k * k);
-        streak += bright(fetch(uv + float2(k * 0.0018, 0))) * w;
+        float w = exp(-0.2 * k * k);
+        streak += bright(fetch(uv + float2(k * 0.0036, 0))) * w;
     }
-    streak /= 8.0;
+    streak /= 4.0;
 
     col += glow * 0.5 + streak * 0.08 * lerp(float3(1, 1, 1), g_Accent.rgb, 0.6);
 

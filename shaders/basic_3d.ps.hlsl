@@ -7,6 +7,7 @@ cbuffer Constants
     float4   g_Light;
     float4   g_Accent;
     float4   g_Alt;
+    float4   g_Lights[24];  // interior light points: xyz position, w intensity
 };
 
 Texture2D g_Tex;
@@ -28,6 +29,21 @@ float vnoise(float2 p)
     f = f * f * (3.0 - 2.0 * f);
     return lerp(lerp(hash12(i), hash12(i + float2(1, 0)), f.x),
                 lerp(hash12(i + float2(0, 1)), hash12(i + float2(1, 1)), f.x), f.y);
+}
+
+// Soft light from the nearest emitters (ceiling strips, door frames, file previews) onto a surface point.
+float spillLight(float3 p, float3 n)
+{
+    float s = 0.0;
+    [unroll]
+    for (int i = 0; i < 24; ++i)
+    {
+        float3 d = g_Lights[i].xyz - p;
+        float r2 = dot(d, d);
+        float facing = saturate(dot(n, d * rsqrt(r2 + 1e-4)) * 0.75 + 0.25);
+        s += g_Lights[i].w * facing / ((1.0 + r2 * 0.14) * (1.0 + r2 * 0.14));
+    }
+    return s;
 }
 
 struct PSInput
@@ -177,8 +193,23 @@ float3 buildingColor(PSInput In)
             float lit = step(0.42, h);
             float tw = 0.75 + 0.25 * sin(tm * (0.6 + h * 2.0) + h * 40.0);
             float alias = saturate(1.0 - dist * 0.004);
+            // Procedural facade: plated panels with their own tone, mullion ribs, floor spandrels and grime rising from the street.
+            float detail = saturate(1.0 - dist * 0.0016);
+            float2 plate = float2(u / 7.2, v / 9.6);
+            float pt = hash12(floor(plate) + seed * 53.0 + (an.x > 0.5 ? 31.0 : 0.0));
+            float2 pf = min(frac(plate), 1.0 - frac(plate));
+            float pseam = 1.0 - smoothstep(0.0, 0.025 + dist * 0.0002, min(pf.x, pf.y));
+            float rib = 1.0 - smoothstep(0.0, 0.05, abs(f.x - 0.5) - 0.46);
+            float spandrel = smoothstep(0.78, 0.84, f.y) * (1.0 - smoothstep(0.94, 1.0, f.y));
+            float grime = vnoise(float2(u, v) * 0.35) * 0.6 + vnoise(float2(u, v) * 2.1) * 0.4;
+            float street = 1.0 - smoothstep(0.0, 14.0, v);
+            float3 skin = float3(0.030, 0.040, 0.055) * (0.4 + pt) * (0.5 + 0.9 * grime) + neon * 0.05 * pt;
+            skin *= 1.0 + spandrel * 1.6 - pseam * 0.9 + rib * 0.9;
+            skin += neon * (0.16 * pseam + 0.10 * rib + 0.07 * spandrel) * (0.4 + pt);
+            skin *= 1.0 - 0.6 * street * grime;
+            col = lerp(col, col + skin, detail);
             float3 wc = lerp(neon, float3(1, 0.95, 0.85), 0.35 * h);
-            col += wc * win * lit * tw * (0.3 + 0.4 * (1.0 - v / dim.y)) * alias;
+            col += wc * win * lit * tw * (1.0 - 0.5 * spandrel) * (1.0 - 0.35 * rib) * (0.3 + 0.4 * (1.0 - v / dim.y)) * alias;
             // a slow scan band climbs each tower, like data being read off it
             col += neon * 0.5 * exp(-pow((frac(tm * 0.07 + seed * 7.0) * 1.3 - 0.15 - v / dim.y) * 14.0, 2.0));
             col += neon * 0.04 * (1.0 - alias) * lit;
@@ -298,6 +329,27 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         // face draws. Otherwise a second, offset copy of the grid shows through (the "double vision").
         if (In.WPos.y < -0.01) discard;
         float2 wp = In.WPos.xz;
+        if (g_Params.z > 1.5)
+        {
+            // Interior floor: large dark stone tiles with fine seams and a soft sheen. No grid, no accent colour.
+            float2 tc = wp / 1.8;
+            float2 tid = floor(tc);
+            float2 tf = abs(frac(tc) - 0.5);
+            float tr = hash12(tid);
+            float2 tfw = max(fwidth(tc), 1e-4);
+            float seam = 1.0 - smoothstep(0.0, 1.5, min((0.5 - tf.x) / tfw.x, (0.5 - tf.y) / tfw.y));
+            seam *= saturate(1.0 - max(tfw.x, tfw.y) * 2.0);
+            float fine = vnoise(wp * 9.0 + tr * 40.0);
+            float cloud = vnoise(wp * 1.3 + tr * 17.0);
+            float3 tile = float3(0.030, 0.032, 0.036) * (0.75 + 0.5 * tr) * (0.85 + 0.25 * fine) * (0.8 + 0.4 * cloud);
+            tile *= 1.0 - 0.7 * seam;
+            float3 vd = normalize(In.WPos - g_Light.xyz);
+            float sheen = pow(1.0 - saturate(abs(vd.y)), 4.0) * 0.5;
+            float3 c = tile * (1.0 + sheen) + float3(0.002, 0.0022, 0.0025);
+            c += float3(0.8, 0.85, 0.9) * spillLight(In.WPos, float3(0, 1, 0)) * 0.12 * (0.5 + 0.5 * tr) * (1.0 - 0.6 * seam);
+            Color = float4(c, 1.0);
+            return;
+        }
         float2 gm = abs(frac(wp) - 0.5);
         float2 gM = abs(frac(wp * 0.2) - 0.5);
         float2 fw = max(fwidth(wp), 1e-4);
@@ -320,7 +372,7 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         majX *= aa;
         majZ *= aa;
         majorGlow *= aa;
-        float pulse = 0.85 + 0.15 * sin(tm * 1.3 - r * 0.6);
+        float pulse = 0.92;
 
         // Power pulses: bright packets racing along the major lines, plus a slow expanding ring.
         float2 id = floor(wp * 0.2);
@@ -331,7 +383,7 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
 
         float3 col = float3(0.004, 0.008, 0.016);
         col += g_Accent.rgb * (minor * 0.10 + major * 0.9 + majorGlow * 0.07) * pulse;
-        col += lerp(g_Accent.rgb, float3(1, 1, 1), 0.35) * (pk * 1.6 + wave * 0.9);
+        col += lerp(g_Accent.rgb, float3(1, 1, 1), 0.35) * (pk * 1.6);
 
         // Brushed-metal floor. The room is rendered mirrored into g_Refl (half-res, same camera) and sampled here by screen
         // position: blurred along the brush direction, roughened by grain, weighted by Fresnel, tinted like metal.
@@ -377,6 +429,7 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         float gd = length(In.WPos.xz - eyeP.xz) + 0.35 * max(eyeP.y, 0.0);
         col *= fade * exp(-gd * 0.008) / (1.0 + gd * gd / 6000.0);  // grid and pulses dim steadily with distance from the player
         col += metal * (1.0 - fres) * fade + reflection * rk * 0.3;
+        col += float3(0.14, 0.42, 0.55) * spillLight(In.WPos, float3(0, 1, 0)) * 0.3 * fade * (0.6 + 0.4 * rough);
         // Distance haze: beyond ~95 m the floor is an opaque patch of exactly the horizon colour, so the grid has no visible edge.
         col = col * (1.0 - mist) + mistColor(g_Accent.rgb) * mist;
         Color = float4(col, 1.0);
@@ -402,9 +455,12 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         light = 1.0;
     }
 
+    float3 spillAdd = float3(0, 0, 0);
+    bool shellWall = false;
     // Interior shell blocks (g_Params.z == 2): dark panelled walls with seams, per-panel tone, grime and a gloomy falloff.
     if (g_Params.z > 1.5 && g_Params.y < 0.5 && max(g_Color.r, max(g_Color.g, g_Color.b)) < 0.2)
     {
+        shellWall = true;
         float2 uv2 = abs(n.y) > 0.5 ? In.WPos.xz : (abs(n.x) > 0.5 ? In.WPos.zy : In.WPos.xy);
         float2 cell = uv2 / float2(1.6, 1.2);
         float2 fc = frac(cell);
@@ -419,21 +475,24 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         base *= 1.0 - 0.7 * seam * detailK;
         // Hairline accent light running along every fourth seam row of the walls.
         float lineRow = (fmod(pid.y, 3.0) < 0.5 && abs(n.y) < 0.5) ? 1.0 : 0.0;
-        base += g_Accent.rgb * 0.05 * seam * lineRow * detailK;
+        spillAdd = float3(0.14, 0.45, 0.6) * spillLight(In.WPos, n) * (0.3 + base * 8.0) * (1.0 - 0.5 * seam * detailK);
+        base += float3(0.2, 0.8, 1.0) * 0.05 * seam * lineRow * detailK;
         float below = smoothstep(0.0, 2.6, In.WPos.y);
-        light = (0.12 + 0.28 * diffuse) * (abs(n.y) > 0.5 ? 1.0 : (0.45 + 0.55 * below));
+        float ceilGlow = smoothstep(4.5, 8.5, In.WPos.y);
+        light = (0.02 + 0.05 * diffuse) * (abs(n.y) > 0.5 ? 1.0 : (0.45 + 0.55 * below));
+        base += float3(0.25, 0.8, 1.0) * ceilGlow * 0.03 * (abs(n.y) < 0.5 ? 1.0 : 0.0);
     }
 
-    float3 outCol = base * light;
+    float3 outCol = base * light + spillAdd;
     // g_Params.x >= 0 (and not an unlit image/flat block): glowing cyan edge on the card faces; 1 = hovered.
-    if (g_Params.x > -0.5 && g_Params.y < 1.5 && abs(n.z) > 0.5)
+    if (!shellWall && g_Params.x > -0.5 && g_Params.x < 2.5 && g_Params.y < 1.5 && abs(n.z) > 0.5)
     {
         float2 e = min(In.UV, 1.0 - In.UV);
         float edge = min(e.x * 1.55, e.y);
         float rim = 1.0 - smoothstep(0.012, 0.034, edge);
         float halo = 1.0 - smoothstep(0.0, 0.12, edge);
         float glow = 0.55 + 0.9 * g_Params.x;
-        outCol = outCol * (1.0 - 0.35 * halo) + g_Accent.rgb * (rim * glow + halo * halo * 0.18 * glow);
+        outCol = outCol * (1.0 - 0.35 * halo) + (g_Params.z > 1.5 ? float3(0.2, 0.85, 1.0) : g_Accent.rgb) * (rim * glow + halo * halo * 0.18 * glow);
     }
 
     Color = float4(outCol, 1.0);

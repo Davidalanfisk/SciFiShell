@@ -275,8 +275,8 @@ void towerParts(int style, float w, float d, float h, std::vector<TPart>& out) {
     case 6:  // cantilever
         P(0, 0, w, d, 0, std::max(hb, h * 0.2f));
         P(-w * 0.18f, 0, w * 0.55f, d * 0.8f, h * 0.2f, h);
-        P(w * 0.12f, 0, w * 0.75f, d * 0.8f, h * 0.62f, h * 0.84f);
-        P(w * 0.12f, 0, w * 0.75f, d * 0.8f, h * 0.84f, h * 0.86f, true);
+        P(w * 0.12f, 0, w * 0.75f, d * 0.88f, h * 0.62f, h * 0.84f);
+        P(w * 0.12f, 0, w * 0.75f, d * 0.88f, h * 0.84f, h * 0.86f, true);
         break;
     case 7:  // terraces stepping down along x
         P(0, 0, w, d, 0, std::max(hb, h * 0.2f));
@@ -306,9 +306,17 @@ void towerParts(int style, float w, float d, float h, std::vector<TPart>& out) {
         P(0, 0, w, d, 0, std::max(hb, h * 0.08f));
         P(-w * 0.36f, 0, w * 0.28f, d * 0.8f, h * 0.08f, h);
         P(w * 0.36f, 0, w * 0.28f, d * 0.8f, h * 0.08f, h);
-        P(0, 0, w * 0.5f, d * 0.8f, h * 0.7f, h * 0.9f);
-        P(0, 0, w * 0.5f, d * 0.8f + 0.1f, h * 0.9f, h * 0.92f, true);
+        P(0, 0, w * 0.5f, d * 0.72f, h * 0.7f, h * 0.9f);
+        P(0, 0, w * 0.5f, d * 0.72f + 0.1f, h * 0.9f, h * 0.92f, true);
         break;
+    }
+    // Upper parts must start on top of the base, not inside it: a part buried in the base shares side planes with it and z-fights.
+    if (!out.empty()) {
+        const float top = out[0].y1;
+        for (size_t i = out.size(); i-- > 1;) {
+            out[i].y0 = std::max(out[i].y0, top);
+            if (out[i].y1 <= out[i].y0 + 0.01f) out.erase(out.begin() + i);
+        }
     }
 }
 }  // namespace
@@ -1009,7 +1017,7 @@ void City::drawBundle(Renderer& r, const Bundle& b, Vec3 col, float lf, float lb
     const size_t n = b.pts.size();
     if (n < 2) return;
     const float t = float(clock_), level = b.pts[0].y, laneY = level;
-    const float cull = r.mirror() ? 250.0f : 450.0f;
+    const float cull = (r.mirror() ? 250.0f : 450.0f) * drawScale_;
     std::vector<float> ux(n - 1), uz(n - 1);
     for (size_t k = 0; k + 1 < n; ++k) {
         const float dx = b.pts[k + 1].x - b.pts[k].x, dz = b.pts[k + 1].z - b.pts[k].z, l = std::max(1e-3f, std::sqrt(dx * dx + dz * dz));
@@ -1094,7 +1102,7 @@ void City::drawBundle(Renderer& r, const Bundle& b, Vec3 col, float lf, float lb
 
 // Step ring round every slab, and the stations where drive lanes end: a deck under the lane, a canopy and a wide staircase down.
 void City::renderAccess(Renderer& r, const Theme& th, Vec3 eye) {
-    const float cull = r.mirror() ? 150.0f : 300.0f;
+    const float cull = (r.mirror() ? 150.0f : 300.0f) * drawScale_;
     std::vector<StepRect> steps;
     stepRects(steps);
     for (const StepRect& sr : steps) {
@@ -1189,7 +1197,7 @@ void City::render(Renderer& r, Vec3 eye) {
     // While the file system is still being read, square scan pulses ripple out of the hub across the ground.
     bool scanning = !built_;
     for (const auto& d : snap_) scanning = scanning || !d.done;
-    if (scanning && coreGrow_[0] > 0.3f) {
+    if (false && scanning && coreGrow_[0] > 0.3f) {  // scan pulses disabled
         const Theme& th = currentTheme();
         for (int k = 0; k < 3; ++k) {
             const float ph = float(std::fmod(clock_ / 7.0 + k / 3.0, 1.0));
@@ -1216,7 +1224,7 @@ void City::render(Renderer& r, Vec3 eye) {
     renderAccess(r, currentTheme(), eye);
     if (!built_) return;
     const bool mirror = r.mirror();
-    const float maxD2 = 900.0f * 900.0f;
+    const float maxD = 900.0f * drawScale_, maxD2 = maxD * maxD;
     int draws = 0;
 
     if (!netBuilt_ && built_) buildNetwork();
@@ -1236,7 +1244,8 @@ void City::render(Renderer& r, Vec3 eye) {
             auto& b = p.blocks[bi];
             const float bdx = eye.x - b.cx, bdz = eye.z - b.cz;
             const float bd2 = bdx * bdx + bdz * bdz;
-            if (bd2 > (mirror ? 450.0f * 450.0f : maxD2)) continue;
+            if (bd2 > (mirror ? 450.0f * 450.0f * drawScale_ * drawScale_ : maxD2)) continue;
+            if (!r.visible({b.cx, base + b.maxH * 0.5f, b.cz}, b.side * 0.72f + b.maxH * 0.5f + 6.0f)) continue;
             // The block plate: a lighter raised pad the buildings stand on.
             const float plateH = (kSlabH + kPlateH) * pg;
             // The pad's rim is a three-step slope (matching blockPadHeight) so streets run up onto it smoothly.
@@ -1261,13 +1270,20 @@ void City::render(Renderer& r, Vec3 eye) {
                 float h = t.curH * ease(t.grow);
                 float w = std::max(1.5f, t.curW), dd = std::max(1.5f, t.curD);
                 float tdx = eye.x - t.x, tdz = eye.z - t.z;
-                if (tdx * tdx + tdz * tdz > (mirror ? 350.0f * 350.0f : maxD2)) continue;
+                if (tdx * tdx + tdz * tdz > (mirror ? 350.0f * 350.0f * drawScale_ * drawScale_ : maxD2)) continue;
+                if (!r.visible({t.x, base + h * 0.5f, t.z}, 0.5f * std::sqrt(w * w + dd * dd + h * h) + 5.0f)) continue;
                 float seed = rnd01(uint32_t(std::hash<std::string>{}(t.name) & 0xFFFFFF));
                 const bool hovered = !mirror && hoverP_ == i && hoverB_ == (int)bi && hoverT_ == (int)ti;
                 if (!mirror && tdx * tdx + tdz * tdz < 180.0f * 180.0f)  // raised sidewalk around the building
                     renderBox(r, {t.x, base + 0.07f, t.z}, {w + 4.0f, 0.14f, dd + 4.0f}, tint, 0.5f, 6, t.grow, 1.0f, 0);
                 towerParts(t.style, w, dd, h, parts);
-                for (const TPart& tp : parts) {
+                // Far away only the base and the tallest section are drawn; the rest are sub-pixel detail.
+                const bool farLod = tdx * tdx + tdz * tdz > 300.0f * 300.0f * drawScale_ * drawScale_;
+                float topY = 0.0f;
+                if (farLod) for (const TPart& tp : parts) topY = std::max(topY, tp.y1);
+                for (size_t pi = 0; pi < parts.size(); ++pi) {
+                    const TPart& tp = parts[pi];
+                    if (farLod && pi > 0 && tp.y1 < topY - 0.01f) continue;
                     renderBox(r, {t.x + tp.cx, base + (tp.y0 + tp.y1) * 0.5f, t.z + tp.cz}, {tp.sx, tp.y1 - tp.y0, tp.sz}, tp.glow ? Vec3{0.9f, 1.0f, 1.0f} : tint,
                               seed, tp.glow ? 4 : 3, t.grow, tp.glow ? 1.0f : 0.0f, hovered ? 0.6f : t.flash);
                     ++draws;
@@ -1839,15 +1855,10 @@ float City::clearHeight(float x, float z, float r) const {
 // clearest street between the buildings, and a climb out.
 void City::tourPoints(std::vector<Vec3>& out) const {
     out.clear();
-    out.push_back({0, 70, 130});
-    out.push_back({0, 30, 40});
-    out.push_back({40, 50, -30});
-    out.push_back({0, 25, -105});
-    out.push_back({-45, 55, -40});
-    out.push_back({-52, 22, 62});
-    out.push_back({10, 40, 70});
-    out.push_back({52, 20, 75});
-    out.push_back({50, 85, 20});
+    out.push_back({0, 75, 150});
+    out.push_back({-35, 55, 95});
+    out.push_back({-85, 60, 20});
+    out.push_back({-60, 70, -70});
     for (const auto& p : platforms_) {
         if (p.grow < 0.9f) continue;
         const float h = p.side * 0.5f;

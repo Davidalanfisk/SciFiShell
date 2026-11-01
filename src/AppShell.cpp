@@ -104,6 +104,8 @@ bool AppShell::init() {
     std::string fontDir = std::string(base ? base : "./") + "assets/fonts";
     SDL_free(base);
     if (!loadFonts(fontDir)) std::fprintf(stderr, "No fonts found in %s\n", fontDir.c_str());
+    settings_.load();
+    renderer_.setMsaaPreference(settings_.aaIdx);
     if (!renderer_.init(window_, shaderDir)) {
         std::fprintf(stderr, "Renderer initialisation failed (shader dir: %s)\n", shaderDir.c_str());
         return false;
@@ -373,6 +375,29 @@ void AppShell::buildSettingsHub() {
                            }, nullptr});
     shell.items.push_back({"EXIT SHELL", "Quit the application", nullptr, [this] { running_ = false; }});
     cats.push_back(std::move(shell));
+
+    SettingsCategory gfx{"GRAPHICS", "Performance and quality", "SHELL", {}};
+    gfx.items.push_back({"ANTI-ALIASING", "Edge smoothing (restart to apply)",
+                         [this] {
+                             static const char* n[] = {"OFF", "2X", "4X"};
+                             std::string s = n[settings_.aaIdx];
+                             if (static_cast<int>(renderer_.msaaSamples()) != (settings_.aaIdx == 0 ? 1 : settings_.aaIdx == 1 ? 2 : 4)) s += " (RESTART)";
+                             return s;
+                         },
+                         [this, save] { settings_.aaIdx = (settings_.aaIdx + 1) % 3; save(); }});
+    gfx.items.push_back({"DRAW DISTANCE", "How far the city is drawn",
+                         [this] {
+                             static const char* n[] = {"LOW", "MEDIUM", "HIGH", "ULTRA"};
+                             return std::string(n[settings_.distIdx]);
+                         },
+                         [this, save] { settings_.distIdx = (settings_.distIdx + 1) % 4; save(); }});
+    gfx.items.push_back({"REFLECTIONS", "Mirrored floor (large saving when off)", [this, onOff] { return onOff(settings_.reflections); },
+                         [this, save] { settings_.reflections = !settings_.reflections; save(); }});
+    gfx.items.push_back({"POST EFFECTS", "Bloom, light streaks, colour grade", [this, onOff] { return onOff(settings_.postFx); },
+                         [this, save] { settings_.postFx = !settings_.postFx; save(); }});
+    gfx.items.push_back({"VSYNC", "Sync to monitor refresh", [this, onOff] { return onOff(settings_.vsync); },
+                         [this, save] { settings_.vsync = !settings_.vsync; save(); }});
+    cats.push_back(std::move(gfx));
 
 #ifdef _WIN32
     // Windows options, all native: no hosted Windows pages.
@@ -1288,7 +1313,7 @@ void AppShell::tourStep(double dt) {
     };
     Vec3 pos, vel;
     cr(tourSeg_, tourU_, pos, vel);
-    const float speed = 30.0f + 0.4f * std::max(0.0f, tourY_);
+    const float speed = 27.0f + 0.36f * std::max(0.0f, tourY_);
     const float ds = std::max(1.0f, std::sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z));
     tourU_ += speed * static_cast<float>(dt) / ds;
     while (tourU_ >= 1.0f) {
@@ -1302,16 +1327,16 @@ void AppShell::tourStep(double dt) {
     float need = 0;
     for (float s : {0.0f, 10.0f, 20.0f, 32.0f, 48.0f}) need = std::max(need, city_->clearHeight(pos.x + ux * s, pos.z + uz * s, 5.5f));
     const float want = std::max(pos.y, need + 3.0f);
-    const float k = 1.0f - std::exp(-static_cast<float>(dt) * (want > tourY_ ? 3.5f : 1.2f));
+    const float k = 1.0f - std::exp(-static_cast<float>(dt) * (want > tourY_ ? 2.6f : 1.0f));
     tourY_ += (want - tourY_) * k;
     camera_.position = {pos.x, tourY_, pos.z};
     const float tyaw = std::atan2(-ux, -uz);
     float dy = std::fmod(tyaw - camera_.yaw, 2.0f * kPi);
     if (dy > kPi) dy -= 2.0f * kPi;
     if (dy < -kPi) dy += 2.0f * kPi;
-    camera_.yaw += dy * (1.0f - std::exp(-static_cast<float>(dt) * 1.6f));
+    camera_.yaw += dy * (1.0f - std::exp(-static_cast<float>(dt) * 0.9f));
     const float tp = clampf(std::atan2(vel.y, hl) * 0.8f - 0.08f, -0.6f, 0.4f);
-    camera_.pitch += (tp - camera_.pitch) * (1.0f - std::exp(-static_cast<float>(dt) * 2.5f));
+    camera_.pitch += (tp - camera_.pitch) * (1.0f - std::exp(-static_cast<float>(dt) * 1.6f));
     vy_ = 0;
     flying_ = true;
     if (std::getenv("SCIFI_TOURLOG")) {
@@ -2220,8 +2245,10 @@ void AppShell::tick(double dt) {
         appsPanel_->update(dt, time_);
     }
     scriptTick(dt);
+    if (state_ != State::FileRoom) renderer_.clearLights();
     if (state_ == State::FileRoom) {
         room_->pump();
+        if (cityMode_) renderer_.clearLights();
         { Vec3 sp; float sy; if (room_->takeSpawn(sp, sy)) { camera_.position = sp; camera_.yaw = sy; camera_.pitch = 0; room_->setEye(sp); } }
         viewer_->update(dt, head_);
         if (!pendingMediaPage_.empty()) {
@@ -2292,13 +2319,18 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
             switcher_->render(Mat4::identity(), renderer_.aspect(), std::tan(kFovY * 0.5f), false);
             return;
         }
-    }    if (state_ == State::FileRoom) {
+    }    static const bool dbgNoMirror = std::getenv("SCIFI_NOMIRROR") != nullptr, dbgNoPost = std::getenv("SCIFI_NOPOST") != nullptr;
+    renderer_.setPostFx(settings_.postFx && !dbgNoPost);
+    if (city_) city_->setDrawScale(settings_.distScale());
+    if (state_ == State::FileRoom && !dbgNoMirror && true) {
         renderer_.beginReflection();
         renderer_.setMirror(true);
-        activeRoot().renderTree(renderer_);
-        if (cityMode_ && city_) {
-            city_->render(renderer_, realEye);
-            if (riding_ && rideT_ > 0.3f) city_->renderPacket(renderer_, ridePos_, ridePath_, rideDist_);
+        if (settings_.reflections) {  // when off the target is just cleared: a plain dark floor
+            activeRoot().renderTree(renderer_);
+            if (cityMode_ && city_) {
+                city_->render(renderer_, realEye);
+                if (riding_ && rideT_ > 0.3f) city_->renderPacket(renderer_, ridePos_, ridePath_, rideDist_);
+            }
         }
         renderer_.setMirror(false);
         renderer_.endReflection();
@@ -2308,7 +2340,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
             city_->render(renderer_, realEye);
             if (riding_ && rideT_ > 0.3f) city_->renderPacket(renderer_, ridePos_, ridePath_, rideDist_);
         }
-    if (cityMode_ && city_) renderer_.postWorld();  // effects are for the city; inside buildings and rooms text stays sharp
+    if (cityMode_ && city_ && !dbgNoPost) renderer_.postWorld();  // effects are for the city; inside buildings and rooms text stays sharp
     if (state_ == State::FileRoom && viewer_->active()) {
         renderer_.clearDepth();
         viewer_->root().renderTree(renderer_);
@@ -2401,7 +2433,7 @@ int AppShell::run() {
         renderer_.beginDesktopFrame();
         renderScene(camera_.world().rigidInverse(), Mat4::perspective(kFovY, renderer_.aspect(), 0.05f, 2500.0f),
                     camera_.position, true);
-        renderer_.present(!vrOn_);
+        renderer_.present(!vrOn_ && settings_.vsync);
         if (shotPending_) {
             shotPending_ = false;
             saveScreenshot();

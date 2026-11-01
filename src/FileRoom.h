@@ -63,6 +63,7 @@ public:
         cardsVisible_ = v;
         for (auto* c : cards_) c->visible = v;
         if (header_) header_->visible = v;
+        if (sign_) sign_->visible = v;
     }
     // Building interior (any folder path): a corridor with one room per file. Collision keeps the player inside.
     bool building() const { return building_; }
@@ -108,6 +109,9 @@ private:
         std::vector<std::string> sample;
     };
     void resetScene();
+    void updateLights();
+    struct Emitter { Vec3 c, h; float k; };
+    std::vector<Emitter> emitters_;  // bright shell boxes (strips, frames) that light their surroundings
     CardNode* addCard(std::unique_ptr<CardNode> card);
     void buildCorridor();
     bool soloRoom_ = false;  // a building with a single room: entered directly, and its door leaves the building
@@ -123,6 +127,7 @@ private:
     Node* root_;
     std::string path_;
     PanelNode* header_ = nullptr;
+    Node* sign_ = nullptr;
     CardNode* hovered_ = nullptr;
     std::vector<CardNode*> cards_;
     ThumbnailLoader loader_;
