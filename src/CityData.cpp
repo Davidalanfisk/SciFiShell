@@ -15,6 +15,8 @@
 #include <dxgi.h>
 #include <pdh.h>
 #include <pdhmsg.h>
+#include <iphlpapi.h>
+#include <winioctl.h>
 #include <intrin.h>
 #endif
 
@@ -23,7 +25,39 @@ namespace fs = std::filesystem;
 namespace sf {
 
 #ifdef _WIN32
+// Classifies a drive by asking the storage stack: bus type (NVMe / USB) and whether it seeks (spinning disk).
+static int driveKind(const std::string& root) {
+    if (GetDriveTypeA(root.c_str()) == DRIVE_REMOVABLE) return 3;
+    const std::string path = "\\\\.\\" + root.substr(0, 2);
+    HANDLE h = CreateFileA(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    int kind = 0;
+    DWORD got = 0;
+    STORAGE_PROPERTY_QUERY q{};
+    q.QueryType = PropertyStandardQuery;
+    char buf[1024] = {};
+    q.PropertyId = StorageDeviceProperty;
+    if (DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, &q, sizeof q, buf, sizeof buf, &got, nullptr)) {
+        const auto* dd = (const STORAGE_DEVICE_DESCRIPTOR*)buf;
+        if (dd->BusType == BusTypeUsb) { CloseHandle(h); return 3; }
+        if (dd->BusType == BusTypeNvme) { CloseHandle(h); return 2; }
+    }
+    q.PropertyId = StorageDeviceSeekPenaltyProperty;
+    DEVICE_SEEK_PENALTY_DESCRIPTOR sp{};
+    if (DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, &q, sizeof q, &sp, sizeof sp, &got, nullptr)) kind = sp.IncursSeekPenalty ? 0 : 1;
+    CloseHandle(h);
+    return kind;
+}
+#else
+static int driveKind(const std::string&) { return 0; }
+#endif
+
+#ifdef _WIN32
 struct CityData::PdhState {
+    PDH_HQUERY diskQ = nullptr;
+    PDH_HCOUNTER diskR = nullptr, diskW = nullptr;
+    unsigned long long lastRx = 0, lastTx = 0;
+    bool haveNet = false;
     PDH_HQUERY cpuQ = nullptr;
     std::vector<PDH_HCOUNTER> cores;
     PDH_HQUERY gpuQ = nullptr;
@@ -79,6 +113,7 @@ void CityData::start() {
         for (size_t i = 0; i < roots.size(); ++i) {
             drives_[i].root = roots[i];
             drives_[i].name = roots[i].substr(0, roots[i].size() > 1 && roots[i][1] == ':' ? 2 : 1);
+            drives_[i].kind = driveKind(roots[i]);
         }
     }
     pending_ = (int)roots.size();
@@ -399,6 +434,7 @@ bool CityData::loadCache(const std::vector<std::string>& roots) {
             d.files = num(v[5]);
             d.bytes = num(v[6]);
             d.listed = true;
+            d.kind = driveKind(d.root);
             drives.push_back(std::move(d));
         } else if (v[0] == "F" && v.size() >= 4 && !drives.empty()) {
             drives.back().folders.push_back(CityFolder{v[1], num(v[2]), num(v[3]), false, {}});
@@ -582,6 +618,21 @@ void CityData::pollStats(double dt) {
         (void)brand;
         stats_.cpuName = name.empty() ? "CPU" : name;
 
+        {
+            DWORD len = 0;
+            GetLogicalProcessorInformation(nullptr, &len);
+            std::vector<SYSTEM_LOGICAL_PROCESSOR_INFORMATION> info(len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
+            if (len && GetLogicalProcessorInformation(info.data(), &len)) {
+                for (const auto& i : info) {
+                    if (i.Relationship != RelationCache || i.Cache.Type == CacheInstruction) continue;
+                    const int kb = int(i.Cache.Size / 1024);
+                    if (i.Cache.Level == 1) stats_.l1KB += kb;
+                    else if (i.Cache.Level == 2) stats_.l2KB += kb;
+                    else if (i.Cache.Level == 3) stats_.l3KB += kb;
+                }
+            }
+        }
+
         // GPU via DXGI: pick the adapter with the most dedicated memory.
         IDXGIFactory1* fac = nullptr;
         if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&fac))) {
@@ -611,6 +662,55 @@ void CityData::pollStats(double dt) {
             }
             PdhCollectQueryData(P.cpuQ);
         }
+    }
+
+    // Chipset traffic: physical disk throughput (PDH) and network throughput (interface octet counters), log-scaled to 0..1
+    // so a trickle still shows and a saturated NVMe / gigabit link fills the scale.
+    {
+        auto lg = [](double bps, double top) { return (float)std::clamp(std::log10(1.0 + bps) / std::log10(top), 0.0, 1.0); };
+        if (!P.diskQ && PdhOpenQueryW(nullptr, 0, &P.diskQ) == ERROR_SUCCESS) {
+            if (PdhAddEnglishCounterW(P.diskQ, L"\\PhysicalDisk(_Total)\\Disk Read Bytes/sec", 0, &P.diskR) != ERROR_SUCCESS) P.diskR = nullptr;
+            if (PdhAddEnglishCounterW(P.diskQ, L"\\PhysicalDisk(_Total)\\Disk Write Bytes/sec", 0, &P.diskW) != ERROR_SUCCESS) P.diskW = nullptr;
+            PdhCollectQueryData(P.diskQ);
+        } else if (P.diskQ && PdhCollectQueryData(P.diskQ) == ERROR_SUCCESS) {
+            PDH_FMT_COUNTERVALUE v;
+            if (P.diskR && PdhGetFormattedCounterValue(P.diskR, PDH_FMT_DOUBLE, nullptr, &v) == ERROR_SUCCESS) stats_.diskRead = lg(v.doubleValue, 3.0e9);
+            if (P.diskW && PdhGetFormattedCounterValue(P.diskW, PDH_FMT_DOUBLE, nullptr, &v) == ERROR_SUCCESS) stats_.diskWrite = lg(v.doubleValue, 3.0e9);
+        }
+        ULONG sz = 0;
+        GetIfTable(nullptr, &sz, FALSE);
+        if (sz) {
+            std::vector<char> b(sz);
+            auto* t = (MIB_IFTABLE*)b.data();
+            if (GetIfTable(t, &sz, FALSE) == NO_ERROR) {
+                unsigned long long rx = 0, tx = 0;
+                stats_.netMbps = 0;
+                for (DWORD i = 0; i < t->dwNumEntries; ++i) {
+                    const MIB_IFROW& row = t->table[i];
+                    if (row.dwType == IF_TYPE_SOFTWARE_LOOPBACK || row.dwOperStatus != IF_OPER_STATUS_OPERATIONAL) continue;
+                    if ((row.dwType == IF_TYPE_ETHERNET_CSMACD || row.dwType == IF_TYPE_IEEE80211) && int(row.dwSpeed / 1000000u) > stats_.netMbps) {
+                        stats_.netMbps = int(row.dwSpeed / 1000000u);
+                        stats_.netWifi = row.dwType == IF_TYPE_IEEE80211;
+                    }
+                    rx += row.dwInOctets; tx += row.dwOutOctets;
+                }
+                if (P.haveNet && step > 0) {
+                    stats_.netRx = lg(double((unsigned long long)((unsigned long)(rx - P.lastRx))) / step, 1.25e8);
+                    stats_.netTx = lg(double((unsigned long long)((unsigned long)(tx - P.lastTx))) / step, 1.25e8);
+                }
+                P.lastRx = rx; P.lastTx = tx; P.haveNet = true;
+            }
+        }
+    }
+
+    {
+        SYSTEM_POWER_STATUS sps;
+        if (GetSystemPowerStatus(&sps)) {
+            stats_.onBattery = sps.ACLineStatus == 0;
+            stats_.battPct = sps.BatteryLifePercent <= 100 ? sps.BatteryLifePercent : -1;
+        }
+        UINT n = 0;
+        if (GetRawInputDeviceList(nullptr, &n, sizeof(RAWINPUTDEVICELIST)) == 0) stats_.usbDevices = (int)n;
     }
 
     // Overall CPU from system times.

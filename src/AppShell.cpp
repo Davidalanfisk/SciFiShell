@@ -1208,7 +1208,7 @@ void AppShell::startRide(const std::vector<Vec3>& path) {
     riding_ = true;
     flying_ = true;
     vy_ = 0.0f;
-    menu_->setStatus("RIDING THE BUS LANE - move or click to step off");
+    menu_->setStatus("RIDING THE DATA LANE - move or click to step off");
 }
 
 // Carry the camera along the route: quick acceleration, a long cruise, then a gentle slow-down at the end.
@@ -2298,7 +2298,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         activeRoot().renderTree(renderer_);
         if (cityMode_ && city_) {
             city_->render(renderer_, realEye);
-            if (riding_ && rideT_ > 0.3f) city_->renderCycle(renderer_, ridePos_, rideYaw_, ridePath_, rideDist_);
+            if (riding_ && rideT_ > 0.3f) city_->renderPacket(renderer_, ridePos_, ridePath_, rideDist_);
         }
         renderer_.setMirror(false);
         renderer_.endReflection();
@@ -2306,7 +2306,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
     activeRoot().renderTree(renderer_);
     if (cityMode_ && city_) {
             city_->render(renderer_, realEye);
-            if (riding_ && rideT_ > 0.3f) city_->renderCycle(renderer_, ridePos_, rideYaw_, ridePath_, rideDist_);
+            if (riding_ && rideT_ > 0.3f) city_->renderPacket(renderer_, ridePos_, ridePath_, rideDist_);
         }
     if (cityMode_ && city_) renderer_.postWorld();  // effects are for the city; inside buildings and rooms text stays sharp
     if (state_ == State::FileRoom && viewer_->active()) {

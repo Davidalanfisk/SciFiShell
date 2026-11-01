@@ -24,6 +24,7 @@ struct CityFolder {
 };
 
 struct CityDrive {
+    int kind = 0;         // 0 hard disk, 1 SATA SSD, 2 NVMe SSD, 3 removable / USB
     bool listed = false;  // first-level listing finished; the drive can be shown
     std::string root, name;
     uint64_t total = 0, freeBytes = 0;
@@ -47,6 +48,14 @@ struct SystemStats {
     uint64_t vramTotal = 0;
     float vramUsed = -1;  // 0..1, -1 = unknown
     float gpuLoad = -1;   // 0..1, -1 = unknown
+    // Chipset traffic, each 0..1 on a log scale (see CityData::pollStats): storage and network, both directions.
+    int l1KB = 0, l2KB = 0, l3KB = 0;  // total cache across the package (data + unified), 0 = unknown
+    int netMbps = 0;     // fastest connected adapter
+    bool netWifi = false;
+    int usbDevices = 0;  // keyboards, mice and other HID devices attached
+    bool onBattery = false;
+    int battPct = -1;
+    float diskRead = 0, diskWrite = 0, netRx = 0, netTx = 0;
 };
 
 class CityData {

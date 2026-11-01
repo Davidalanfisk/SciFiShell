@@ -60,7 +60,7 @@ around it are your drives. **Walk** with WASD, or **double-tap Space to fly** an
 - **View things:** click an image or text file to open it in the viewer; videos and audio open in the built-in media player, on the right tab. Long-click a card to lock
   your view onto it. Press `E` on text to edit, `Ctrl+S` to save, `F` for fullscreen.
 - **Ride the bus lanes:** click any bus lane and you'll be sucked into it and carried like a packet of data all the
-  way to the end of the route, a fast way to cross the city. Each bus is dual-lane: one channel in, one out.
+  way to the far end of the route (the end farthest from where you clicked), a fast way to cross the city. Lanes are raised gantry bundles with realistic lane counts, and you can also walk along them.
 - **The command ring:** middle-click (or `F2`) any time to summon it. From here open **Web**, **Media**, **Windows
   Apps** and Settings. You can run several apps at once, and the ring is always available.
 - **Media player:** music, video and live radio in one window. Add folders (or drop them on the window), browse by
@@ -82,11 +82,12 @@ Rooms are dark, panelled halls with a reflective floor, glowing trim and tiered 
 mountains encircles the grid on the horizon, and building labels are depth-sorted so they are never clipped.
 
 ### Ride the bus lanes
-Click a bus lane to ride it: a chase camera follows you along the lane network with a glowing trail.
+Click a bus lane to ride it: you travel along it like a data packet, always to the end farthest from where you clicked. Lanes are overhead gantry bundles (DMI, PCIe x16, memory, NIC, USB and one per drive) that you can also walk on. Each storage lane ends at a monorail-style station with a staircase down onto the region platform; a ring of shallow steps round every region lets you walk up anywhere.
 Districts sit on glass-pane floors with a neon outline, and the whole city has a dark, moody grade.
 
 ![Street level](docs/city-street.jpg)
 ![The hub and bus lanes](docs/city-hub.jpg)
+![A lane station on a storage region](docs/city-station.jpg)
 ![The command ring](docs/command-ring.jpg)
 ![Settings](docs/settings.jpg)
 
@@ -299,7 +300,7 @@ Clicking a file frame opens a panel with details and actions (open, copy, send, 
 - The repo is public, so the updater needs no token or GitHub account.
 - Build prerequisites for source builds: the CEF binary distribution must be extracted to `third_party\cef` (not committed - it is ~420 MB); Diligent and OpenXR are fetched by CMake.
 
-City extras: stepped ramps at the end of every road and hub spoke let you walk on and off the slabs without jumping; the storage regions sit closer to the central components; the central hub streams data packets to the CPU / RAM / GPU monuments (faster when they are busier) and pulses a beacon.
+City extras: a ring of shallow steps round every region lets you walk on and off the slabs without jumping; the storage regions sit closer to the central components; the central hub streams data packets to the CPU / RAM / GPU monuments (faster when they are busier) and pulses a beacon.
 
 ## Scripting
 
@@ -328,7 +329,7 @@ Set SCIFI_NO_SCRIPT=1 to disable. Mouse clicks cannot be injected yet.
 - After 10 s without input in the city the shell flies a tour of the hub, CPU/RAM/GPU and storage regions using the scripting system. Any input stops it. (Scripts: `cam X Y Z YAW PITCH SECONDS` and `ride ROUTE` were added.)
 
 ### Bus network routing
-Storage routes are planned so they never run under a platform or monument. Where a lane must cross another it rides over it on a ramped, walkable bridge. The idle tour is now one continuous, faster flight that swings between low runs through the city blocks and high sweeps.
+Storage routes are planned so they never run under a platform or monument. Lanes are raised on single-leg gantries at staggered heights, so crossings need no bridges. The idle tour is now one continuous, faster flight that swings between low runs through the city blocks and high sweeps.
 
 ### Routing, tour and media player (v0.3.0)
 

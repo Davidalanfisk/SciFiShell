@@ -23,7 +23,7 @@ public:
     void update(double dt, bool active, Vec3 eye);
     void render(Renderer& renderer, Vec3 eye);
     // The light cycle used while riding a bus lane, with its light ribbon trailing along the route behind it.
-    void renderCycle(Renderer& renderer, Vec3 pos, float yaw, const std::vector<Vec3>& path, float dist);
+    void renderPacket(Renderer& renderer, Vec3 pos, const std::vector<Vec3>& path, float dist);
 
     // Pushes a point (a camera eye) out of the buildings; landing on a roof is allowed.
     void resolve(Vec3& p, float radius, float eyeH = 0.35f) const;
@@ -88,6 +88,7 @@ private:
         uint64_t files = 0, bytes = 0, total = 0;
         bool done = false;
         int tint = 0;
+        int kind = 0;  // drive type, see CityDrive::kind
         std::vector<Block> blocks;
         std::shared_ptr<GpuLabel> label;
         std::string labelText;
@@ -104,12 +105,20 @@ private:
     struct Box { float x0, x1, y1, z0, z1; };
     void monumentBoxes(std::vector<Box>& out) const;
     // Gentle stepped ramps where the roads meet raised slabs, so the city can be walked into and out of without jumping.
-    struct Ramp { float x, z; int dir; int plat; };  // dir: 0 +x, 1 -x, 2 +z, 3 -z (the way the ramp runs away from the slab edge)
-    void rampList(std::vector<Ramp>& out) const;
+    // A low step round the foot of every slab so it can be climbed from anywhere, and a station at the end of each drive lane.
+    struct StepRect { float cx, cz, sx, sz; int plat; float grow; };
+    void stepRects(std::vector<StepRect>& out) const;
+    struct Station { float x, z, fx, fz, level; int plat; };  // x,z: lane end; f: unit direction towards the slab
+    void stations(std::vector<Station>& out) const;
+    void renderAccess(Renderer& r, const struct Theme& th, Vec3 eye);
     void gatherBoxes(const Vec3& p, float rad, std::vector<Box>& out) const;
     // The bus network: every storage route is planned so it never runs under a platform or monument, and where it has to cross
     // another lane it rides over it on a ramped bridge. Heights are relative to the road surface.
     struct Piece { float x0, x1, z0, z1, yc, th, f; int plat; bool slope = false; Vec3 a{}, b{}; };
+    struct Bundle { int kind; int plat; int lanes; float gap, laneW; float grow; std::vector<Vec3> pts; };
+    void bundles(std::vector<Bundle>& out) const;
+    void drawBundle(Renderer& r, const Bundle& b, Vec3 col, float lf, float lb, bool anim, Vec3 eye);
+    void renderBundles(Renderer& r, const struct Theme& th, Vec3 eye);
     struct NetRoute { int plat; std::vector<Vec3> pts; };  // pts: x, height above road, z
     void buildNetwork() const;
     void drawSlope(Renderer& r, Vec3 a, Vec3 b, float width, float th, Vec3 neon, float seed, int kind, float emerge);
@@ -126,7 +135,11 @@ private:
     void refreshTargets(const std::vector<CityDrive>& snap);
     void renderBox(Renderer& r, Vec3 c, Vec3 size, Vec3 neon, float seed, int kind, float emerge, float fill, float flash);
     void renderMonuments(Renderer& r, Vec3 eye);
-    void renderHub(Renderer& r, const struct Theme& th, float g);
+    void renderModules(Renderer& r, const struct Theme& th, Vec3 eye);
+    void moduleLabel(Renderer& r, Monument& m, const std::string& text, Vec3 at, float h, Vec3 eye, Vec3 col);
+    void renderDriveBeacon(Renderer& r, const Platform& p, Vec3 tint, float pg);
+    void renderCache(Renderer& r, const struct Theme& th, Vec3 eye);
+    void renderHub(Renderer& r, const struct Theme& th, float g, Vec3 eye);
     void drawLabel(Renderer& r, GpuLabel& l, Vec3 at, float h, Vec3 eye, Vec3 color, float alpha = 1.0f);
     std::shared_ptr<GpuLabel> makeText(const std::string& s);
     std::shared_ptr<GpuLabel> makeDoorLabel(const std::string& name, Vec3 tint);
@@ -150,6 +163,10 @@ private:
     float shownCpu_ = 0, shownRam_ = 0, shownGpu_ = 0;
     std::vector<float> shownCore_;
     Monument mon_[3];
+    Monument cacheLabel_[3], modLabel_[8];
+    float shownTemp_ = 40.0f;
+    Monument hubLabel_, pylonLabel_[4];
+    float shownDiskR_ = 0, shownDiskW_ = 0, shownNetRx_ = 0, shownNetTx_ = 0;
     int labelBudget_ = 0;
     struct PendingLabel {
         GpuLabel* label;
