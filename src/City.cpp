@@ -1397,6 +1397,8 @@ void City::stations(std::vector<Station>& out) const {
             const float dx = e.x - b.pts[k].x, dz = e.z - b.pts[k].z, l = std::sqrt(dx * dx + dz * dz);
             if (l < 0.01f) continue;
             out.push_back({e.x, e.z, dx / l, dz / l, e.y, b.plat});
+            if (std::getenv("SCIFI_STLOG"))
+                if (FILE* f = std::fopen("stations.log", "w")) { for (const Station& s : out) std::fprintf(f, "%.1f %.1f %.2f %.2f %.1f\n", s.x, s.z, s.fx, s.fz, s.level); std::fclose(f); }
             break;
         }
     }

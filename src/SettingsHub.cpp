@@ -13,7 +13,7 @@ namespace sf {
 
 namespace {
 constexpr int kW = 1832, kH = 960, kPad = 40, kGap = 24;
-constexpr int kCols = 4, kHomeTop = 140, kHomeCardH = 240;
+constexpr int kCols = 5, kHomeTop = 140, kHomeCardH = 240;
 constexpr int kListTop = 236, kRowH = 96, kRowGap = 16, kMaxItems = 12;
 constexpr float kWorldW = 2.0f, kDist = 1.7f;
 
@@ -85,7 +85,7 @@ void SettingsHub::rebuild() {
     const ui::Tokens tk = ui::tokens();
     const bool home = page_ < 0 || page_ >= static_cast<int>(cats_.size());
     const std::string title = home ? "SETTINGS" : cats_[static_cast<size_t>(page_)].name;
-    const std::string sub = home ? "SHELL PREFERENCES  +  WINDOWS CONTROL PANEL" : cats_[static_cast<size_t>(page_)].subtitle;
+    const std::string sub = home ? "SHELL  +  WINDOWS SETTINGS" : cats_[static_cast<size_t>(page_)].subtitle;
     ui::panel(bm, title, "");
     drawText(bm, W_ - kPad - 8 - measureText(sub, 24, FontFace::UI) - 240, 56, sub, 24, FontFace::UI, tk.dim);
     {
@@ -114,7 +114,7 @@ void SettingsHub::rebuild() {
             const Color8 tagCol = c.tag == "SHELL" ? tk.accent : tk.alt;
             drawText(bm, x + 28, y + 56, num, 34, FontFace::Mono, ui::withAlpha(tagCol, 200));
             ui::labelRight(bm, x + cw - 28, y + 52, c.tag, 20, FontFace::UIBold, tagCol);
-            drawText(bm, x + 28, y + 128, ellipsize(c.name, 38, FontFace::UIBold, cw - 56), 38, FontFace::UIBold, tk.text);
+            drawText(bm, x + 28, y + 128, ellipsize(c.name, 30, FontFace::UIBold, cw - 56), 30, FontFace::UIBold, tk.text);
             float ty = y + 166;
             for (const std::string& line : wrapText(c.subtitle, 22, FontFace::UI, cw - 56, 2)) {
                 drawText(bm, x + 28, ty, line, 22, FontFace::UI, tk.dim);
