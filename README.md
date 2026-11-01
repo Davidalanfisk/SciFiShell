@@ -148,6 +148,28 @@ they are shown at, so HD video stays smooth.
   appears in the `Alt+Tab` switcher so you can glide straight back to it.
 
 
+## Window management
+
+Every tool opens as a free-floating window, and they all share one set of window controls: drag the title bar to move, the corner bracket to resize, and `F8` to arrange.
+
+![Windows scattered around the room](docs/windows-scattered.jpg)
+*Windows wherever you left them.*
+
+![Windows arranged in an arc](docs/windows-arc.jpg)
+*Arc: windows curve around you at a comfortable distance, each facing you.*
+
+![Windows tiled in a grid](docs/windows-tiles.jpg)
+*Tiles: a grid of equally sized cells, each window scaled to fit.*
+
+![Six windows in an arc](docs/windows-arc-six.jpg)
+*The arc stretches to fit as many windows as you have open.*
+
+![Six windows tiled](docs/windows-tiles-six.jpg)
+*Six windows tiled: system monitor, files, editor, media, settings and terminal.*
+
+![Windows carried into the city](docs/windows-carried-city.jpg)
+*Windows follow you out into the city, so nothing is left behind in a room.*
+
 ## What's coming
 
 *"I tried to picture clusters of information as they moved through the computer."*
