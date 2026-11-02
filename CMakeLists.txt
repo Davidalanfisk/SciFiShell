@@ -64,7 +64,7 @@ set(SOURCES
     src/Terminal.cpp
     src/FileBrowser.cpp
     src/TextEditor.cpp
-    src/ToolRing.cpp
+    src/StartMenu.cpp
     src/FileRoom.cpp
     src/InputSystem.cpp
     src/VRSystem.cpp

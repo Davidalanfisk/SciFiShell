@@ -64,7 +64,7 @@ AppShell::~AppShell() {
     city_.reset();
     room_.reset();
     viewer_.reset();
-    ring_.reset();
+    start_.reset();
     settingsPanel_.reset();
     menu_.reset();
     crosshair_.reset();
@@ -120,11 +120,28 @@ bool AppShell::init() {
     city_ = std::make_unique<City>(renderer_);
     city_->start();
     viewer_ = std::make_unique<Viewer>(renderer_);
-    ring_ = std::make_unique<ToolRing>(renderer_);
     switcher_ = std::make_unique<TaskSwitcher>(renderer_);
     settings_.load();
     settingsPanel_ = std::make_unique<SettingsHub>(renderer_);
     osk_ = std::make_unique<OnScreenKeyboard>(renderer_);
+    {
+        StartHost h;
+        h.tool = [this](Tool t) { syncWins(); runTool(t); };
+        h.app = [this](int i) {
+            syncWins();
+#ifdef _WIN32
+            launchApp(i);
+            flyToWin(focus_);
+#else
+            (void)i;
+#endif
+        };
+        h.focusRow = [this](int i) { syncWins(); startFocusRow(i); };
+        h.action = [this](const std::string& a) { syncWins(); startAction(a); };
+        h.rows = [this] { return startRows(); };
+        h.theme = [this] { cycleTheme(); };
+        start_ = std::make_unique<StartMenu>(renderer_, std::move(h));
+    }
     monitor_ = std::make_unique<SysMonitor>(renderer_, [this] { return city_ ? city_->sysStats() : SystemStats{}; });
     if (!mediaLib_) mediaLib_ = std::make_unique<MediaLibrary>();
     {
@@ -204,6 +221,11 @@ bool AppShell::init() {
             mediaOpenFile(path);
             return;
         }
+        if (k == FileKind::Text) {
+            openPanel(editor2d_.get());
+            editor2d_->openPath(path);
+            return;
+        }
         const Vec3 f = camera_.forward();
         req.cardPos = camera_.position + f * 2.0f;
         req.cardYaw = camera_.yaw;
@@ -250,7 +272,10 @@ bool AppShell::init() {
 #endif
     room_->onOpenMedia = [this](const OpenRequest& req) {
         if (req.kind == FileKind::Video || req.kind == FileKind::Audio) mediaOpenFile(req.path);
-        else viewer_->open(req, head_);
+        else if (req.kind == FileKind::Text) {
+            openPanel(editor2d_.get());
+            editor2d_->openPath(req.path);
+        } else viewer_->open(req, head_);
     };
     room_->onOpenFile = [this](const DirEntry& e) { openFileRoom(e); };
     room_->onExitBuilding = [this] { toggleCity(true); };
@@ -266,14 +291,13 @@ bool AppShell::init() {
         state_ = State::Menu;
     } else {
         enterFileRoom();
-        if (std::getenv("SCIFI_OPEN_RING")) ring_->open(head_.eye, head_.forward);  // debugging aid
+        if (std::getenv("SCIFI_OPEN_START")) toggleStart();  // debugging aid
 #ifdef _WIN32
         // Installed builds quietly check GitHub for a newer release; the script only prompts if one exists.
         if (!std::getenv("SCIFI_NO_UPDATE") && std::filesystem::exists("update.ps1"))
             ShellExecuteA(nullptr, "open", "powershell.exe", "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File update.ps1", nullptr, SW_HIDE);
 #endif
         if (std::getenv("SCIFI_OPEN_SETTINGS")) settingsPanel_->open(head_.eye, head_.forward);  // debugging aid
-        if (std::getenv("SCIFI_OPEN_APPS")) { ring_->open(head_.eye, head_.forward); runTool(Tool::Apps); if (const char* l = std::getenv("SCIFI_OPEN_APPS")) if (l[0] == '2') ring_->enterLevel(1); }  // debugging aid
         if (!std::getenv("SCIFI_START_ROOM") && !std::getenv("SCIFI_START_PATH") && !std::getenv("SCIFI_NO_CITY")) toggleCity(true);  // SCIFI_NO_CITY: skip the city build when testing UI  // the city is the home view
 #ifdef _WIN32
         if (const char* oa = std::getenv("SCIFI_OPEN_APP")) launchApp(std::max(0, std::atoi(oa) - 1));  // debugging aid: 1 = Notepad, 2 = next catalog entry...
@@ -543,7 +567,7 @@ std::vector<AppShell::WinRef> AppShell::allWins() {
 #ifdef _WIN32
     for (auto& a : apps_) v.push_back({kWinApp, a.get()});
 #endif
-    for (PanelApp* p : {static_cast<PanelApp*>(monitor_.get()), static_cast<PanelApp*>(terminal_.get()),
+    for (PanelApp* p : {static_cast<PanelApp*>(monitor_.get()), static_cast<PanelApp*>(terminal_.get()), static_cast<PanelApp*>(start_.get()),
                         static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get()),
                         static_cast<PanelApp*>(media_.get())})
         if (p) v.push_back({kWinPanel, p});
@@ -892,7 +916,6 @@ void AppShell::openSettingsWin() {
 }
 void AppShell::openPanel(PanelApp* p) {
     panel_ = p;
-    ring_->close();
     if (p->isOpen()) {
         raiseFocus({kWinPanel, p});
         return;
@@ -900,8 +923,97 @@ void AppShell::openPanel(PanelApp* p) {
     p->open(vrOn_ ? head_.eye : camera_.position, winForward());
     raiseFocus({kWinPanel, p});
 }
+// ---- Start menu ------------------------------------------------------------------------------------------------
+void AppShell::toggleStart() {
+    if (start_->isOpen()) {
+        start_->close();
+        return;
+    }
+#ifdef _WIN32
+    if (!start_->appsLoaded()) {
+        std::vector<std::string> names;
+        std::vector<Bitmap> icons;
+        for (size_t i = 0; i < pinnedCount_ && i < catalog_.size(); ++i) {
+            Bitmap bm;
+            if (!loadAppIcon(catalog_[i].launch, 128, bm, true)) bm = makeLabel(catalog_[i].name.substr(0, 1), 90.0f, FontFace::UI, Color8{}, 128, 128);
+            names.push_back(catalog_[i].name);
+            icons.push_back(std::move(bm));
+        }
+        start_->setApps(std::move(names), std::move(icons));
+    }
+#endif
+    openPanel(start_.get());
+}
+
+std::vector<StartHost::Row> AppShell::startRows() {
+    std::vector<StartHost::Row> rows;
+    startWins_.clear();
+    for (const WinRef& w : allWins()) {
+        if (w.p == start_.get()) continue;
+        std::string name;
+        bool exists = false;
+        switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+            case kWinBrowser: name = "Web"; exists = static_cast<WebBrowser*>(w.p)->started(); break;
+#endif
+#ifdef _WIN32
+            case kWinApp:
+                for (size_t i = 0; i < apps_.size(); ++i)
+                    if (apps_[i].get() == w.p && i < catalog_.size()) name = catalog_[i].name;
+                exists = static_cast<AppWindow*>(w.p)->running();
+                break;
+#endif
+            case kWinPanel: {
+                PanelApp* p = static_cast<PanelApp*>(w.p);
+                const std::string n = p->name();
+                name = n.empty() ? n : n.substr(0, 1) + [&] { std::string r = n.substr(1); for (char& c : r) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return r; }();
+                exists = p->exists();
+                break;
+            }
+            case kWinSettings: name = "Settings"; exists = static_cast<SettingsHub*>(w.p)->exists(); break;
+            default: break;
+        }
+        if (!exists || name.empty()) continue;
+        rows.push_back({name, winOpen(w) ? (focus_ == w ? 2 : 0) : 1});
+        startWins_.push_back(w);
+    }
+    return rows;
+}
+
+void AppShell::startFocusRow(int i) {
+    if (i < 0 || i >= static_cast<int>(startWins_.size())) return;
+    const WinRef w = startWins_[i];
+    if (!winOpen(w)) {
+        switch (w.kind) {
+#ifdef SCIFI_HAS_CEF
+            case kWinBrowser: static_cast<WebBrowser*>(w.p)->open("", head_.eye, head_.forward, vrOn_); break;
+#endif
+#ifdef _WIN32
+            case kWinApp:
+                for (size_t k = 0; k < apps_.size(); ++k)
+                    if (apps_[k].get() == w.p) launchApp(static_cast<int>(k));
+                break;
+#endif
+            case kWinPanel: openPanel(static_cast<PanelApp*>(w.p)); break;
+            case kWinSettings: openSettingsWin(); break;
+            default: break;
+        }
+    }
+    flyToWin(w);
+}
+
+void AppShell::startAction(const std::string& what) {
+    if (what == "arc") arrangeArc();
+    else if (what == "tile") arrangeTile();
+    else if (what == "min") minimiseAll();
+    else if (what == "exit") running_ = false;
+    else if (what == "restart") os::powerOff(true);
+    else if (what == "shutdown") os::powerOff(false);
+    else if (what == "lock") os::lockPc();
+    else if (what == "sleep") os::sleepPc();
+}
+
 void AppShell::runTool(Tool tool) {
-    ring_->pulse();
     switch (tool) {
         case Tool::Browser:
 #ifdef SCIFI_HAS_CEF
@@ -930,61 +1042,14 @@ void AppShell::runTool(Tool tool) {
             if (!settingsPanel_->isOpen()) buildSettingsHub();
             openSettingsWin();
             break;
-        case Tool::Power:
-            powerArmed_ = 0;
-            if (!settingsPanel_->isOpen()) buildSettingsHub();
-            openSettingsWin();
-            settingsPanel_->openPage("POWER");
-            break;
         case Tool::Theme: cycleTheme(); break;
-        case Tool::Apps:
-#ifdef _WIN32
-            if (!appIconsLoaded_) {
-                appIconsLoaded_ = true;
-                std::vector<std::string> names;
-                std::vector<Bitmap> icons;
-                for (size_t i = 0; i < pinnedCount_; ++i) {
-                    Bitmap bm;
-                    if (!loadAppIcon(catalog_[i].launch, 128, bm, true)) {  // no icon: a plain tile with the app's initial
-                        bm = makeLabel(catalog_[i].name.substr(0, 1), 90.0f, FontFace::UI, Color8{}, 128, 128);
-                    }
-                    names.push_back(catalog_[i].name);
-                    icons.push_back(std::move(bm));
-                }
-                ring_->setLevel(1, names, icons, true);
-                std::vector<std::string> top = {"WEB", "MEDIA", "SYSTEM MONITOR", "FILE BROWSER", "EDITOR", "TERMINAL", "WINDOWS APPS"};
-                auto topLabel = [](const std::string& n) {
-                    const size_t sp = n.find(' ');
-                    Bitmap bm;
-                    bm.w = 256;
-                    bm.h = 128;
-                    bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 0);
-                    auto line = [&](const std::string& s, float px, float base) {
-                        px = std::min(px, px * 232.0f / std::max(1.0f, measureText(s, px, FontFace::UI)));
-                        drawText(bm, (bm.w - measureText(s, px, FontFace::UI)) * 0.5f, base, s, px, FontFace::UI, Color8{});
-                    };
-                    if (sp == std::string::npos) line(n, std::min(70.0f, 70.0f * 224.0f / std::max(1.0f, measureText(n, 70.0f, FontFace::UI))), 86.0f);
-                    else {
-                        line(n.substr(0, sp), 50.0f, 56.0f);
-                        line(n.substr(sp + 1), 50.0f, 112.0f);
-                    }
-                    return bm;
-                };
-                std::vector<Bitmap> topIcons;
-                for (const auto& n : top) topIcons.push_back(topLabel(n));
-                ring_->setLevel(0, top, topIcons, true);
-            }
-            if (!ring_->appsMode()) ring_->showApps(true);
-#endif
-            return;  // the app ring stays open so an icon can be picked
     }
-    if (tool != Tool::Theme) ring_->close();
 }
 
 // ---- Scripting -----------------------------------------------------------------------------------------------
 // One command per line, # starts a comment. Durations [s] are optional (default 0 = instant).
 //   wait S | goto X Y Z [S] | walk M [S] | strafe M [S] | turn DEG [S] | look YAW PITCH [S] | fly on|off
-//   city | leave | enter PATH | room N | ring [apps|windows|close] | tool files|settings|theme|apps
+//   city | leave | enter PATH | room N | tool start|startpower|files|settings|theme
 //   shot FILE | where | log TEXT | quit
 // Output (where / log / errors) is appended to control.log next to the control file.
 void AppShell::scriptLog(const std::string& s) {
@@ -1011,7 +1076,6 @@ bool AppShell::scriptExec(const std::string& line) {
         mv_.from = camera_.position; mv_.to = to;
         mv_.yaw0 = camera_.yaw; mv_.yaw1 = yaw; mv_.pitch0 = camera_.pitch; mv_.pitch1 = pitch;
         mv_.dur = dur;
-        scriptWait_ = dur;
     };
     const Vec3 fwd{-std::sin(camera_.yaw), 0, -std::cos(camera_.yaw)}, right{std::cos(camera_.yaw), 0, -std::sin(camera_.yaw)};
     if (cmd.empty() || cmd[0] == '#') return true;
@@ -1036,6 +1100,16 @@ bool AppShell::scriptExec(const std::string& line) {
         if (dy > kPi) dy -= 2.0f * kPi;
         if (dy < -kPi) dy += 2.0f * kPi;
         startMove(true, true, true, {x, y, z}, camera_.yaw + dy, p, s);
+    } else if (cmd == "sp") {
+        const float x = num(0), y = num(0), z = num(0), yw = num(0) * deg, p = num(0) * deg, s = num(1);
+        if (spPts_.empty()) spPts_.push_back({{camera_.position.x, camera_.position.y, camera_.position.z, camera_.yaw, camera_.pitch}, 0.0});
+        float dy = std::fmod(yw - spPts_.back().v[3], 2.0f * kPi);
+        if (dy > kPi) dy -= 2.0f * kPi;
+        if (dy < -kPi) dy += 2.0f * kPi;
+        spPts_.push_back({{x, y, z, spPts_.back().v[3] + dy, p}, spPts_.back().t + s});
+    } else if (cmd == "go") {
+        if (spPts_.size() >= 2) { spOn_ = true; spT_ = 0; flying_ = true; }
+        else spPts_.clear();
     } else if (cmd == "ride") {
         std::vector<std::vector<Vec3>> rs;
         if (city_) city_->routes(rs);
@@ -1061,17 +1135,6 @@ bool AppShell::scriptExec(const std::string& line) {
     } else if (cmd == "room") {
         room_->debugEnter(static_cast<int>(num(0)));
         scriptWait_ = 1.0;
-    } else if (cmd == "ring") {
-        std::string v;
-        is >> v;
-        if (v == "close") ring_->close();
-        else {
-            if (!ring_->isOpen()) ring_->open(head_.eye, head_.forward);
-            if (v == "apps" || v == "windows") {
-                runTool(Tool::Apps);
-                if (v == "windows") ring_->enterLevel(1);
-            }
-        }
     } else if (cmd == "switch") {
         int id = 0;
         is >> id;
@@ -1109,7 +1172,7 @@ bool AppShell::scriptExec(const std::string& line) {
             std::vector<std::string> all;
             std::string one;
             std::getline(is >> std::ws, one);
-            if (!one.empty()) mediaPlayList({one}, 0);
+            if (!one.empty()) mediaOpenFile(one);
             else {
                 for (const MediaTrack& t : mediaLib_->tracks()) all.push_back(t.path);
                 mediaQueueSet(all, 0);
@@ -1123,7 +1186,7 @@ bool AppShell::scriptExec(const std::string& line) {
         else if (v == "cinema") {
             if (media_) media_->enterCinema();
         }
-        else if (v == "apps") { if (!ring_->isOpen()) ring_->open(head_.eye, head_.forward); runTool(Tool::Apps); }
+        else if (v == "start" || v == "startpower") { if (!start_->isOpen()) toggleStart(); if (v == "startpower") start_->scriptPower(); }
         else scriptLog("unknown tool: " + v);
     } else if (cmd == "shot") {
         std::string p;
@@ -1161,6 +1224,38 @@ void AppShell::scriptTick(double dt) {
                 for (std::string l; std::getline(in, l);) script_.push_back(l);
             }
         }
+    }
+    if (spOn_) {
+        spT_ += dt;
+        const int n = static_cast<int>(spPts_.size());
+        const double t = std::min(spT_, spPts_.back().t);
+        int i = 0;
+        while (i < n - 2 && t > spPts_[i + 1].t) ++i;
+        auto pt = [&](int k, float* v, double& kt) {
+            if (k >= 0 && k < n) { std::copy(spPts_[k].v, spPts_[k].v + 5, v); kt = spPts_[k].t; return; }
+            const int a = k < 0 ? 0 : n - 1, b = k < 0 ? 1 : n - 2;  // mirror the end points
+            for (int c = 0; c < 5; ++c) v[c] = 2 * spPts_[a].v[c] - spPts_[b].v[c];
+            kt = 2 * spPts_[a].t - spPts_[b].t;
+        };
+        float P[4][5];
+        double k[4];
+        for (int j = 0; j < 4; ++j) pt(i - 1 + j, P[j], k[j]);
+        float out[5];
+        for (int c = 0; c < 5; ++c) {
+            auto lerp = [](float a, float b, double u) { return static_cast<float>(a + (b - a) * u); };
+            const float A1 = lerp(P[0][c], P[1][c], (t - k[0]) / (k[1] - k[0]));
+            const float A2 = lerp(P[1][c], P[2][c], (t - k[1]) / (k[2] - k[1]));
+            const float A3 = lerp(P[2][c], P[3][c], (t - k[2]) / (k[3] - k[2]));
+            const float B1 = lerp(A1, A2, (t - k[0]) / (k[2] - k[0]));
+            const float B2 = lerp(A2, A3, (t - k[1]) / (k[3] - k[1]));
+            out[c] = lerp(B1, B2, (t - k[1]) / (k[2] - k[1]));
+        }
+        camera_.position = {out[0], out[1], out[2]};
+        camera_.yaw = out[3];
+        camera_.pitch = out[4];
+        vy_ = 0;
+        if (spT_ >= spPts_.back().t) { spOn_ = false; spPts_.clear(); }
+        return;
     }
     if (mv_.on) {  // eased interpolation of the current scripted motion
         mv_.t += dt;
@@ -1203,7 +1298,7 @@ void AppShell::scriptTick(double dt) {
         return;
     }
     // Run commands until one needs time.
-    for (int guard = 0; guard < 64 && scriptPc_ < script_.size() && scriptWait_ <= 0 && waitCity_ <= 0 && !mv_.on && !shotPending_; ++guard)
+    for (int guard = 0; guard < 64 && scriptPc_ < script_.size() && scriptWait_ <= 0 && waitCity_ <= 0 && !mv_.on && !spOn_ && !shotPending_; ++guard)
         scriptExec(script_[scriptPc_++]);
 }
 
@@ -1700,7 +1795,7 @@ void AppShell::tick(double dt) {
 #ifdef SCIFI_HAS_CEF
         if (browser_) browser_->setView(asp, th);
 #endif
-        for (PanelApp* p : {static_cast<PanelApp*>(monitor_.get()), static_cast<PanelApp*>(terminal_.get()),
+        for (PanelApp* p : {static_cast<PanelApp*>(monitor_.get()), static_cast<PanelApp*>(terminal_.get()), static_cast<PanelApp*>(start_.get()),
                             static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get()),
                             static_cast<PanelApp*>(media_.get())})
             p->setView(th, asp);
@@ -1749,7 +1844,7 @@ void AppShell::tick(double dt) {
     bool vrPointer = vrOn_ && vrInput_.valid && !vrGaze_;
     const bool ringToggle = in.ring || pad.yPressed || vrInput_.menuPressed;
     if (in.themeCycle) cycleTheme();
-    if (in.screenshot) shotPending_ = true;    const bool ringWasOpen = ring_->isOpen();
+    if (in.screenshot) shotPending_ = true;    
     {
         const bool anyInput = in.moveX != 0 || in.moveY != 0 || in.moveZ != 0 || in.lookX != 0 || in.lookY != 0 || in.click || in.clickUp ||
                               in.wheel != 0 || in.escape || in.select || in.back || in.up || in.down || in.left || in.right || in.space ||
@@ -1764,7 +1859,7 @@ void AppShell::tick(double dt) {
         } else {
             idleT_ += dt;
         }
-        const bool busy = ring_->isOpen() || !winOrder_.empty() || appsPanel_->isOpen() || viewer_->active() ||
+        const bool busy = !winOrder_.empty() || appsPanel_->isOpen() || viewer_->active() ||
                           deferred_ || riding_ || vrOn_;
         if (tourActive_ && (!cityMode_ || busy)) stopTour();
         if (tourAllowed && !tourActive_ && idleT_ > 10.0 && cityMode_ && city_ && city_->built() && !busy && script_.empty() && !mv_.on) startTour();
@@ -1775,10 +1870,10 @@ void AppShell::tick(double dt) {
             if (rideT_ < 0.7f) lookX = lookY = 0.0f;
         }
     }
-    if (state_ == State::FileRoom && !viewer_->editing() && !ringWasOpen && !appsPanel_->isOpen() && !viewer_->overlay() && ringToggle) {
-        // Desktop: use the live camera (head_ lags a frame); VR: the headset pose captured at render time.
-        if (vrOn_) ring_->open(head_.eye, head_.forward);
-        else ring_->open(camera_.position, Vec3{-std::sin(camera_.yaw), 0.0f, -std::cos(camera_.yaw)});
+    if (state_ == State::FileRoom && !viewer_->editing() && !appsPanel_->isOpen() && !viewer_->overlay() && ringToggle) {
+        const bool wasOpen = start_->isOpen();
+        toggleStart();
+        if (!wasOpen && start_->isOpen() && lastSource_ == 0) start_->focusSearch();  // typing goes straight to the search
     }
 
     if (state_ == State::Menu) {
@@ -1809,7 +1904,7 @@ void AppShell::tick(double dt) {
         // Windows are persistent and stacked: the frontmost window under the aim takes the pointer, clicking raises and
         // focuses it, and anything else (the world, a door, a bus lane) still works around them. The camera stays free;
         // right click pins the view to a window (camera frozen, mouse drives a cursor) and releases it again.
-        const bool overlayBusy = appsPanel_->isOpen() || ring_->isOpen() || viewer_->overlay();
+        const bool overlayBusy = appsPanel_->isOpen() || viewer_->overlay();
         const float wth = std::tan(kFovY * 0.5f), wasp = renderer_.aspect();
         int sw = 1, sh = 1;
         SDL_GetWindowSize(window_, &sw, &sh);
@@ -2036,41 +2131,6 @@ void AppShell::tick(double dt) {
                 if (!appsPanel_->activateHit(o, d)) appsPanel_->activateSelected();
             } else if (keySelect) appsPanel_->activateSelected();
             else if (back || in.escape || ringToggle) appsPanel_->close();
-        } else if (ring_->isOpen()) {
-            // Tool ring: movement is frozen, looking aims at a segment, click / A / trigger launches it.
-            updateCamera(dt, 0, 0, 0, lookX, lookY);
-            room_->setHover(nullptr);
-            ring_->pointer(o, d);
-#ifdef _WIN32
-            if (ring_->wantApps()) runTool(Tool::Apps);
-#endif
-            if (in.wheel != 0.0f) ring_->cycle(in.wheel > 0 ? -1 : 1);
-            if (up || in.left) ring_->cycle(-1);
-            if (down || in.right) ring_->cycle(1);
-            if (ring_->appsMode() && (pointerSelect || keySelect) && (ring_->appHot() || keySelect)) {
-                const int idx = ring_->appSelected();
-                if (ring_->appLevel() == 0) {
-                    const int nTop = ring_->appCount();
-                    if (idx == nTop - 1) ring_->enterLevel(1);
-                    else if (idx == 0) runTool(Tool::Browser);
-                    else if (idx == 1) runTool(Tool::Media);
-                    else if (idx == 2) runTool(Tool::Monitor);
-                    else if (idx == 3) runTool(Tool::FileBrowser);
-                    else if (idx == 4) runTool(Tool::Editor);
-                    else if (idx == 5) runTool(Tool::Terminal);
-                } else {
-                    ring_->close();
-#ifdef _WIN32
-                    launchApp(idx);
-#endif
-                }
-            } else if (pointerSelect || keySelect) runTool(ring_->selected());
-            else if (ringWasOpen && ringToggle) ring_->close();
-            else if (back || in.escape) {
-                if (ring_->appsMode() && ring_->appLevel() == 1) ring_->enterLevel(0);
-                else if (ring_->appsMode()) ring_->showApps(false);
-                else ring_->close();
-            }
         } else if (winModal) {
             room_->setHover(nullptr);
         } else if (viewer_->active()) {
@@ -2273,7 +2333,7 @@ void AppShell::tick(double dt) {
         renderer_.setTheme(th.accent, th.alt);
         renderer_.setTime(static_cast<float>(time_));
         room_->setAccent(th.accent);
-        ring_->update(dt, time_);
+        start_->update(dt);
         settingsPanel_->update(dt, time_);
         monitor_->update(dt);
         osk_->update(dt);
@@ -2394,10 +2454,6 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
     if (state_ == State::FileRoom && osk_->isOpen()) {
         renderer_.clearDepth();
         osk_->render();
-    }
-    if (state_ == State::FileRoom && ring_->active()) {
-        renderer_.clearDepth();
-        ring_->render(renderer_);
     }
     if (state_ == State::FileRoom && appsPanel_->isOpen()) {
         renderer_.clearDepth();

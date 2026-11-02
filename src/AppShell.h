@@ -26,7 +26,8 @@
 #include "TextEditor.h"
 #include "SettingsPanel.h"
 #include "TaskSwitcher.h"
-#include "ToolRing.h"
+#include "LCARSUI.h"
+#include "StartMenu.h"
 #include "Viewer.h"
 #include "VRSystem.h"
 #include "XInputController.h"
@@ -128,7 +129,7 @@ private:
     std::string nowTitle_, pendingMediaPage_;
     int powerArmed_ = 0;  // 1 restart / 2 shutdown awaiting a confirming second click
     std::unique_ptr<Viewer> viewer_;
-    std::unique_ptr<ToolRing> ring_;
+    std::unique_ptr<StartMenu> start_;
     std::unique_ptr<TaskSwitcher> switcher_;
     std::unique_ptr<SettingsHub> settingsPanel_;
     std::unique_ptr<SysMonitor> monitor_;
@@ -218,6 +219,11 @@ private:
     void arrangeTile();
     void arrangeCycle();
     void minimiseAll();
+    void toggleStart();
+    std::vector<StartHost::Row> startRows();
+    void startAction(const std::string& what);
+    void startFocusRow(int i);
+    std::vector<WinRef> startWins_;  // the windows behind the rows last handed to the Start menu
     void winCarryTrack();
     void winCarryApply(const Vec3& eye, const Vec3& flat);
     void winTick(float dt);
@@ -266,6 +272,11 @@ private:
         float yaw0 = 0, yaw1 = 0, pitch0 = 0, pitch1 = 0;
         double t = 0, dur = 0;
     } mv_;
+    // "sp" waypoints, flown by "go" as one continuous spline (non-uniform Catmull-Rom over real time, so there is no stop-start).
+    struct SplinePt { float v[5]; double t; };  // x y z yaw pitch, arrival time
+    std::vector<SplinePt> spPts_;
+    bool spOn_ = false;
+    double spT_ = 0;
 #ifdef SCIFI_HAS_CEF
     std::unique_ptr<WebBrowser> browser_;
 #endif
