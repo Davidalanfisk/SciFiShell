@@ -26,6 +26,7 @@ struct CityFolder {
 struct CityDrive {
     int kind = 0;         // 0 hard disk, 1 SATA SSD, 2 NVMe SSD, 3 removable / USB
     bool listed = false;  // first-level listing finished; the drive can be shown
+    bool present = true;  // false once the drive has been unplugged (its slot stays so indices remain stable)
     std::string root, name;
     uint64_t total = 0, freeBytes = 0;
     uint64_t files = 0, bytes = 0;  // scanned so far
@@ -69,6 +70,8 @@ public:
     // Copies the drive table when it changed since `version`. `ready` is true once every drive has been listed.
     bool snapshot(std::vector<CityDrive>& out, uint64_t& version, bool& ready);
     void takeChanges(std::vector<CityChange>& out);
+    // Main thread: notices drives that were plugged in or removed (rate limited internally) and starts scanning new ones.
+    void pollDrives(double dt);
 
     // Main thread: refreshes the system stats (rate limited internally).
     void pollStats(double dt);
@@ -99,6 +102,7 @@ private:
 
     SystemStats stats_;
     double statAccum_ = 10.0;
+    double driveAccum_ = 0.0;
     bool statInit_ = false;
     std::unique_ptr<PdhState> pdh_;
 };

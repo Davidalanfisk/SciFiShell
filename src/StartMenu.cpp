@@ -16,7 +16,7 @@ struct ToolDef {
 };
 const ToolDef kTools[] = {
     {"Web", Tool::Browser, 'W'},          {"Media", Tool::Media, 'M'},        {"System Monitor", Tool::Monitor, 'S'},
-    {"File Browser", Tool::FileBrowser, 'F'}, {"Editor", Tool::Editor, 'E'}, {"Terminal", Tool::Terminal, '>'},
+    {"File Browser", Tool::FileBrowser, 'F'}, {"Editor", Tool::Editor, 'E'}, {"Terminal", Tool::Terminal, '>'}, {"Image Editor", Tool::Image, 'I'}, {"FTP", Tool::Ftp, 'T'},
 };
 
 std::string lower(std::string s) {

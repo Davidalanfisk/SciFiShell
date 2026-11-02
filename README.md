@@ -76,7 +76,12 @@ around it are your drives. **Walk** with WASD, or **double-tap Space to fly** an
 ### Doors, lobbies and rooms
 Every folder is a building and every sub-folder a door. Doors show a large thumbnail (videos use a frame from about
 20% in) with the name below; hover a door to swap the name for extra details while the thumbnail stays put. Lobbies
-and rooms fill the far wall first, then the side walls, and the exit wall last.
+and rooms fill the far wall first, then the side walls, and the exit wall last. Inside a room, sub-folders stay as
+tall doors while files hang on the walls as framed pictures. Rooms are lit by dim spot lights rather than ceiling panels.
+
+The city also watches for drives being connected or removed: new drives fade in as regions, removed drives fade away,
+and all regions fade in when the city first loads. Fullscreen apps use a normal 2D mouse pointer, and the media
+player's **Add Folders** uses the built-in file browser instead of the Windows picker.
 
 ![Lobby doors](docs/lobby-doors.jpg)
 ![A file room](docs/file-room.jpg)
@@ -106,6 +111,8 @@ gently turns to face them and stays put until you move.
 | **System Monitor** | Live CPU, memory, GPU, per-thread load, top processes, network and drives. Also opens when you click the **CPU building**. |
 | **File Browser** | A classic 2D file manager: places, drives, search, sorting, copy / cut / paste, rename, delete (to the Recycle Bin), and **Open in 3D Room**. |
 | **Editor** | A text editor that always starts with a blank document: New, Open, Save, Save As. |
+| **Image Editor** | Opens images (also from file rooms): rotate, flip, crop, resize, paintbrush, undo, save as PNG/JPG/BMP, plus a **shot timer** that hides the window and saves a screenshot to Pictures\SciFiShell. |
+| **FTP** | A basic FTP client: host / user / password (anonymous if empty), browse, download to Downloads, upload via the in-app file picker. |
 | **Terminal** | PowerShell, CMD or WSL in a window (Windows 10 1809+). |
 | **Windows Apps** | The apps and windows already open on your PC, ready to switch to. |
 | **Settings** | Shell preferences plus Windows controls: display, sound, network, mouse, themes, power, and the media player. |
@@ -115,6 +122,12 @@ gently turns to face them and stays put until you move.
 
 ### File Browser
 ![File Browser](docs/tool-files.jpg)
+
+### Image Editor
+![Image Editor](docs/tool-image.jpg)
+
+### FTP
+![FTP](docs/tool-ftp.jpg)
 
 ### Terminal
 ![Terminal](docs/tool-terminal.jpg)

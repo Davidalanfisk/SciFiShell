@@ -46,6 +46,47 @@ Mat4 pointerMatrix(Vec3 tip, Vec3 forward, Vec3 worldUp, float size) {
     Vec3 d = normalize(f * 0.7f + right * -0.35f + up2 * 0.45f);
     return alignZ(tip, d, {size * 0.3f, size * 0.3f, size});
 }
+
+// Flat arrow pointer for fullscreen windows: white fill, dark outline, tip at the bitmap's top-left corner.
+Bitmap makeArrowBitmap() {
+    constexpr int N = 48;
+    const float px[7] = {1.5f, 1.5f, 10.0f, 17.0f, 23.0f, 16.0f, 28.0f}, py[7] = {1.5f, 33.0f, 25.5f, 40.0f, 37.0f, 23.0f, 22.5f};
+    auto inside = [&](float x, float y) {
+        bool in = false;
+        for (int i = 0, j = 6; i < 7; j = i++)
+            if ((py[i] > y) != (py[j] > y) && x < (px[j] - px[i]) * (y - py[i]) / (py[j] - py[i]) + px[i]) in = !in;
+        return in;
+    };
+    auto edgeDist = [&](float x, float y) {
+        float best = 1e9f;
+        for (int i = 0, j = 6; i < 7; j = i++) {
+            const float dx = px[j] - px[i], dy = py[j] - py[i];
+            const float t = std::clamp(((x - px[i]) * dx + (y - py[i]) * dy) / (dx * dx + dy * dy), 0.0f, 1.0f);
+            best = std::min(best, std::hypot(x - (px[i] + t * dx), y - (py[i] + t * dy)));
+        }
+        return best;
+    };
+    Bitmap b;
+    b.w = b.h = N;
+    b.rgba.assign(static_cast<size_t>(N) * N * 4, 0);
+    for (int y = 0; y < N; ++y)
+        for (int x = 0; x < N; ++x) {
+            float fill = 0, cover = 0;
+            for (int sy = 0; sy < 3; ++sy)
+                for (int sx = 0; sx < 3; ++sx) {
+                    const float fx = x + (sx + 0.5f) / 3, fy = y + (sy + 0.5f) / 3;
+                    const bool in = inside(fx, fy);
+                    if (in) fill += 1.0f / 9;
+                    if (in || edgeDist(fx, fy) < 2.0f) cover += 1.0f / 9;
+                }
+            uint8_t* p = &b.rgba[(static_cast<size_t>(y) * N + x) * 4];
+            const float c = 255.0f * fill + 18.0f * (1.0f - fill);
+            p[0] = p[1] = static_cast<uint8_t>(c);
+            p[2] = static_cast<uint8_t>(255.0f * fill + 30.0f * (1.0f - fill));
+            p[3] = static_cast<uint8_t>(255.0f * cover);
+        }
+    return b;
+}
 }  // namespace
 
 AppShell::AppShell() = default;
@@ -68,6 +109,7 @@ AppShell::~AppShell() {
     settingsPanel_.reset();
     menu_.reset();
     crosshair_.reset();
+    arrow_.reset();
     fpsLabel_.reset();
     hudTimeLabel_.reset();
     hudDateLabel_.reset();
@@ -159,15 +201,13 @@ bool AppShell::init() {
             mediaLib_->rescan();
         };
         h.pickFolders = [this] {
-            void* hwnd = nullptr;
-#ifdef _WIN32
-            SDL_SysWMinfo wm;
-            SDL_VERSION(&wm.version);
-            if (SDL_GetWindowWMInfo(window_, &wm)) hwnd = static_cast<void*>(wm.info.win.window);
-#endif
-            folderPicker_.start(hwnd);
+            openPanel(files2d_.get());
+            files2d_->folderHandler = [this](const std::vector<std::string>& folders) {
+                addMediaFolders(folders);
+                openPanel(media_.get());
+            };
         };
-        h.pickBusy = [this] { return folderPicker_.busy(); };
+        h.pickBusy = [this] { return files2d_ && static_cast<bool>(files2d_->folderHandler); };
         h.folders = [this] { return mediaLib_->folders(); };
         h.removeFolder = [this](const std::string& p) { mediaLib_->removeFolder(p); };
         h.openFolderSettings = [this] {
@@ -205,6 +245,27 @@ bool AppShell::init() {
             editor2d_->openPath(path);
         };
     };
+    imageEd_ = std::make_unique<ImageEditor>(renderer_);
+    imageEd_->requestOpen = [this] {
+        openPanel(files2d_.get());
+        files2d_->pickHandler = [this](const std::string& path) {
+            openPanel(imageEd_.get());
+            imageEd_->openPath(path);
+        };
+    };
+    imageEd_->takeShot = [this](const std::string& out) {
+        shotPath_ = out;
+        shotPending_ = true;
+    };
+    imageEd_->restore = [this] { openPanel(imageEd_.get()); };
+    ftp_ = std::make_unique<FtpApp>(renderer_);
+    ftp_->requestUpload = [this] {
+        openPanel(files2d_.get());
+        files2d_->pickHandler = [this](const std::string& path) {
+            openPanel(ftp_.get());
+            ftp_->upload(path);
+        };
+    };
     files2d_ = std::make_unique<FileBrowser>(renderer_);
     files2d_->openFile = [this](const std::string& path) {
         namespace fs = std::filesystem;
@@ -224,6 +285,11 @@ bool AppShell::init() {
         if (k == FileKind::Text) {
             openPanel(editor2d_.get());
             editor2d_->openPath(path);
+            return;
+        }
+        if (k == FileKind::Image) {
+            openPanel(imageEd_.get());
+            imageEd_->openPath(path);
             return;
         }
         const Vec3 f = camera_.forward();
@@ -275,12 +341,16 @@ bool AppShell::init() {
         else if (req.kind == FileKind::Text) {
             openPanel(editor2d_.get());
             editor2d_->openPath(req.path);
+        } else if (req.kind == FileKind::Image) {
+            openPanel(imageEd_.get());
+            imageEd_->openPath(req.path);
         } else viewer_->open(req, head_);
     };
     room_->onOpenFile = [this](const DirEntry& e) { openFileRoom(e); };
     room_->onExitBuilding = [this] { toggleCity(true); };
     viewer_->onStep = [this](int dir) { room_->stepFrom(viewer_->path(), dir); };
     crosshair_ = renderer_.createLabel(rasterizeLines({""}, 1, 4, 4));
+    arrow_ = renderer_.createLabel(makeArrowBitmap());
     {
         Bitmap lb;
         lb.w = lb.h = 1;
@@ -568,7 +638,7 @@ std::vector<AppShell::WinRef> AppShell::allWins() {
     for (auto& a : apps_) v.push_back({kWinApp, a.get()});
 #endif
     for (PanelApp* p : {static_cast<PanelApp*>(monitor_.get()), static_cast<PanelApp*>(terminal_.get()), static_cast<PanelApp*>(start_.get()),
-                        static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get()),
+                        static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get()), static_cast<PanelApp*>(imageEd_.get()), static_cast<PanelApp*>(ftp_.get()),
                         static_cast<PanelApp*>(media_.get())})
         if (p) v.push_back({kWinPanel, p});
     v.push_back({kWinSettings, settingsPanel_.get()});
@@ -1034,6 +1104,8 @@ void AppShell::runTool(Tool tool) {
             }
             break;
         case Tool::Editor: openPanel(editor2d_.get()); break;
+        case Tool::Image: openPanel(imageEd_.get()); break;
+        case Tool::Ftp: openPanel(ftp_.get()); break;
         case Tool::Monitor: openPanel(monitor_.get()); break;
         case Tool::FileBrowser: openPanel(files2d_.get()); break;
         case Tool::Terminal: openPanel(terminal_.get()); break;
@@ -1153,6 +1225,9 @@ bool AppShell::scriptExec(const std::string& line) {
         else if (v == "terminal") runTool(Tool::Terminal);
         else if (v == "files2d") runTool(Tool::FileBrowser);
         else if (v == "editor") runTool(Tool::Editor);
+        else if (v == "image") { runTool(Tool::Image); std::string s; std::getline(is >> std::ws, s); if (!s.empty()) imageEd_->openPath(s); }
+        else if (v == "imgact") { int id = 0; is >> id; imageEd_->command(id); }
+        else if (v == "ftp") runTool(Tool::Ftp);
         else if (v == "edtype") { std::string s; std::getline(is >> std::ws, s); editor2d_->text(s); }
         else if (v == "edkey") { editor2d_->key(EditKey::Enter); }
         else if (v == "edsave") { editor2d_->key(EditKey::Save); }
@@ -1646,8 +1721,8 @@ void AppShell::switchTo(int id) {
         flyToWin(focus_);
         return;
     }
-    PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get(), media_.get()};
-    if (id >= 30 && id < 35) {
+    PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get(), media_.get(), imageEd_.get(), ftp_.get()};
+    if (id >= 30 && id < 37) {
         openPanel(panels[id - 30]);
         flyToWin(focus_);
         return;
@@ -1661,18 +1736,25 @@ void AppShell::switchTo(int id) {
 #endif
 }
 // Alt+Tab / Ctrl+Tab task switcher. While it is open it swallows the input that would otherwise reach the scene.
+// The flat fullscreen mouse pointer, drawn in view space at the virtual cursor (the tip is the active point).
+void AppShell::drawArrow2D() {
+    const float t = std::tan(kFovY * 0.5f), dist = 1.0f, h = 0.04f * 2.0f * t * dist;
+    const Vec3 tip{cursorX_ * t * renderer_.aspect() * dist, cursorY_ * t * dist, -dist};
+    const float uv[4] = {0, 0, 1, 1}, white[3] = {1, 1, 1};
+    renderer_.drawWebRegion(*arrow_, Mat4::translate({tip.x + h * 0.5f, tip.y - h * 0.5f, tip.z}) * Mat4::scale({h, h, 1}), uv, 1.0f, 0.0f, -1.0f, 1.0f, white);
+}
+
 void AppShell::handleSwitcher(FrameInput& in, PadState& pad) {
     if (state_ != State::FileRoom) return;
     if (!switcher_->isOpen()) {
         if (in.tabStep == 0) return;
         int current = 0;
         std::vector<TaskSwitcher::Item> items;
-        items.push_back({0, "ROOM", "File room", false});
         {
-            PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get(), media_.get()};
-            const char* names[] = {"MONITOR", "TERMINAL", "FILES", "EDITOR", "MEDIA"};
+            PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get(), media_.get(), imageEd_.get(), ftp_.get()};
+            const char* names[] = {"MONITOR", "TERMINAL", "FILES", "EDITOR", "MEDIA", "IMAGE", "FTP"};
             const bool mediaPlaying = mediaNow().active;  // keeps its place in the switcher while it plays on with the window closed
-            for (int i = 0; i < 5; ++i)
+            for (int i = 0; i < 7; ++i)
                 if (panels[i]->exists() || (i == 4 && mediaPlaying)) {
                     items.push_back({30 + i, names[i], panels[i]->exists() ? (panels[i]->hidden() ? "Minimised" : "Window") : "Now playing", false});
                     if (focus_ == WinRef{kWinPanel, panels[i]}) current = 30 + i;
@@ -1782,8 +1864,7 @@ void AppShell::tick(double dt) {
     }
     {
         std::vector<std::string> picked = std::move(in.dropped);
-        std::vector<std::string> more;
-        if (folderPicker_.poll(more)) picked.insert(picked.end(), more.begin(), more.end());
+
         if (!picked.empty()) addMediaFolders(picked);
     }
     if (in.resized) renderer_.resize();
@@ -1796,7 +1877,7 @@ void AppShell::tick(double dt) {
         if (browser_) browser_->setView(asp, th);
 #endif
         for (PanelApp* p : {static_cast<PanelApp*>(monitor_.get()), static_cast<PanelApp*>(terminal_.get()), static_cast<PanelApp*>(start_.get()),
-                            static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get()),
+                            static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get()), static_cast<PanelApp*>(imageEd_.get()), static_cast<PanelApp*>(ftp_.get()),
                             static_cast<PanelApp*>(media_.get())})
             p->setView(th, asp);
         settingsPanel_->setView(th, asp);
@@ -2340,6 +2421,8 @@ void AppShell::tick(double dt) {
         terminal_->update(dt);
         files2d_->update(dt);
         editor2d_->update(dt);
+        imageEd_->update(dt);
+        ftp_->update(dt);
         media_->update(dt);
         mediaStep();
         appsPanel_->update(dt, time_);
@@ -2394,10 +2477,8 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         renderer_.setView(view, proj);
         renderer_.clearDepth();
         viewer_->root().renderTree(renderer_);
-        if (viewer_->controlsShown() && crosshair_) {
-            const float t = std::tan(kFovY * 0.5f), dist = 1.5f;
-            Vec3 p{cursorX_ * t * renderer_.aspect() * dist, cursorY_ * t * dist, -dist};
-            renderer_.drawPointer(*crosshair_, pointerMatrix(p, {0, 0, -1}, {0, 1, 0}, 0.1f), currentTheme().accent);
+        if (viewer_->controlsShown() && arrow_) {
+            drawArrow2D();
                     }
                     return;
                 }
@@ -2411,11 +2492,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
             renderer_.setView(Mat4::identity(), proj);
             renderer_.clearDepth();
             winRender(fw);
-            if (crosshair_ && !switcher_->isOpen()) {
-                const float t = std::tan(kFovY * 0.5f), dist = fw.kind == kWinApp ? 1.5f : 0.9f;
-                Vec3 p{cursorX_ * t * renderer_.aspect() * dist, cursorY_ * t * dist, -dist};
-                renderer_.drawPointer(*crosshair_, pointerMatrix(p, {0, 0, -1}, {0, 1, 0}, 0.1f), currentTheme().accent);
-            }
+            if (arrow_ && !switcher_->isOpen()) drawArrow2D();
             switcher_->render(Mat4::identity(), renderer_.aspect(), std::tan(kFovY * 0.5f), false);
             return;
         }

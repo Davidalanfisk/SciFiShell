@@ -585,7 +585,7 @@ void FileRoom::buildCorridor() {
         const float cd = 1.9f, cz = -d - 0.15f - cd * 0.5f, cf = -d - 0.15f;
         cadd({0, 0.08f, cz}, {2.9f, 0.14f, cd}, wall * 3.0f, 0.0f);
         cadd({0, 3.12f, cz}, {2.9f, 0.14f, cd}, wall * 3.0f, 0.0f);
-        cadd({0, 3.04f, cz}, {2.4f, 0.04f, 1.4f}, light, -1.0f);
+        cadd({0, 3.02f, cz}, {0.22f, 0.03f, 0.22f}, Vec3{0.7f, 0.85f, 0.9f}, -1.0f);
         cadd({0, 1.55f, cf}, {2.9f, 3.0f, 0.0f}, glass, -2.0f);
         cadd({0, 1.55f, cz - cd * 0.5f}, {2.9f, 3.0f, 0.06f}, wall * 2.5f, 0.0f);
         for (float sgn : {-1.0f, 1.0f}) cadd({sgn * 1.45f, 1.55f, cz}, {0.0f, 3.0f, cd}, glass, -2.0f);
@@ -618,7 +618,6 @@ void FileRoom::buildCorridor() {
         const float ribStep = pat == 0 ? 6.0f : pat == 1 ? 4.0f : pat == 2 ? 8.0f : 5.0f;
         for (float z = kFrontZ - 3.0f; z > -d + 1.0f; z -= ribStep) {
             add({0, H - 0.18f, z}, {hw * 2, 0.16f, 0.5f}, wall * 2.5f, 0.0f, true);
-            add({0, H - 0.28f, z}, {hw * 2 - 1.0f, 0.04f, 0.12f}, rim * 0.9f, -1.0f, true);
         }
         const float by = pat == 3 ? 1.1f : 3.4f;
         for (float sgn : {-1.0f, 1.0f}) {
@@ -651,8 +650,16 @@ void FileRoom::buildCorridor() {
                 }
         }
     }
-    // A skylight over the fountain.
-    add({0, H - 0.04f, fz}, {9.0f, 0.06f, 9.0f}, light * 0.9f, -1.0f, true);
+    // Dim spot lights hang from the ceiling on thin rods; each one also feeds the lighting on the walls and floor.
+    auto spot = [&](Vec3 p, float ceilY, float emitY, float k) {
+        if (ceilY - p.y > 0.05f) add({p.x, (p.y + ceilY) * 0.5f, p.z}, {0.03f, ceilY - p.y, 0.03f}, wall * 3.0f, 0.0f, true);
+        add({p.x, p.y, p.z}, {0.26f, 0.15f, 0.26f}, wall * 3.5f, 0.0f, true);
+        add({p.x, p.y - 0.08f, p.z}, {0.15f, 0.02f, 0.15f}, Vec3{0.7f, 0.86f, 0.9f}, -1.0f, true);
+        emitters_.push_back({{p.x, std::min(p.y, emitY), p.z}, {0, 0, 0}, k});
+    };
+    if (!multi)
+        for (float z = kFrontZ - 3.0f; z > -d + 1.0f; z -= 7.0f) spot({0, H - 1.2f, z}, H, 5.6f, 0.5f);
+    if (L >= 3) spot({0, H - 3.0f, fz}, H, 6.0f, 0.7f);
 
     // Doors, one per room, on every floor.
     for (int r = 0; r < R; ++r) {
@@ -676,6 +683,11 @@ void FileRoom::buildCorridor() {
         door->scale = {3.0f, 3.75f, 0.06f};
         doorCards_.push_back(addCard(std::move(door)));
         if (rooms_[r].ready) addRoomExtras(r);
+        {
+            const float ceilRel = sl.level < L - 1 ? kLevelH - 0.35f : H - y0;
+            const Vec3 sp = at(2.2f, 0, std::min(ceilRel - 0.6f, 4.9f));
+            spot(sp, y0 + ceilRel, y0 + 4.4f, 0.55f);
+        }
     }
 
     if (multi) {  // a single call button on the wall beside the shaft, one per floor
@@ -802,7 +814,10 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     walk_.clear();
     resetScene();
 
+    // Folders stand as doors on the floor; files hang as framed pictures.
+    std::stable_partition(items.begin(), items.end(), [](const DirEntry& e) { return e.isDir; });
     const int n = static_cast<int>(items.size());
+    const int dirCount = static_cast<int>(std::count_if(items.begin(), items.end(), [](const DirEntry& e) { return e.isDir; }));
     const int tiers = std::clamp((n + 24) / 25, 2, 5);
     const float pitch = 2.4f, tierH = 1.5f;
     struct Slot { Vec3 p; float yaw; };
@@ -820,8 +835,10 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
         return out;
     };
     float S = 10.0f;
-    while (S < 120.0f && static_cast<int>(makeSlots(S).size()) * tiers < n) S += 1.0f;
+    while (S < 120.0f && static_cast<int>(makeSlots(S).size()) < dirCount + 1) S += 1.0f;
+    while (S < 120.0f && (static_cast<int>(makeSlots(S).size()) - dirCount) * tiers < n - dirCount) S += 1.0f;
     const std::vector<Slot> slots = makeSlots(S);
+    const int doorCols = std::min(dirCount, std::max(0, static_cast<int>(slots.size()) - 1));  // any folders beyond this hang as cards
     const float H = 1.7f + tiers * tierH, h = S * 0.5f;
     const Vec3 kc = kPalette[idx % 5];
     const Vec3 wall{0.014f, 0.022f, 0.04f}, light{1.6f, 1.8f, 2.0f};
@@ -854,7 +871,24 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
             add({h - 0.02f, ly, 0}, {0.04f, 0.035f, S - 1.4f}, kc * 0.55f, -1.0f);
             add({-h + 0.02f, ly, 0}, {0.04f, 0.035f, S - 1.4f}, kc * 0.55f, -1.0f);
         }
-        for (int i = -1; i <= 1; ++i) add({i * S * 0.25f, H - 0.03f, 0}, {0.22f, 0.05f, S - 2.0f}, light * 0.45f, -1.0f);
+    }
+    // Dim spot lights on short rods, every other column along each wall and a little way out from it.
+    {
+        const int along = std::max(0, static_cast<int>((S - 1.0f) / pitch));
+        const float sy = H - 0.7f, out = 1.3f;
+        auto spot = [&](float x, float z) {
+            add({x, (sy + H) * 0.5f, z}, {0.03f, H - sy, 0.03f}, wall * 3.0f);
+            add({x, sy, z}, {0.26f, 0.15f, 0.26f}, wall * 3.5f);
+            add({x, sy - 0.08f, z}, {0.15f, 0.02f, 0.15f}, Vec3{0.7f, 0.86f, 0.9f}, -1.0f);
+            emitters_.push_back({{x, std::min(sy, 3.8f), z}, {0, 0, 0}, 0.55f});
+        };
+        for (int j = 0; j < along; j += 2) {
+            const float t = (j - (along - 1) * 0.5f) * pitch;
+            spot(t, -h + out);
+            spot(h - out, t);
+            spot(-h + out, t);
+            if (std::fabs(t) >= 3.0f) spot(t, h - out);
+        }
     }
     for (int e : {-1, 1}) add({e * 1.66f, 1.95f, h - 0.04f}, {0.1f, 3.9f, 0.08f}, kc * 1.4f, -1.0f);
     for (const Box& b : shell->boxes) {
@@ -883,14 +917,30 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     door->scale = {3.0f, 3.75f, 0.06f};
     addCard(std::move(door));
 
+    const int cols = static_cast<int>(slots.size()), fileCols = std::max(1, cols - doorCols);
     for (int k = 0; k < n && !slots.empty(); ++k) {
-        const int tier = k / static_cast<int>(slots.size());
+        const bool isDoor = k < doorCols;
+        const int f = k - doorCols;
+        const int tier = isDoor ? 0 : f / fileCols;
         if (tier >= tiers) break;
-        const Slot& sl = slots[k % slots.size()];
+        const Slot& sl = slots[isDoor ? k : doorCols + f % fileCols];
         auto card = std::make_unique<CardNode>(renderer_, items[k], items[k].name);
-        card->position = {sl.p.x, 1.35f + tier * tierH, sl.p.z};
-        card->yaw = sl.yaw;
-        card->scale = {2.0f, 1.28f, 0.06f};
+        if (isDoor) {
+            card->tall = true;
+            card->accent = {90, 230, 235, 255};
+            card->setDoorStats("OPEN", "folder");
+            card->position = {sl.p.x, 1.2275f, sl.p.z};
+            card->yaw = sl.yaw;
+            card->scale = {1.9f, 2.375f, 0.06f};
+        } else {
+            card->position = {sl.p.x, 1.35f + tier * tierH, sl.p.z};
+            card->yaw = sl.yaw;
+            card->scale = {2.0f, 1.28f, 0.06f};
+            const float nx = std::sin(sl.yaw), nz = std::cos(sl.yaw);
+            const bool sideWall = std::fabs(nx) > 0.5f;
+            const Vec3 fs = sideWall ? Vec3{0.05f, 1.44f, 2.16f} : Vec3{2.16f, 1.44f, 0.05f};
+            B.push_back({{card->position.x - nx * 0.012f, card->position.y, card->position.z - nz * 0.012f}, fs, Vec3{0.028f, 0.032f, 0.04f}, 0.0f, false});
+        }
         addCard(std::move(card));
     }
 

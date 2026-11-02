@@ -108,15 +108,15 @@ std::shared_ptr<GpuLabel> City::makeText(const std::string& s) {
     return renderer_.createLabel(makeLabel(s, 54.0f, FontFace::UI, Color8{}, 96, 4));
 }
 
-void City::layoutPlatforms(const std::vector<CityDrive>& snap) {
-    platforms_.clear();
-    const int n = (int)snap.size();
+void City::layoutPlatforms(const std::vector<CityDrive>& snap, int first, int count) {
+    if (first == 0) platforms_.clear();
+    const int n = count < 0 ? (int)snap.size() : count;
     constexpr float kPitch = 24.0f, kMargin = 14.0f, kGap = 14.0f;
     float maxSide = 0, sum = 0;
     std::vector<float> contentW(n, 0.0f), contentH(n, 0.0f);
 
     // Pass 1: size every block from its building count, shelf-pack the blocks, and size the platform around them.
-    for (int i = 0; i < n; ++i) {
+    for (int i = first; i < n; ++i) {
         const auto& d = snap[i];
         Platform p;
         p.name = d.name;
@@ -162,15 +162,20 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap) {
     // every platform already placed. Target angles follow the golden angle so the regions spread evenly around the centre.
     constexpr float kHubHalf = 75.0f, kClear = 22.0f;
     std::vector<float> px(n, 0.0f), pz(n, 0.0f);
-    std::vector<int> order(n);
-    for (int i = 0; i < n; ++i) order[i] = i;
-    std::stable_sort(order.begin(), order.end(), [&](int A, int B) { return platforms_[A].side > platforms_[B].side; });
+    std::vector<int> order;
     std::vector<int> placed;
-    float maxR = 0;
-    for (int k = 0; k < n; ++k) {
+    float maxR = first > 0 ? extent_ : 0.0f;
+    for (int i = 0; i < first; ++i) {
+        px[i] = platforms_[i].cx;
+        pz[i] = platforms_[i].cz;
+        if (!(platforms_[i].gone && platforms_[i].grow <= 0.0f)) placed.push_back(i);  // a vanished region frees its spot
+    }
+    for (int i = first; i < n; ++i) order.push_back(i);
+    std::stable_sort(order.begin(), order.end(), [&](int A, int B) { return platforms_[A].side > platforms_[B].side; });
+    for (int k = 0; k < (int)order.size(); ++k) {
         const int i = order[k];
         const float half = platforms_[i].side * 0.5f;
-        const float target = 0.5f * kPi + 2.399963f * k;
+        const float target = 0.5f * kPi + 2.399963f * (k + first);
         bool done = false;
         for (float r = kHubHalf + half; !done && r < 6000.0f; r += 3.0f) {
             for (int s = 0; s < 72 && !done; ++s) {
@@ -193,9 +198,9 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap) {
         }
         placed.push_back(i);
     }
-    extent_ = maxR + maxSide * 0.75f + 100.0f;
+    extent_ = first > 0 ? std::max(extent_, maxR + maxSide * 0.75f + 100.0f) : maxR + maxSide * 0.75f + 100.0f;
     // Pass 2: place the platforms on a ring around the monuments and move the blocks into world space.
-    for (int i = 0; i < n; ++i) {
+    for (int i = first; i < n; ++i) {
         const auto& d = snap[i];
         Platform& p = platforms_[i];
         p.cx = px[i];
@@ -327,6 +332,7 @@ void City::refreshTargets(const std::vector<CityDrive>& snap) {
         p.files = d.files;
         p.bytes = d.bytes;
         p.done = d.done;
+        p.gone = !d.present;
         for (size_t fi = 0; fi < d.folders.size() && fi < p.blocks.size(); ++fi) {
             Block& b = p.blocks[fi];
             const auto& subs = d.folders[fi].subs;
@@ -396,8 +402,16 @@ void City::update(double dt, bool active, Vec3 eye) {
     for (size_t i = 0; i < shownCore_.size(); ++i) shownCore_[i] += (s.coreLoad[i] - shownCore_[i]) * k;
 
     bool ready = false;
+    data_.pollDrives(dt);
     if (data_.snapshot(snap_, version_, ready) || (ready && !built_)) {
-        if (ready && !built_ && !snap_.empty()) layoutPlatforms(snap_);
+        if (ready && !built_ && !snap_.empty()) {
+            layoutPlatforms(snap_);
+        } else if (built_) {
+            // Newly plugged drives join once their first-level listing is in; unplugged ones that never got listed are skipped.
+            int n = (int)platforms_.size();
+            while (n < (int)snap_.size() && (snap_[n].listed || !snap_[n].present)) ++n;
+            if (n > (int)platforms_.size()) layoutPlatforms(snap_, (int)platforms_.size(), n);
+        }
         if (built_) refreshTargets(snap_);
     }
 
@@ -424,12 +438,14 @@ void City::update(double dt, bool active, Vec3 eye) {
         if (clock_ > coreDelay_[i]) coreGrow_[i] = std::min(1.0f, coreGrow_[i] + growStep);
     const float lerpK = (float)std::min(1.0, dt * 2.5);
     for (auto& p : platforms_) {
-        if (clock_ > p.delay) p.grow = std::min(1.0f, p.grow + growStep);
+        if (p.gone) p.grow = std::max(0.0f, p.grow - growStep);
+        else if (clock_ > p.delay) p.grow = std::min(1.0f, p.grow + growStep);
         float mh = 10;
         for (auto& b : p.blocks) {
             float bh = 4;
             for (auto& t : b.towers) {
-                if (clock_ > t.delay) t.grow = std::min(1.0f, t.grow + growStep);
+                if (p.gone) t.grow = std::max(0.0f, t.grow - growStep * 1.5f);
+                else if (clock_ > t.delay) t.grow = std::min(1.0f, t.grow + growStep);
                 t.curH += (t.tgtH - t.curH) * lerpK;
                 t.curW += (t.tgtW - t.curW) * lerpK;
                 t.curD += (t.tgtD - t.curD) * lerpK;

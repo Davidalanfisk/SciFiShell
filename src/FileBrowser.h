@@ -21,11 +21,12 @@ public:
 
     std::function<void(const std::string& path)> openFile;    // viewer / default program
     std::function<void(const std::string& folder)> openRoom;
+    std::function<void(const std::vector<std::string>& folders)> folderHandler;  // set: folder-pick mode (selected folders, or the open one)
     std::function<void(const std::string& path)> pickHandler;  // set: the next double-clicked file goes here instead  // enter the folder as a 3D room
 
 protected:
     void onOpen() override;
-    void onClose() override { pickHandler = nullptr; }
+    void onClose() override { pickHandler = nullptr; folderHandler = nullptr; }
     void paint(Bitmap& bm) override;
     bool fsResizable() const override { return true; }
     bool onHover(float x, float y) override;

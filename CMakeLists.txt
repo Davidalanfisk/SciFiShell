@@ -64,6 +64,8 @@ set(SOURCES
     src/Terminal.cpp
     src/FileBrowser.cpp
     src/TextEditor.cpp
+    src/ImageEditor.cpp
+    src/FtpApp.cpp
     src/StartMenu.cpp
     src/FileRoom.cpp
     src/InputSystem.cpp
@@ -78,7 +80,6 @@ set(SOURCES
     src/MediaLibrary.cpp
     src/MediaMeta.cpp
     src/MediaApp.cpp
-    src/FolderPicker.cpp
     src/AppShellMedia.cpp
     src/AppShellWindows.cpp
     src/CodeEditor.cpp
@@ -135,7 +136,7 @@ target_link_libraries(SciFiShell PRIVATE
 
 if(WIN32)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineD3D12-static xinput d3d12 dxgi pdh
-                          mfplat mfreadwrite mfuuid d3d11 dwmapi windowsapp propsys ole32 oleaut32 iphlpapi powrprof ws2_32 psapi)
+                          mfplat mfreadwrite mfuuid d3d11 dwmapi windowsapp propsys ole32 oleaut32 iphlpapi powrprof ws2_32 psapi wininet)
 elseif(APPLE)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineMetal-static)
 else()

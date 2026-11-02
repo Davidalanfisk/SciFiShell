@@ -9,7 +9,7 @@
 
 namespace sf {
 
-enum class Tool { Browser = 0, Files, Editor, Media, Settings, Theme, Monitor, FileBrowser, Terminal };
+enum class Tool { Browser = 0, Files, Editor, Media, Settings, Theme, Monitor, FileBrowser, Terminal, Image, Ftp };
 
 struct StartHost {
     struct Row {

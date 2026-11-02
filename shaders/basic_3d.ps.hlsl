@@ -295,7 +295,7 @@ float3 buildingColor(PSInput In)
     if (grow > 0.001 && kind != 7 && (top || rim > 0.0)) col += neon * grow * 1.2 * (top ? 1.0 : rim);
 
     float mist = smoothstep(650.0, 980.0, dist);  // dark ring that masks the edge of the map
-    if (kind == 6) return col * (1.0 - mist);  // glass: additive light only, no haze (premultiplied blend)
+    if (kind == 6) return col * (1.0 - mist) * smoothstep(0.0, 1.0, emerge);  // glass: additive light only, no haze (premultiplied blend)
     // Dense low fog: barely there up close, building to a thick glowing bank with distance, deepest near the ground and
     // lit by the neon of whatever is inside it.
     float fogD = 1.0 - exp(-pow(dist * 0.0042, 1.2));

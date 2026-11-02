@@ -11,7 +11,6 @@
 #include "Renderer.h"
 #include "Settings.h"
 #include "MediaLibrary.h"
-#include "FolderPicker.h"
 #include "MediaPlayer.h"
 #include "MediaApp.h"
 #include "OnScreenKeyboard.h"
@@ -24,6 +23,8 @@
 #include "Terminal.h"
 #include "FileBrowser.h"
 #include "TextEditor.h"
+#include "ImageEditor.h"
+#include "FtpApp.h"
 #include "SettingsPanel.h"
 #include "TaskSwitcher.h"
 #include "LCARSUI.h"
@@ -119,7 +120,6 @@ private:
     void mediaQueueSet(const std::vector<std::string>& paths, int start);
     std::vector<SettingsCategory> mediaCategories();
     std::unique_ptr<MediaLibrary> mediaLib_;
-    FolderPicker folderPicker_;
     void addMediaFolders(const std::vector<std::string>& paths);
     MediaPlayer mediaPlayer_;
     std::vector<std::string> queue_;
@@ -138,6 +138,8 @@ private:
     std::unique_ptr<Terminal> terminal_;
     std::unique_ptr<FileBrowser> files2d_;
     std::unique_ptr<TextEditor> editor2d_;
+    std::unique_ptr<ImageEditor> imageEd_;
+    std::unique_ptr<FtpApp> ftp_;
     PanelApp* panel_ = nullptr;  // the most recently opened floating app panel (any number can be open)
     void openPanel(PanelApp* p);
     void openSettingsWin();
@@ -281,7 +283,8 @@ private:
     std::unique_ptr<WebBrowser> browser_;
 #endif
     HeadPose head_{{0, 1.6f, 0}, {0, 0, -1}, false, 16.0f / 9.0f};  // last rendered head position (camera or headset)
-    std::shared_ptr<GpuLabel> crosshair_;
+    std::shared_ptr<GpuLabel> crosshair_, arrow_;
+    void drawArrow2D();
     float cursorX_ = 0, cursorY_ = 0;  // virtual cursor (NDC): fullscreen media, and the aim while a window has focus
     bool winFocus_ = false;  // view pinned to a window: the camera is frozen and the mouse drives a cursor (right click toggles)
     bool flying_ = false;                        // in a building: flying until a floor is touched, then walking with gravity

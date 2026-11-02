@@ -88,6 +88,7 @@ private:
         float delay = 0, grow = 0;
         uint64_t files = 0, bytes = 0, total = 0;
         bool done = false;
+        bool gone = false;  // drive unplugged: the region fades away
         int tint = 0;
         int kind = 0;  // drive type, see CityDrive::kind
         std::vector<Block> blocks;
@@ -132,7 +133,7 @@ private:
     Vec3 enteredDoor_;
 
     void rebuild(const std::vector<CityDrive>& snap);
-    void layoutPlatforms(const std::vector<CityDrive>& snap);
+    void layoutPlatforms(const std::vector<CityDrive>& snap, int first = 0, int count = -1);  // first > 0: add platforms without moving the others
     void refreshTargets(const std::vector<CityDrive>& snap);
     void renderBox(Renderer& r, Vec3 c, Vec3 size, Vec3 neon, float seed, int kind, float emerge, float fill, float flash);
     void renderMonuments(Renderer& r, Vec3 eye);

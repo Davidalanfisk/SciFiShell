@@ -280,6 +280,19 @@ void FileBrowser::act(int id) {
             fileOp(FO_DELETE, paths, "");
             reload();
         }
+    } else if (id == 13 || id == 14) {
+        if (!folderHandler) return;
+        if (id == 14) { folderHandler = nullptr; status_.clear(); return; }
+        std::vector<std::string> out;
+        for (const auto& p : selectedPaths()) {
+            std::error_code ec;
+            if (fs::is_directory(fs::u8path(p), ec)) out.push_back(p);
+        }
+        if (out.empty() && !cwd_.empty()) out.push_back(cwd_);
+        if (out.empty()) { status_ = "Open a folder first, or select folders to add"; return; }
+        auto h = std::move(folderHandler);
+        folderHandler = nullptr;
+        h(out);
     } else if (id == 11) {
         if (openRoom) openRoom(cwd_);
     } else if (id == 12) {
@@ -545,6 +558,14 @@ void FileBrowser::paint(Bitmap& bm) {
         label(bm, r.x0 + 16, r.y0 + 31, edit_ == Edit::Rename ? "RENAME TO:" : "NEW FOLDER NAME:", 20, FontFace::UIBold, t.accent);
         label(bm, r.x0 + 230, r.y0 + 31, buf_ + (caret ? "|" : ""), 24, FontFace::UI, t.text);
         labelRight(bm, r.x1 - 16, r.y0 + 31, "ENTER  confirm     ESC  cancel", 18, FontFace::UI, t.muted);
+    } else if (folderHandler) {
+        int nDirs = 0;
+        for (int i : sel_) if (i >= 0 && i < static_cast<int>(view_.size()) && view_[i].dir) ++nDirs;
+        const std::string add = nDirs > 0 ? "ADD " + std::to_string(nDirs) + " SELECTED" : "ADD THIS FOLDER";
+        Rect r{c.x1 - 16 - 300, ay, c.x1 - 16, ay + 46};
+        button(bm, r, add.c_str(), nDirs == 0 && cwd_.empty() ? State::Disabled : hot(r, 13), true, 20);
+        Rect rc{r.x0 - 8 - 150, ay, r.x0 - 8, ay + 46};
+        button(bm, rc, "CANCEL", hot(rc, 14), false, 20);
     } else {
         struct A { const char* l; int id; float w; bool primary; };
         float ax = c.x0 + 16;
@@ -562,7 +583,7 @@ void FileBrowser::paint(Bitmap& bm) {
         Rect r{c.x1 - 16 - 260, ay, c.x1 - 16, ay + 46};
         button(bm, r, "OPEN IN 3D ROOM", cwd_.empty() ? State::Disabled : hot(r, 11), true, 20);
     }
-    std::string st = pickHandler ? std::string("PICK A FILE: double-click the file to open it in the editor") : status_;
+    std::string st = folderHandler ? std::string("PICK FOLDERS: browse into a folder (or select several) and add them to the media library") : pickHandler ? std::string("PICK A FILE: double-click the file to open it in the editor") : status_;
     if (st.empty()) st = std::to_string(view_.size()) + " items" + (sel_.empty() ? "" : "   |   " + std::to_string(sel_.size()) + " selected") + "   |   Double-click opens   |   Ctrl / Shift click selects several";
     label(bm, c.x0 + 20, c.y1 - 18, ellipsize(st, 20, FontFace::UI, c.w() - 40), 20, FontFace::UI, t.dim);
 }

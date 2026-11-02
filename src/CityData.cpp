@@ -585,6 +585,61 @@ bool CityData::snapshot(std::vector<CityDrive>& out, uint64_t& version, bool& re
     return true;
 }
 
+void CityData::pollDrives(double dt) {
+#ifdef _WIN32
+    if (!started_ || stop_) return;
+    driveAccum_ += dt;
+    if (driveAccum_ < 1.5) return;
+    driveAccum_ = 0.0;
+    std::vector<std::string> now;
+    const DWORD mask = GetLogicalDrives();
+    for (int i = 0; i < 26; ++i) {
+        if (!(mask & (1u << i))) continue;
+        const std::string r = std::string(1, char('A' + i)) + ":\\";
+        const UINT t = GetDriveTypeA(r.c_str());
+        if (t != DRIVE_FIXED && t != DRIVE_REMOVABLE) continue;
+        ULARGE_INTEGER a, b, c;
+        if (!GetDiskFreeSpaceExA(r.c_str(), &a, &b, &c)) continue;  // no media / not ready yet
+        now.push_back(r);
+    }
+    std::vector<std::string> fresh;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        for (auto& d : drives_) {
+            if (!d.present) continue;
+            if (std::find(now.begin(), now.end(), d.root) == now.end()) {
+                d.present = false;
+                d.done = true;
+                ++version_;
+            }
+        }
+        for (const auto& r : now) {
+            const bool known = std::any_of(drives_.begin(), drives_.end(), [&](const CityDrive& d) { return d.present && d.root == r; });
+            if (!known) fresh.push_back(r);
+        }
+    }
+    for (const auto& r : fresh) {
+        const int kind = driveKind(r);
+        int slot;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            slot = (int)drives_.size();
+            drives_.emplace_back();
+            folderIndex_.emplace_back();
+            drives_[slot].root = r;
+            drives_[slot].name = r.substr(0, 2);
+            drives_[slot].kind = kind;
+            ++version_;
+        }
+        ++pending_;
+        threads_.emplace_back([this, slot, r] { scanDrive(slot, r); });
+        if (GetDriveTypeA(r.c_str()) == DRIVE_FIXED) threads_.emplace_back([this, slot, r] { watchDrive(slot, r); });
+    }
+#else
+    (void)dt;
+#endif
+}
+
 void CityData::takeChanges(std::vector<CityChange>& out) {
     std::lock_guard<std::mutex> lk(mu_);
     for (auto& kv : changes_) out.push_back(kv.second);
