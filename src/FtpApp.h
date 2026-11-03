@@ -19,6 +19,7 @@ public:
     ~FtpApp() override;
     const char* name() const override { return "FTP"; }
     bool wantsText() const override { return focus_ >= 0; }
+    bool fsResizable() const override { return true; }
     void upload(const std::string& localPath);
 
     std::function<void()> requestUpload;  // the shell shows the file browser in pick mode

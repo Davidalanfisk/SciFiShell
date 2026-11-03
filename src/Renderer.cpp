@@ -32,6 +32,7 @@ struct Constants {
     float accent[4];  // theme accent rgb + time
     float alt[4];     // theme alert colour
     float lights[96]; // interior light points: xyz + intensity, read by basic_3d.ps only
+    float tune[8];    // lighting sliders, read by basic_3d.ps only
 };
 constexpr TEXTURE_FORMAT kColorFormat = TEX_FORMAT_RGBA8_UNORM_SRGB;
 constexpr TEXTURE_FORMAT kDepthFormat = TEX_FORMAT_D32_FLOAT;
@@ -622,6 +623,7 @@ void Renderer::draw(Pipeline& pipeline, IShaderResourceBinding* srb, const Mesh&
         std::memcpy(cb->accent, accent_, sizeof(cb->accent));
         std::memcpy(cb->alt, alt_, sizeof(cb->alt));
         std::memcpy(cb->lights, lights_, sizeof(cb->lights));
+        std::memcpy(cb->tune, tune_, sizeof(cb->tune));
     }
     context_->SetPipelineState(pipeline.pso);
     context_->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);

@@ -361,25 +361,41 @@ Bitmap composeDoorBase(const DoorFaceSpec& s) {
     bm.w = kDoorW;
     bm.h = kDoorH;
     bm.rgba.assign(static_cast<size_t>(bm.w) * bm.h * 4, 255);
-    fillBackground(bm, Color8{17, 24, 40, 255}, Color8{6, 9, 16, 255});
-    const Color8 ac = s.accent, hot = mixColor(ac, Color8{255, 255, 255, 255}, 0.6f);
-
-    // Neon frame with a soft halo; it flares on hover.
+    // A solid door: charcoal leaf with faint grain, a bevelled frame and a steel lever. No glow.
+    const Color8 ac = s.accent;
     {
-        const float inset = 12.0f, th = s.hover ? 5.5f : 3.5f, rt = 42.0f;
-        const float hx = bm.w * 0.5f - inset, hy = bm.h * 0.5f - inset;
-        const float haloK = s.hover ? 0.75f : 0.32f, haloR = s.hover ? 11.0f : 6.0f;
+        const float lift = s.hover ? 1.18f : 1.0f;
         for (int y = 0; y < bm.h; ++y)
             for (int x = 0; x < bm.w; ++x) {
-                const float dd = roundBoxSdf(x + 0.5f - bm.w * 0.5f, y + 0.5f - bm.h * 0.5f, hx, hy, rt);
-                const float d = std::fabs(dd + th * 0.5f);
-                const float core = std::clamp(th * 0.5f + 0.5f - d, 0.0f, 1.0f);
-                const float halo = std::exp(-d / haloR) * haloK * (1.0f - core);
-                if (halo > 0.004f) blendPixel(bm, x, y, ac, halo);
-                if (core > 0.0f) blendPixel(bm, x, y, hot, core);
+                const float grain = 0.5f + 0.5f * std::sin(x * 0.9f + std::sin(y * 0.013f + x * 0.05f) * 3.0f);
+                const float v = (20.0f + grain * 5.0f + (1.0f - y / float(bm.h)) * 4.0f) * lift;
+                uint8_t* p = &bm.rgba[(static_cast<size_t>(y) * bm.w + x) * 4];
+                p[0] = static_cast<uint8_t>(v); p[1] = static_cast<uint8_t>(v * 1.02f); p[2] = static_cast<uint8_t>(v * 1.08f); p[3] = 255;
             }
+        // Bevelled outer frame (light top/left, dark bottom/right) and an inner moulding line.
+        for (int y = 0; y < bm.h; ++y)
+            for (int x = 0; x < bm.w; ++x) {
+                const int e = std::min(std::min(x, bm.w - 1 - x), std::min(y, bm.h - 1 - y));
+                if (e < 14) {
+                    const bool lit = (x < bm.w / 2 && x <= y) || (y < bm.h / 2 && y < x);
+                    const float k = lit ? 0.9f : 0.35f;
+                    blendPixel(bm, x, y, Color8{static_cast<uint8_t>(200 * k), static_cast<uint8_t>(206 * k), static_cast<uint8_t>(214 * k), 255}, 0.22f);
+                }
+                if (e >= 24 && e < 27) blendPixel(bm, x, y, Color8{0, 0, 0, 255}, 0.5f);
+                if (e >= 27 && e < 29) blendPixel(bm, x, y, Color8{150, 156, 166, 255}, 0.18f);
+            }
+        // Steel lever handle on the right edge, with a keyhole plate below it.
+        fillRoundRect(bm, 484.0f, 300.0f, 20.0f, 110.0f, 9.0f, Color8{30, 32, 36, 255});
+        fillRoundRect(bm, 486.0f, 302.0f, 16.0f, 106.0f, 8.0f, Color8{168, 174, 184, 255});
+        fillRoundRect(bm, 490.0f, 306.0f, 4.0f, 98.0f, 2.0f, Color8{225, 229, 236, 255});
+        fillRoundRect(bm, 484.0f, 424.0f, 20.0f, 30.0f, 6.0f, Color8{30, 32, 36, 255});
+        fillRoundRect(bm, 489.0f, 432.0f, 10.0f, 10.0f, 5.0f, Color8{8, 8, 10, 255});
     }
-
+    // The preview sits in a steel-rimmed window; the name goes on a recessed plate below.
+    fillRoundRect(bm, kDoorArtX - 6.0f, kDoorArtY - 6.0f, kDoorArtW + 12.0f, kDoorArtH + 12.0f, 20.0f, Color8{120, 126, 136, 255});
+    fillRoundRect(bm, kDoorArtX - 3.0f, kDoorArtY - 3.0f, kDoorArtW + 6.0f, kDoorArtH + 6.0f, 18.0f, Color8{14, 15, 18, 255});
+    fillRoundRect(bm, kDoorTextX - 8.0f, kDoorTextY - 8.0f, kDoorTextW + 16.0f, kDoorTextH + 16.0f, 14.0f, Color8{70, 74, 82, 255});
+    fillRoundRect(bm, kDoorTextX - 6.0f, kDoorTextY - 6.0f, kDoorTextW + 12.0f, kDoorTextH + 12.0f, 12.0f, Color8{9, 10, 13, 255});
     const float ax = static_cast<float>(kDoorArtX), ay = static_cast<float>(kDoorArtY);
     const float aw = static_cast<float>(kDoorArtW), ah = static_cast<float>(kDoorArtH), ar = 16.0f;
     if (s.art && s.art->w == kDoorArtW && s.art->h == kDoorArtH) {
@@ -407,20 +423,11 @@ Bitmap composeDoorBase(const DoorFaceSpec& s) {
             fillRoundRect(bm, fx, fy, 124.0f, 84.0f, 12.0f, mixColor(ac, Color8{20, 26, 40, 255}, 0.25f));
         }
     }
-    // A hairline around the art ties it to the frame.
-    for (int y = 0; y < kDoorArtH + 2; ++y)
-        for (int x = 0; x < kDoorArtW + 2; ++x) {
-            const float d = roundBoxSdf(x - 0.5f - aw * 0.5f, y - 0.5f - ah * 0.5f, aw * 0.5f, ah * 0.5f, ar);
-            const float a = std::clamp(1.0f - std::fabs(d + 0.5f), 0.0f, 1.0f) * 0.55f;
-            if (a > 0.0f) blendPixel(bm, kDoorArtX - 1 + x, kDoorArtY - 1 + y, ac, a);
-        }
-
-    fillRoundRect(bm, bm.w * 0.5f - 30.0f, 334.0f, 60.0f, 4.0f, 2.0f, ac);
     return bm;
 }
 
 float drawDoorText(Bitmap& bm, const std::string& title, const std::vector<std::string>& info, bool hover, float scroll, Color8 accent) {
-    const Color8 white{238, 243, 252, 255}, dim{176, 192, 218, 255};
+    const Color8 white{238, 240, 244, 255}, dim{180, 186, 196, 255};
     const float cx = kDoorTextX + kDoorTextW * 0.5f;
     if (!hover) {
         // Largest size at which the whole name fits on three lines.
@@ -443,7 +450,7 @@ float drawDoorText(Bitmap& bm, const std::string& title, const std::vector<std::
 
     struct Row { std::string text; float px; FontFace face; Color8 col; float gapAfter; };
     std::vector<Row> rows;
-    const Color8 nameCol = mixColor(accent, Color8{255, 255, 255, 255}, 0.55f);
+    const Color8 nameCol = mixColor(accent, Color8{255, 255, 255, 255}, 0.85f);
     for (const std::string& l : wrapText(title, 27.0f, FontFace::UIBold, static_cast<float>(kDoorTextW), 12)) rows.push_back({l, 27.0f, FontFace::UIBold, nameCol, 0.0f});
     if (!rows.empty()) rows.back().gapAfter = 12.0f;
     for (const std::string& l : info)

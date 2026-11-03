@@ -292,21 +292,21 @@ void CardNode::bakeDoor() {
 void CardNode::render(Renderer& renderer) {
     if (isDoor()) {
         if (doorDirty_ || !face_) bakeDoor();
-        renderer.drawCube(*face_, worldMatrix(), Vec3{1.0f, 1.0f, 1.0f}, false, true, hover ? 1.0f : 0.0f);
+        renderer.drawCube(*face_, worldMatrix(), Vec3{1.0f, 1.0f, 1.0f}, false, true, 3.0f);  // glow 3 = no card edge rim
         return;
     }
     Mat4 w = worldMatrix();
     if (hover) w = w * Mat4::scale({1.08f, 1.08f, 1.0f});
     if (thumb_) {
         renderer.drawCube(*thumb_, w, hover ? Vec3{1.25f, 1.25f, 1.25f} : Vec3{1.0f, 1.0f, 1.0f}, false, true,
-                          hover ? 1.0f : 0.0f);
+                          3.0f);  // no cyan edge; hover enlarges and brightens
         return;
     }
     ensureLabel();
     Vec3 base = tall ? Vec3{0.02f, 0.035f, 0.06f} : isParentLink ? Vec3{0.2f, 0.3f, 0.36f} : (entry.isDir ? Vec3{0.1f, 0.28f, 0.52f} : Vec3{0.14f, 0.17f, 0.23f});
-    if (tall && isParentLink) base = {0.55f, 0.95f, 1.0f};  // the exit glows
+    if (tall && isParentLink) base = {0.9f, 0.9f, 0.92f};
     Vec3 color = hover ? base * 1.4f : base;
-    renderer.drawCube(*label_, w, color, false, false, tall ? -1.0f : (hover ? 1.0f : 0.0f));  // doors draw their own outline
+    renderer.drawCube(*label_, w, color, false, false, tall ? -1.0f : 3.0f);
 }
 
 FileRoom::FileRoom(Renderer& renderer) : renderer_(renderer) {
@@ -520,14 +520,14 @@ void FileRoom::buildCorridor() {
     auto exitCard = std::make_unique<CardNode>(renderer_, parentEntry_, "EXIT");
     exitCard->isParentLink = true;
     exitCard->tall = true;  // the portrait door body fills the whole doorway
-    exitCard->accent = {120, 235, 255, 255};
+    exitCard->accent = {235, 235, 238, 255};
     exitCard->setDoorStats("EXIT", "back to the city");
     exitCard->position = {0, 2.55f, kFrontZ - 0.24f};
     exitCard->yaw = kPi;
     exitCard->scale = {3.9f, 5.0f, 0.06f};
     addCard(std::move(exitCard));
     {
-        const Vec3 neon{0.85f, 0.92f, 1.0f};
+        const Vec3 neon{0.92f, 0.92f, 0.94f};
         for (float sgn : {-1.0f, 1.0f}) add({sgn * 2.3f, 2.6f, kFrontZ - 0.12f}, {0.3f, 5.2f, 0.2f}, neon * 2.0f, -1.0f, true);
         add({0, 5.2f, kFrontZ - 0.12f}, {4.9f, 0.3f, 0.2f}, neon * 2.0f, -1.0f, true);
     }
@@ -612,26 +612,21 @@ void FileRoom::buildCorridor() {
         add({0, 3.55f, fz}, {0.5f, 0.3f, 0.5f}, rim * 0.8f, -1.0f, true);
     }
 
-    // Decor: ceiling ribs, wall light bands and floor lanes, arranged differently per look.
+    // Decor: ceiling ribs, arranged differently per look.
     {
         const int pat = lookIdx % 4;
         const float ribStep = pat == 0 ? 6.0f : pat == 1 ? 4.0f : pat == 2 ? 8.0f : 5.0f;
         for (float z = kFrontZ - 3.0f; z > -d + 1.0f; z -= ribStep) {
             add({0, H - 0.18f, z}, {hw * 2, 0.16f, 0.5f}, wall * 2.5f, 0.0f, true);
         }
-        const float by = pat == 3 ? 1.1f : 3.4f;
-        for (float sgn : {-1.0f, 1.0f}) {
-            add({sgn * (hw - 0.012f), by, zm}, {0.02f, 0.06f, zl - 1.0f}, rim * 0.4f, -1.0f, true);
-            if (pat >= 2) add({sgn * (hw - 0.012f), by + 0.7f, zm}, {0.02f, 0.03f, zl - 1.0f}, rim * 0.2f, -1.0f, true);
-        }
     }
 
     // The exit: a layered frame, chevrons leading to it, a header bar and glowing steps.
     {
-        const Vec3 neon{0.85f, 0.92f, 1.0f};
-        add({0, 5.6f, kFrontZ - 0.12f}, {5.6f, 0.12f, 0.3f}, rim * 1.6f, -1.0f, true);
+        const Vec3 neon{0.92f, 0.92f, 0.94f};
+        add({0, 5.6f, kFrontZ - 0.12f}, {5.6f, 0.12f, 0.3f}, neon * 1.4f, -1.0f, true);
         for (float sgn : {-1.0f, 1.0f}) {
-            add({sgn * 2.8f, 2.8f, kFrontZ - 0.12f}, {0.12f, 5.6f, 0.3f}, rim * 1.6f, -1.0f, true);
+            add({sgn * 2.8f, 2.8f, kFrontZ - 0.12f}, {0.12f, 5.6f, 0.3f}, neon * 1.4f, -1.0f, true);
             add({sgn * 3.4f, 2.0f, kFrontZ - 0.3f}, {0.5f, 4.0f, 0.5f}, wall * 3.0f, 0.0f, true);
             add({sgn * 3.4f, 4.1f, kFrontZ - 0.3f}, {0.3f, 0.12f, 0.3f}, neon * 2.0f, -1.0f, true);
         }
@@ -658,8 +653,27 @@ void FileRoom::buildCorridor() {
         emitters_.push_back({{p.x, std::min(p.y, emitY), p.z}, {0, 0, 0}, k});
     };
     if (!multi)
-        for (float z = kFrontZ - 3.0f; z > -d + 1.0f; z -= 7.0f) spot({0, H - 1.2f, z}, H, 5.6f, 0.5f);
-    if (L >= 3) spot({0, H - 3.0f, fz}, H, 6.0f, 0.7f);
+        for (float z = kFrontZ - 3.0f; z > -d + 1.0f; z -= 7.0f) spot({0, H - 1.2f, z}, H, 5.6f, 1.0f);
+    if (L >= 2) {
+        // Central chandelier: a rod from the ceiling, a hub, two tiers of arms carrying small bulbs, and a drop finial.
+        const float cy = H - 3.4f, ch = zm;
+        add({0, (cy + H) * 0.5f, ch}, {0.05f, H - cy, 0.05f}, wall * 3.0f, 0.0f, true);
+        add({0, cy, ch}, {0.5f, 0.4f, 0.5f}, wall * 3.5f, 0.0f, true);
+        add({0, cy - 0.35f, ch}, {0.12f, 0.5f, 0.12f}, Vec3{0.7f, 0.86f, 0.9f}, -1.0f, true);
+        for (int tier = 0; tier < 2; ++tier) {
+            const float rad = tier == 0 ? 1.0f : 1.9f, ty = cy - 0.1f - tier * 0.45f;
+            add({0, ty, ch}, {rad * 2.0f, 0.04f, 0.04f}, wall * 3.5f, 0.0f, true);
+            add({0, ty, ch}, {0.04f, 0.04f, rad * 2.0f}, wall * 3.5f, 0.0f, true);
+            for (float sx : {-1.0f, 0.0f, 1.0f})
+                for (float sz : {-1.0f, 0.0f, 1.0f}) {
+                    if (sx == 0.0f && sz == 0.0f) continue;
+                    const float k = (sx != 0.0f && sz != 0.0f) ? 0.707f : 1.0f;
+                    add({sx * rad * k, ty - 0.1f, ch + sz * rad * k}, {0.12f, 0.12f, 0.12f}, Vec3{0.8f, 0.9f, 0.95f}, -1.0f, true);
+                }
+        }
+        emitters_.push_back({{0, cy - 0.6f, ch}, {0, 0, 0}, 2.2f});
+    }
+    if (L >= 3) spot({0, H - 3.0f, fz + 3.6f}, H, 6.0f, 0.8f);
 
     // Doors, one per room, on every floor.
     for (int r = 0; r < R; ++r) {
@@ -678,15 +692,15 @@ void FileRoom::buildCorridor() {
             for (unsigned char ch : rooms_[r].name) h = h * 131 + ch;
             door->accent = accents[h % 5];
         }
-        door->position = at(0.04f, 0, 1.95f);
+        door->position = at(-0.01f, 0, 1.95f);
         door->yaw = sl.yaw;
-        door->scale = {3.0f, 3.75f, 0.06f};
+        door->scale = {3.0f, 3.75f, 0.05f};
         doorCards_.push_back(addCard(std::move(door)));
         if (rooms_[r].ready) addRoomExtras(r);
         {
             const float ceilRel = sl.level < L - 1 ? kLevelH - 0.35f : H - y0;
             const Vec3 sp = at(2.2f, 0, std::min(ceilRel - 0.6f, 4.9f));
-            spot(sp, y0 + ceilRel, y0 + 4.4f, 0.55f);
+            spot(sp, y0 + ceilRel, y0 + 4.4f, 1.1f);
         }
     }
 
@@ -851,25 +865,14 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     add({-h - 0.2f, H * 0.5f, 0}, {0.4f, H, S + 0.8f}, wall);
     add({h + 0.2f, H * 0.5f, 0}, {0.4f, H, S + 0.8f}, wall);
     add({0, H + 0.1f, 0}, {S + 0.8f, 0.2f, S + 0.8f}, wall * 0.7f, -1.0f);
-    add({0, 0.0f, 0}, {S - 0.2f, 0.04f, S - 0.2f}, Vec3{0.036f, 0.038f, 0.043f}, -3.0f);
-    // Dressing: skirting, ledges under each tier of cards, ceiling light strips and corner pillars.
+    add({0, 0.0f, 0}, {S + 0.2f, 0.04f, S + 0.2f}, Vec3{0.036f, 0.038f, 0.043f}, -3.0f);
+    // Dressing: corner pillars.
     {
         const Vec3 dark = wall * 2.6f;
         for (int e : {-1, 1}) {
-            add({0, 0.14f, e * (h - 0.05f)}, {S, 0.28f, 0.1f}, dark);
-            add({e * (h - 0.05f), 0.14f, 0}, {0.1f, 0.28f, S}, dark);
-            add({0, 0.29f, e * (h - 0.03f)}, {S, 0.025f, 0.03f}, kc * 0.9f, -1.0f);
-            add({e * (h - 0.03f), 0.29f, 0}, {0.03f, 0.025f, S}, kc * 0.9f, -1.0f);
             for (int ex : {-1, 1}) {
                 add({ex * (h - 0.3f), H * 0.5f, e * (h - 0.3f)}, {0.6f, H, 0.6f}, dark);
-                add({ex * (h - 0.62f), H * 0.5f, e * (h - 0.3f)}, {0.03f, H - 0.4f, 0.1f}, kc * 0.8f, -1.0f);
             }
-        }
-        for (int t = 0; t < tiers; ++t) {
-            const float ly = 1.35f + t * tierH - 0.72f;
-            add({0, ly, -h + 0.02f}, {S - 1.4f, 0.035f, 0.04f}, kc * 0.55f, -1.0f);
-            add({h - 0.02f, ly, 0}, {0.04f, 0.035f, S - 1.4f}, kc * 0.55f, -1.0f);
-            add({-h + 0.02f, ly, 0}, {0.04f, 0.035f, S - 1.4f}, kc * 0.55f, -1.0f);
         }
     }
     // Dim spot lights on short rods, every other column along each wall and a little way out from it.
@@ -880,7 +883,7 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
             add({x, (sy + H) * 0.5f, z}, {0.03f, H - sy, 0.03f}, wall * 3.0f);
             add({x, sy, z}, {0.26f, 0.15f, 0.26f}, wall * 3.5f);
             add({x, sy - 0.08f, z}, {0.15f, 0.02f, 0.15f}, Vec3{0.7f, 0.86f, 0.9f}, -1.0f);
-            emitters_.push_back({{x, std::min(sy, 3.8f), z}, {0, 0, 0}, 0.55f});
+            emitters_.push_back({{x, std::min(sy, 3.8f), z}, {0, 0, 0}, 0.7f});
         };
         for (int j = 0; j < along; j += 2) {
             const float t = (j - (along - 1) * 0.5f) * pitch;
@@ -890,7 +893,6 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
             if (std::fabs(t) >= 3.0f) spot(t, h - out);
         }
     }
-    for (int e : {-1, 1}) add({e * 1.66f, 1.95f, h - 0.04f}, {0.1f, 3.9f, 0.08f}, kc * 1.4f, -1.0f);
     for (const Box& b : shell->boxes) {
         const float m = std::max(b.color.x, std::max(b.color.y, b.color.z));
         if (b.glow == -1.0f && m > 0.9f) emitters_.push_back({b.c, b.s * 0.5f, std::min(m, 2.0f) * 0.5f});
@@ -912,9 +914,9 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     } else {
         door->setDoorStats("BACK", "to the lobby");
     }
-    door->position = {0, 1.95f, h - 0.04f};
+    door->position = {0, 1.95f, h - 0.0f};
     door->yaw = kPi;
-    door->scale = {3.0f, 3.75f, 0.06f};
+    door->scale = {3.0f, 3.75f, 0.05f};
     addCard(std::move(door));
 
     const int cols = static_cast<int>(slots.size()), fileCols = std::max(1, cols - doorCols);
@@ -939,7 +941,7 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
             const float nx = std::sin(sl.yaw), nz = std::cos(sl.yaw);
             const bool sideWall = std::fabs(nx) > 0.5f;
             const Vec3 fs = sideWall ? Vec3{0.05f, 1.44f, 2.16f} : Vec3{2.16f, 1.44f, 0.05f};
-            B.push_back({{card->position.x - nx * 0.012f, card->position.y, card->position.z - nz * 0.012f}, fs, Vec3{0.028f, 0.032f, 0.04f}, 0.0f, false});
+            B.push_back({{card->position.x - nx * 0.012f, card->position.y, card->position.z - nz * 0.012f}, fs, Vec3{0.028f, 0.032f, 0.04f}, 4.0f, false});
         }
         addCard(std::move(card));
     }
@@ -1085,7 +1087,7 @@ void FileRoom::updateLights() {
         if (!preview) continue;
         const Vec3 d = cd->position - eye_;
         if (d.x * d.x + d.z * d.z > 22.0f * 22.0f) continue;
-        add(cd->position + Vec3{std::sin(cd->yaw), 0.0f, std::cos(cd->yaw)} * 0.7f, cd->isDoor() ? 1.8f : 1.4f);
+        add(cd->position + Vec3{std::sin(cd->yaw), 0.0f, std::cos(cd->yaw)} * 0.7f, cd->isDoor() ? 0.5f : 1.4f);
     }
     const size_t n = std::min<size_t>(24, c.size());
     std::partial_sort(c.begin(), c.begin() + n, c.end(), [](const L& a, const L& b) { return a.score < b.score; });

@@ -66,6 +66,7 @@ set(SOURCES
     src/TextEditor.cpp
     src/ImageEditor.cpp
     src/FtpApp.cpp
+    src/Calculator.cpp
     src/StartMenu.cpp
     src/FileRoom.cpp
     src/InputSystem.cpp

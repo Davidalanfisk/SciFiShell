@@ -16,7 +16,7 @@ struct ToolDef {
 };
 const ToolDef kTools[] = {
     {"Web", Tool::Browser, 'W'},          {"Media", Tool::Media, 'M'},        {"System Monitor", Tool::Monitor, 'S'},
-    {"File Browser", Tool::FileBrowser, 'F'}, {"Editor", Tool::Editor, 'E'}, {"Terminal", Tool::Terminal, '>'}, {"Image Editor", Tool::Image, 'I'}, {"FTP", Tool::Ftp, 'T'},
+    {"File Browser", Tool::FileBrowser, 'F'}, {"Editor", Tool::Editor, 'E'}, {"Terminal", Tool::Terminal, '>'}, {"Image Editor", Tool::Image, 'I'}, {"FTP", Tool::Ftp, 'T'}, {"Calculator", Tool::Calc, 'C'},
 };
 
 std::string lower(std::string s) {
@@ -245,7 +245,8 @@ void StartMenu::paint(Bitmap& bm) {
         cy += 14;
         const int cols = 3;
         const float gap = 12, tw = (mid.w() - gap * (cols - 1)) / cols, th = 90;
-        for (int i = 0; i < 6; ++i) {
+        const int nTools = static_cast<int>(sizeof kTools / sizeof kTools[0]);
+        for (int i = 0; i < nTools; ++i) {
             const int col = i % cols, row = i / cols;
             Rect r{mid.x0 + col * (tw + gap), cy + row * (th + gap), mid.x0 + col * (tw + gap) + tw, cy + row * (th + gap) + th};
             card(bm, r, add(r, kTool, static_cast<int>(kTools[i].tool)));
@@ -255,7 +256,7 @@ void StartMenu::paint(Bitmap& bm) {
             label(bm, g.x0 + (48 - measureText(gl, 30, FontFace::UIBold)) * 0.5f, g.y0 + 35, gl, 30, FontFace::UIBold, t.accent);
             label(bm, r.x0 + 70, r.y0 + 52, ellipsize(kTools[i].name, 21, FontFace::UI, tw - 78), 21, FontFace::UI, t.text);
         }
-        cy += 2 * (th + gap) + 14;
+        cy += ((nTools + cols - 1) / cols) * (th + gap) + 14;
         label(bm, mid.x0 + 4, cy, "WINDOWS APPS", 22, FontFace::UIBold, t.dim);
         cy += 14;
         if (appNames_.empty()) {

@@ -17,6 +17,9 @@ struct SettingsItem {
     std::string hint;                     // small grey line under the title
     std::function<std::string()> value;   // optional live value shown on the right
     std::function<void()> act;            // click / select
+    std::function<float()> sliderGet;     // with sliderSet: draws a draggable slider on the card
+    std::function<void(float)> sliderSet;
+    float lo = 0.0f, hi = 1.0f;
 };
 
 struct SettingsCategory {
@@ -46,8 +49,10 @@ public:
     bool hidden() const { return hidden_; }
     bool exists() const { return open_ || hidden_; }
     void leave() { hoverBtn_ = 0; }
-    void releaseButton() { dragging_ = false; }
-    bool busy() const { return dragging_; }
+    void releaseButton() { dragging_ = false; sliderDrag_ = -1; }
+    bool busy() const { return dragging_ || sliderDrag_ >= 0; }
+    bool nudge(int dir);                       // left/right on a selected slider; false if not a slider
+    void setSliderFromPx(int item, float px);
     bool overTitle() const { return open_ && !fullscreen_ && hoverTitle_; }
     bool fullscreen() const { return fullscreen_; }
     Mat4 placement() const { return base_; }
@@ -88,6 +93,7 @@ public:
     bool hidden_ = false, dragging_ = false, hoverTitle_ = false;
     float grabX_ = 0, grabY_ = 0, grabDist_ = 2.0f;
     int hoverBtn_ = 0;
+    int sliderDrag_ = -1;
     int drawnHover_ = 0;
     bool fullscreen_ = false;
     Mat4 savedBase_;

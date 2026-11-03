@@ -140,7 +140,13 @@ void SettingsHub::rebuild() {
             const std::string val = static_cast<size_t>(i) < vals_.size() ? vals_[static_cast<size_t>(i)] : std::string();
             const float vw = val.empty() ? 0.0f : std::min(measureText(val, 30, FontFace::UIBold), cw * 0.45f);
             drawText(bm, x + 28, y + 42, ellipsize(it.title, 30, FontFace::UIBold, cw - 70 - vw), 30, FontFace::UIBold, tk.text);
-            if (!it.hint.empty()) drawText(bm, x + 28, y + 76, ellipsize(it.hint, 20, FontFace::UI, cw - 70 - vw), 20, FontFace::UI, tk.dim);
+            if (it.sliderGet && it.sliderSet) {
+                const float f = std::clamp((it.sliderGet() - it.lo) / std::max(1e-6f, it.hi - it.lo), 0.0f, 1.0f);
+                const float tx0 = x + 28, tx1 = x + cw - 28, ty = y + 72;
+                fillRoundRect(bm, tx0, ty, tx1, ty + 8, 4, ui::withAlpha(tk.border, 220));
+                fillRoundRect(bm, tx0, ty, tx0 + (tx1 - tx0) * f, ty + 8, 4, tk.accent);
+                fillRoundRect(bm, tx0 + (tx1 - tx0) * f - 9, ty - 6, tx0 + (tx1 - tx0) * f + 9, ty + 14, 9, tk.text);
+            } else if (!it.hint.empty()) drawText(bm, x + 28, y + 76, ellipsize(it.hint, 20, FontFace::UI, cw - 70 - vw), 20, FontFace::UI, tk.dim);
             if (!val.empty()) {
                 const std::string v = ellipsize(val, 30, FontFace::UIBold, vw);
                 drawText(bm, x + cw - 28 - measureText(v, 30, FontFace::UIBold), y + 60, v, 30, FontFace::UIBold, tk.accent);
@@ -182,8 +188,35 @@ int SettingsHub::hitButton(Vec3 o, Vec3 d) const {
     return 0;
 }
 
+void SettingsHub::setSliderFromPx(int item, float px) {
+    if (page_ < 0 || item < 0 || static_cast<size_t>(item + 1) >= rects_.size()) return;
+    const auto& items = cats_[static_cast<size_t>(page_)].items;
+    if (item >= static_cast<int>(items.size()) || !items[static_cast<size_t>(item)].sliderSet) return;
+    const SettingsItem& it = items[static_cast<size_t>(item)];
+    const Rect& r = rects_[static_cast<size_t>(item + 1)];
+    const float f = std::clamp((px - (r.x0 + 28)) / std::max(1.0f, (r.x1 - r.x0) - 56), 0.0f, 1.0f);
+    it.sliderSet(it.lo + (it.hi - it.lo) * f);
+    dirty_ = true;
+}
+
+bool SettingsHub::nudge(int dir) {
+    if (page_ < 0 || sel_ < 1) return false;
+    const auto& items = cats_[static_cast<size_t>(page_)].items;
+    if (sel_ - 1 >= static_cast<int>(items.size())) return false;
+    const SettingsItem& it = items[static_cast<size_t>(sel_ - 1)];
+    if (!it.sliderGet || !it.sliderSet) return false;
+    it.sliderSet(std::clamp(it.sliderGet() + dir * (it.hi - it.lo) / 20.0f, it.lo, it.hi));
+    dirty_ = true;
+    return true;
+}
+
 void SettingsHub::pointer(Vec3 o, Vec3 d) {
     if (fullscreen_) applyFullscreen();
+    if (sliderDrag_ >= 0) {
+        float sx, sy, st;
+        if (toPanel(o, d, sx, sy, st)) setSliderFromPx(sliderDrag_, sx);
+        return;
+    }
     if (dragging_) {
         const Vec3 p = o + d * grabDist_;
         Vec3 f{p.x - o.x, 0, p.z - o.z};
@@ -310,6 +343,17 @@ bool SettingsHub::activateHit(Vec3 o, Vec3 d) {
     const int h = hitIndex(o, d);
     if (h < 0) return false;
     sel_ = h;
+    if (page_ >= 0 && h >= 1) {
+        const auto& items = cats_[static_cast<size_t>(page_)].items;
+        if (h - 1 < static_cast<int>(items.size()) && items[static_cast<size_t>(h - 1)].sliderSet) {
+            float sx, sy, st;
+            if (toPanel(o, d, sx, sy, st)) {
+                sliderDrag_ = h - 1;
+                setSliderFromPx(sliderDrag_, sx);
+            }
+            return true;
+        }
+    }
     activateSelected();
     return true;
 }

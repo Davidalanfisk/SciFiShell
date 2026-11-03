@@ -25,6 +25,7 @@
 #include "TextEditor.h"
 #include "ImageEditor.h"
 #include "FtpApp.h"
+#include "Calculator.h"
 #include "SettingsPanel.h"
 #include "TaskSwitcher.h"
 #include "LCARSUI.h"
@@ -140,6 +141,7 @@ private:
     std::unique_ptr<TextEditor> editor2d_;
     std::unique_ptr<ImageEditor> imageEd_;
     std::unique_ptr<FtpApp> ftp_;
+    std::unique_ptr<Calculator> calc_;
     PanelApp* panel_ = nullptr;  // the most recently opened floating app panel (any number can be open)
     void openPanel(PanelApp* p);
     void openSettingsWin();
@@ -181,6 +183,7 @@ private:
     void winText(WinRef w, const std::string& s);
     void winHide(WinRef w);
     void winToggleFull(WinRef w);
+    WinRef fullWin();
     void winRender(WinRef w);
     bool winEscape(WinRef w);  // the window's own Escape action (leave address bar / fullscreen / sub-page); false if it had none
     bool winBack(WinRef w);    // gamepad B / VR back: step back inside the window, else minimise it

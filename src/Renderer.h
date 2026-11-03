@@ -78,6 +78,8 @@ public:
     // Up to eight interior light points (xyz + intensity) that spill onto walls and the floor; intensity 0 = unused.
     void setLights(const float* xyzw32) { std::copy(xyzw32, xyzw32 + 96, lights_); }
     void clearLights() { std::fill(lights_, lights_ + 96, 0.0f); }
+    // Interior lighting tune: spot gain, wall brightness cap, wall base level, ambient, light falloff.
+    void setLightTune(float spot, float cap, float base, float ambient, float falloff) { tune_[0] = spot; tune_[1] = cap; tune_[2] = base; tune_[3] = ambient; tune_[4] = falloff; }
     // Procedural radial tool ring on a unit quad (any label supplies the required SRB).
     void drawRing(const GpuLabel& label, const Mat4& world, int segments, float hover, float rotation, float open,
                   float pulse);
@@ -178,6 +180,7 @@ private:
     float lightDir_[4] = {-0.4f, -1.0f, -0.6f, 0.0f};
     float accent_[4] = {0.1f, 0.85f, 1.0f, 0.0f};
     float lights_[96] = {};
+    float tune_[8] = {1.07f, 0.02f, 0.01f, 0.0f, 0.6f, 0, 0, 0};
     float alt_[4] = {1.0f, 0.65f, 0.1f, 0.0f};
 };
 

@@ -8,6 +8,7 @@ cbuffer Constants
     float4   g_Accent;
     float4   g_Alt;
     float4   g_Lights[24];  // interior light points: xyz position, w intensity
+    float4   g_Tune[2];     // lighting sliders: [0] spot gain, wall cap, wall base, ambient; [1].x falloff
 };
 
 Texture2D g_Tex;
@@ -41,9 +42,10 @@ float spillLight(float3 p, float3 n)
         float3 d = g_Lights[i].xyz - p;
         float r2 = dot(d, d);
         float facing = saturate(dot(n, d * rsqrt(r2 + 1e-4)) * 0.75 + 0.25);
-        s += g_Lights[i].w * facing / ((1.0 + r2 * 0.14) * (1.0 + r2 * 0.14));
+        float fo = 1.0 + r2 * g_Tune[1].x;
+        s += g_Lights[i].w * facing / (fo * fo);
     }
-    return s;
+    return s * g_Tune[0].x;
 }
 
 struct PSInput
@@ -345,8 +347,8 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
             tile *= 1.0 - 0.7 * seam;
             float3 vd = normalize(In.WPos - g_Light.xyz);
             float sheen = pow(1.0 - saturate(abs(vd.y)), 4.0) * 0.5;
-            float3 c = tile * (1.0 + sheen) + float3(0.002, 0.0022, 0.0025);
-            c += float3(0.8, 0.85, 0.9) * spillLight(In.WPos, float3(0, 1, 0)) * 0.12 * (0.5 + 0.5 * tr) * (1.0 - 0.6 * seam);
+            float3 c = tile * 0.35 * (1.0 + sheen) + float3(0.0004, 0.0004, 0.0005);
+            c += float3(0.8, 0.85, 0.9) * spillLight(In.WPos, float3(0, 1, 0)) * 0.06 * (0.5 + 0.5 * tr) * (1.0 - 0.6 * seam);
             Color = float4(c, 1.0);
             return;
         }
@@ -458,7 +460,17 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
     float3 spillAdd = float3(0, 0, 0);
     bool shellWall = false;
     // Interior shell blocks (g_Params.z == 2): dark panelled walls with seams, per-panel tone, grime and a gloomy falloff.
-    if (g_Params.z > 1.5 && g_Params.y < 0.5 && max(g_Color.r, max(g_Color.g, g_Color.b)) < 0.2)
+    if (g_Params.z > 1.5 && g_Params.x > 3.5 && g_Params.y < 0.5)
+    {
+        // Glossy black (picture frames): no texture, just a faint sheen where the spot lights fall.
+        shellWall = true;
+        float sh = spillLight(In.WPos, n);
+        sh = 0.2 * sh / (0.2 + sh);
+        base = float3(0.004, 0.0045, 0.005);
+        light = 1.0;
+        spillAdd = float3(0.6, 0.8, 0.9) * sh * 0.12;
+    }
+    else if (g_Params.z > 1.5 && g_Params.y < 0.5 && max(g_Color.r, max(g_Color.g, g_Color.b)) < 0.2)
     {
         shellWall = true;
         float2 uv2 = abs(n.y) > 0.5 ? In.WPos.xz : (abs(n.x) > 0.5 ? In.WPos.zy : In.WPos.xy);
@@ -475,11 +487,14 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         base *= 1.0 - 0.7 * seam * detailK;
         // Hairline accent light running along every fourth seam row of the walls.
         float lineRow = (fmod(pid.y, 3.0) < 0.5 && abs(n.y) < 0.5) ? 1.0 : 0.0;
-        spillAdd = float3(0.14, 0.45, 0.6) * spillLight(In.WPos, n) * (0.3 + base * 8.0) * (1.0 - 0.5 * seam * detailK);
+        // Compressed so crowded small rooms cannot blow out, plus a faint floor so walls far from every light are not black.
+        float sp = spillLight(In.WPos, n);
+        sp = g_Tune[0].y * sp / (g_Tune[0].y + sp) + g_Tune[0].z;
+        spillAdd = float3(0.14, 0.45, 0.6) * sp * (0.3 + base * 8.0) * (1.0 - 0.5 * seam * detailK);
         base += float3(0.2, 0.8, 1.0) * 0.05 * seam * lineRow * detailK;
         float below = smoothstep(0.0, 2.6, In.WPos.y);
         float ceilGlow = smoothstep(4.5, 8.5, In.WPos.y);
-        light = (0.02 + 0.05 * diffuse) * (abs(n.y) > 0.5 ? 1.0 : (0.45 + 0.55 * below));
+        light = (0.02 + 0.05 * diffuse) * g_Tune[0].w * (abs(n.y) > 0.5 ? 1.0 : (0.45 + 0.55 * below));
         base += float3(0.25, 0.8, 1.0) * ceilGlow * 0.03 * (abs(n.y) < 0.5 ? 1.0 : 0.0);
     }
 

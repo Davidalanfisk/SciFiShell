@@ -259,6 +259,7 @@ bool AppShell::init() {
     };
     imageEd_->restore = [this] { openPanel(imageEd_.get()); };
     ftp_ = std::make_unique<FtpApp>(renderer_);
+    calc_ = std::make_unique<Calculator>(renderer_);
     ftp_->requestUpload = [this] {
         openPanel(files2d_.get());
         files2d_->pickHandler = [this](const std::string& path) {
@@ -368,7 +369,7 @@ bool AppShell::init() {
             ShellExecuteA(nullptr, "open", "powershell.exe", "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File update.ps1", nullptr, SW_HIDE);
 #endif
         if (std::getenv("SCIFI_OPEN_SETTINGS")) settingsPanel_->open(head_.eye, head_.forward);  // debugging aid
-        if (!std::getenv("SCIFI_START_ROOM") && !std::getenv("SCIFI_START_PATH") && !std::getenv("SCIFI_NO_CITY")) toggleCity(true);  // SCIFI_NO_CITY: skip the city build when testing UI  // the city is the home view
+        if (!std::getenv("SCIFI_START_PATH") && !std::getenv("SCIFI_NO_CITY")) toggleCity(true);  // SCIFI_NO_CITY: skip the city build when testing UI  // the city is the home view
 #ifdef _WIN32
         if (const char* oa = std::getenv("SCIFI_OPEN_APP")) launchApp(std::max(0, std::atoi(oa) - 1));  // debugging aid: 1 = Notepad, 2 = next catalog entry...
 #endif
@@ -416,8 +417,7 @@ void AppShell::enterFileRoom() {
         if (const char* sr = std::getenv("SCIFI_ROOM")) room_->debugEnter(std::atoi(sr));  // debugging aid
         if (room_->building()) { camera_.position = {0, 1.6f, std::getenv("SCIFI_CAM_Z") ? static_cast<float>(std::atof(std::getenv("SCIFI_CAM_Z"))) : 1.6f}; room_->setEye(camera_.position); }
     }
-    else if (std::getenv("SCIFI_START_ROOM")) room_->load("");
-    else room_->loadEmpty();  // start with just the grid; the Files tool on the ring loads "This PC"
+    else room_->loadEmpty();  // start with just the grid; the city is the home view
     input_.setRelativeMouse(true);
     menu_->setStatus("Ready");
 }
@@ -491,6 +491,26 @@ void AppShell::buildSettingsHub() {
                          [this, save] { settings_.postFx = !settings_.postFx; save(); }});
     gfx.items.push_back({"VSYNC", "Sync to monitor refresh", [this, onOff] { return onOff(settings_.vsync); },
                          [this, save] { settings_.vsync = !settings_.vsync; save(); }});
+    auto slider = [this, &gfx](const char* title, float* v, float lo, float hi) {
+        SettingsItem it;
+        it.title = title;
+        it.value = [v] { char b[16]; std::snprintf(b, sizeof b, "%.2f", *v); return std::string(b); };
+        it.sliderGet = [v] { return *v; };
+        it.sliderSet = [this, v](float x) { *v = x; settings_.save(); };
+        it.lo = lo;
+        it.hi = hi;
+        gfx.items.push_back(std::move(it));
+    };
+    slider("SPOT LIGHT OUTPUT", &settings_.lightSpot, 0.0f, 3.0f);
+    slider("SPOT FALLOFF", &settings_.lightFalloff, 0.04f, 0.6f);
+    slider("WALL BRIGHTNESS CAP", &settings_.lightCap, 0.02f, 1.5f);
+    slider("WALL BASE LEVEL", &settings_.lightBase, 0.0f, 0.08f);
+    slider("AMBIENT", &settings_.lightAmbient, 0.0f, 3.0f);
+    gfx.items.push_back({"RESET LIGHTING", "Back to the default interior lighting", nullptr, [this, save] {
+                             settings_.lightSpot = 1.07f; settings_.lightCap = 0.02f; settings_.lightBase = 0.01f;
+                             settings_.lightAmbient = 0.0f; settings_.lightFalloff = 0.6f;
+                             save();
+                         }});
     cats.push_back(std::move(gfx));
 
     SettingsCategory wm{"WINDOWS", "Arrange and move windows", "SHELL", {}};
@@ -638,7 +658,7 @@ std::vector<AppShell::WinRef> AppShell::allWins() {
     for (auto& a : apps_) v.push_back({kWinApp, a.get()});
 #endif
     for (PanelApp* p : {static_cast<PanelApp*>(monitor_.get()), static_cast<PanelApp*>(terminal_.get()), static_cast<PanelApp*>(start_.get()),
-                        static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get()), static_cast<PanelApp*>(imageEd_.get()), static_cast<PanelApp*>(ftp_.get()),
+                        static_cast<PanelApp*>(files2d_.get()), static_cast<PanelApp*>(editor2d_.get()), static_cast<PanelApp*>(imageEd_.get()), static_cast<PanelApp*>(ftp_.get()), static_cast<PanelApp*>(calc_.get()), static_cast<PanelApp*>(calc_.get()),
                         static_cast<PanelApp*>(media_.get())})
         if (p) v.push_back({kWinPanel, p});
     v.push_back({kWinSettings, settingsPanel_.get()});
@@ -705,8 +725,13 @@ float AppShell::winHit(WinRef w, const Vec3& o, const Vec3& d) {
 // The window drawn in front wins, however near or far it is.
 AppShell::WinRef AppShell::topWinAt(const Vec3& o, const Vec3& d) {
     for (size_t i = winOrder_.size(); i-- > 0;)
-        if (winHit(winOrder_[i], o, d) >= 0) return winOrder_[i];
+        if (!winFull(winOrder_[i]) && winHit(winOrder_[i], o, d) >= 0) return winOrder_[i];
     return {};
+}
+
+// Fullscreen is remembered per window; only the focused one is shown that way, so Alt+Tab can move between them.
+AppShell::WinRef AppShell::fullWin() {
+    return focus_.p && winFull(focus_) ? focus_ : WinRef{};
 }
 
 bool AppShell::winFull(WinRef w) {
@@ -1095,17 +1120,10 @@ void AppShell::runTool(Tool tool) {
             menu_->setStatus("Browser not built in");
 #endif
             break;
-        case Tool::Files:
-            if (cityMode_) toggleCity(false);
-            if (viewer_->active()) viewer_->close();
-            if (!room_->loaded()) {
-                room_->load("");  // "" = the "This PC" drives room
-                menu_->setStatus("This PC");
-            }
-            break;
         case Tool::Editor: openPanel(editor2d_.get()); break;
         case Tool::Image: openPanel(imageEd_.get()); break;
         case Tool::Ftp: openPanel(ftp_.get()); break;
+        case Tool::Calc: openPanel(calc_.get()); break;
         case Tool::Monitor: openPanel(monitor_.get()); break;
         case Tool::FileBrowser: openPanel(files2d_.get()); break;
         case Tool::Terminal: openPanel(terminal_.get()); break;
@@ -1218,16 +1236,20 @@ bool AppShell::scriptExec(const std::string& line) {
     } else if (cmd == "tool") {
         std::string v;
         is >> v;
-        if (v == "files") runTool(Tool::Files);
-        else if (v == "settings") runTool(Tool::Settings);
+        if (v == "settings") runTool(Tool::Settings);
         else if (v == "theme") runTool(Tool::Theme);
         else if (v == "monitor") runTool(Tool::Monitor);
         else if (v == "terminal") runTool(Tool::Terminal);
         else if (v == "files2d") runTool(Tool::FileBrowser);
         else if (v == "editor") runTool(Tool::Editor);
+        else if (v == "files2dpath") { std::string s; std::getline(is >> std::ws, s); files2d_->navigate(s); }
         else if (v == "image") { runTool(Tool::Image); std::string s; std::getline(is >> std::ws, s); if (!s.empty()) imageEd_->openPath(s); }
         else if (v == "imgact") { int id = 0; is >> id; imageEd_->command(id); }
         else if (v == "ftp") runTool(Tool::Ftp);
+        else if (v == "calc") runTool(Tool::Calc);
+        else if (v == "calcmode") { int m = 0; is >> m; calc_->setMode(static_cast<Calculator::Mode>(m)); }
+        else if (v == "calcbase") { int b = 10; is >> b; calc_->setBase(b); }
+        else if (v == "calctype") { std::string s; std::getline(is >> std::ws, s); calc_->feed(s); }
         else if (v == "edtype") { std::string s; std::getline(is >> std::ws, s); editor2d_->text(s); }
         else if (v == "edkey") { editor2d_->key(EditKey::Enter); }
         else if (v == "edsave") { editor2d_->key(EditKey::Save); }
@@ -1721,8 +1743,8 @@ void AppShell::switchTo(int id) {
         flyToWin(focus_);
         return;
     }
-    PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get(), media_.get(), imageEd_.get(), ftp_.get()};
-    if (id >= 30 && id < 37) {
+    PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get(), media_.get(), imageEd_.get(), ftp_.get(), calc_.get()};
+    if (id >= 30 && id < 38) {
         openPanel(panels[id - 30]);
         flyToWin(focus_);
         return;
@@ -1751,10 +1773,10 @@ void AppShell::handleSwitcher(FrameInput& in, PadState& pad) {
         int current = 0;
         std::vector<TaskSwitcher::Item> items;
         {
-            PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get(), media_.get(), imageEd_.get(), ftp_.get()};
-            const char* names[] = {"MONITOR", "TERMINAL", "FILES", "EDITOR", "MEDIA", "IMAGE", "FTP"};
+            PanelApp* const panels[] = {monitor_.get(), terminal_.get(), files2d_.get(), editor2d_.get(), media_.get(), imageEd_.get(), ftp_.get(), calc_.get()};
+            const char* names[] = {"MONITOR", "TERMINAL", "FILES", "EDITOR", "MEDIA", "IMAGE", "FTP", "CALC"};
             const bool mediaPlaying = mediaNow().active;  // keeps its place in the switcher while it plays on with the window closed
-            for (int i = 0; i < 7; ++i)
+            for (int i = 0; i < 8; ++i)
                 if (panels[i]->exists() || (i == 4 && mediaPlaying)) {
                     items.push_back({30 + i, names[i], panels[i]->exists() ? (panels[i]->hidden() ? "Minimised" : "Window") : "Now playing", false});
                     if (focus_ == WinRef{kWinPanel, panels[i]}) current = 30 + i;
@@ -1989,13 +2011,10 @@ void AppShell::tick(double dt) {
         const float wth = std::tan(kFovY * 0.5f), wasp = renderer_.aspect();
         int sw = 1, sh = 1;
         SDL_GetWindowSize(window_, &sw, &sh);
-        WinRef fsw;
-        for (const WinRef& w : winOrder_)
-            if (winFull(w)) fsw = w;
-        if (fsw.p && vrOn_) {
-            winToggleFull(fsw);
-            fsw = {};
-        }
+        const WinRef fsw = fullWin();
+        if (vrOn_)
+            for (const WinRef& w : winOrder_)
+                if (winFull(w)) winToggleFull(w);
         if (overlayBusy || winOrder_.empty() || vrOn_) {
             winFocus_ = false;
             recT_ = -1.0f;
@@ -2128,8 +2147,8 @@ void AppShell::tick(double dt) {
                 } else if (f.kind == kWinSettings) {
                     if (up) settingsPanel_->move(0, -1);
                     if (down) settingsPanel_->move(0, 1);
-                    if (in.left || pad.leftPressed) settingsPanel_->move(-1, 0);
-                    if (in.right || pad.rightPressed) settingsPanel_->move(1, 0);
+                    if (in.left || pad.leftPressed) { if (!settingsPanel_->nudge(-1)) settingsPanel_->move(-1, 0); }
+                    if (in.right || pad.rightPressed) { if (!settingsPanel_->nudge(1)) settingsPanel_->move(1, 0); }
                     if (in.select) settingsPanel_->activateSelected();
                     up = down = in.left = in.right = in.select = pad.leftPressed = pad.rightPressed = false;
                 }
@@ -2423,6 +2442,7 @@ void AppShell::tick(double dt) {
         editor2d_->update(dt);
         imageEd_->update(dt);
         ftp_->update(dt);
+        calc_->update(dt);
         media_->update(dt);
         mediaStep();
         appsPanel_->update(dt, time_);
@@ -2485,9 +2505,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
     // Planar reflection: draw the room flipped under the floor first; the translucent floor then lets it show through.
     if (state_ == State::FileRoom && desktopPass && !vrOn_) {
         // A fullscreen window fills the view; the pointer is a virtual cursor over it.
-        WinRef fw;
-        for (const WinRef& w : winOrder_)
-            if (winFull(w)) fw = w;
+        const WinRef fw = fullWin();
         if (fw.p) {
             renderer_.setView(Mat4::identity(), proj);
             renderer_.clearDepth();
@@ -2498,6 +2516,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         }
     }    static const bool dbgNoMirror = std::getenv("SCIFI_NOMIRROR") != nullptr, dbgNoPost = std::getenv("SCIFI_NOPOST") != nullptr;
     renderer_.setPostFx(settings_.postFx && !dbgNoPost);
+    renderer_.setLightTune(settings_.lightSpot, settings_.lightCap, settings_.lightBase, settings_.lightAmbient, settings_.lightFalloff);
     if (city_) city_->setDrawScale(settings_.distScale());
     if (state_ == State::FileRoom && !dbgNoMirror && true) {
         renderer_.beginReflection();
@@ -2524,6 +2543,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
     }
     if (state_ == State::FileRoom)
         for (const WinRef& w : winOrder_) {
+            if (winFull(w)) continue;
             renderer_.clearDepth();
             winRender(w);
             renderHandle(w);

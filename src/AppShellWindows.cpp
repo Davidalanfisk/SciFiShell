@@ -146,7 +146,9 @@ void AppShell::arrangeArc() {
     const float gap = 0.18f;
     float sum = 0;
     for (const Item& i : its) sum += i.f.w + gap;
-    const float R = clampf(sum / 2.4f, 1.9f, 6.0f);
+    // Far enough back that the whole arc fits across the view, so every window can be seen at once.
+    const float tv = std::tan(kFovY * 0.5f), hFov = std::atan(tv * renderer_.aspect());
+    const float R = clampf(sum / (2.0f * hFov), 1.9f, 12.0f);
     float cur = -sum / R * 0.5f;
     for (const Item& i : its) {
         const float span = (i.f.w + gap) / R, th = cur + span * 0.5f;
@@ -175,7 +177,8 @@ void AppShell::arrangeTile() {
     const int cols = n <= 3 ? n : (n == 4 ? 2 : (n <= 9 ? 3 : static_cast<int>(std::ceil(std::sqrt(static_cast<float>(n))))));
     const int rows = (n + cols - 1) / cols;
     const float cellW = 1.9f, cellH = 1.25f, g = 0.22f;
-    const float R = std::max(2.3f, cols * (cellW + g) / 2.6f);
+    const float tv = std::tan(kFovY * 0.5f), hFov = std::atan(tv * renderer_.aspect());
+    const float R = clampf(std::max({2.3f, cols * (cellW + g) / (1.6f * hFov), rows * (cellH + g) / (1.25f * tv)}), 2.3f, 12.0f);
     for (int idx = 0; idx < n; ++idx) {
         const int r = idx / cols, c = idx % cols, inRow = std::min(cols, n - r * cols);
         const float off = static_cast<float>(c) - (inRow - 1) * 0.5f;
