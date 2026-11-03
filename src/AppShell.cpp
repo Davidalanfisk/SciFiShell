@@ -159,11 +159,14 @@ bool AppShell::init() {
     cb.exitShell = [this] { running_ = false; };
     menu_ = std::make_unique<LCARSMenu>(renderer_, cb);
     room_ = std::make_unique<FileRoom>(renderer_);
+    settings_.load();
     city_ = std::make_unique<City>(renderer_);
-    city_->start();
+    if (settings_.showCity) {
+        city_->start();
+        cityStarted_ = true;
+    }
     viewer_ = std::make_unique<Viewer>(renderer_);
     switcher_ = std::make_unique<TaskSwitcher>(renderer_);
-    settings_.load();
     settingsPanel_ = std::make_unique<SettingsHub>(renderer_);
     osk_ = std::make_unique<OnScreenKeyboard>(renderer_);
     {
@@ -471,6 +474,8 @@ void AppShell::buildSettingsHub() {
     cats.push_back(std::move(shell));
 
     SettingsCategory gfx{"GRAPHICS", "Performance and quality", "SHELL", {}};
+    gfx.items.push_back({"CITY", "Show the city (F9). Off saves a lot of GPU and memory", [this, onOff] { return onOff(settings_.showCity); },
+                         [this] { setCityEnabled(!settings_.showCity); }});
     gfx.items.push_back({"ANTI-ALIASING", "Edge smoothing (restart to apply)",
                          [this] {
                              static const char* n[] = {"OFF", "2X", "4X"};
@@ -1401,6 +1406,10 @@ void AppShell::scriptTick(double dt) {
 
 void AppShell::toggleCity(bool on) {
     if (!city_ || on == cityMode_) return;
+    if (on && !settings_.showCity) {
+        menu_->setStatus("CITY IS OFF - press F9 or use Settings > Graphics to turn it on");
+        return;
+    }
     cityMode_ = on;
     room_->setCardsVisible(!on);
     if (on) clearRoomPending_ = true;  // drop the building's walls: they sit at the map's centre, on top of the hub
@@ -1428,6 +1437,21 @@ void AppShell::toggleCity(bool on) {
         cityCamSet_ = true;
         camera_ = Camera{};
         menu_->setStatus("");
+    }
+}
+
+void AppShell::setCityEnabled(bool on) {
+    settings_.showCity = on;
+    settings_.save();
+    if (on) {
+        if (!cityStarted_ && city_) {
+            city_->start();
+            cityStarted_ = true;
+        }
+        toggleCity(true);
+    } else {
+        toggleCity(false);
+        menu_->setStatus("CITY OFF - press F9 to bring it back");
     }
 }
 
@@ -1853,6 +1877,7 @@ void AppShell::tick(double dt) {
         settings_.save();
     }
     input_.arrangeKey = settings_.arrangeKey ? settings_.arrangeKey : SDLK_F8;
+    if (in.cityToggle && !(focus_.p && winTyping(focus_))) setCityEnabled(!settings_.showCity);
     if (in.arrange && !((focus_.p && winTyping(focus_)) && input_.arrangeKey < 256)) arrangeCycle();
     // Only the focused window can take typed text; otherwise the keyboard walks the camera.
     const bool winTypingNow = focus_.p && winTyping(focus_);
@@ -2472,7 +2497,7 @@ void AppShell::tick(double dt) {
     for (auto& a : apps_) a->update(dt);
 #endif
     }
-    if (city_) city_->update(dt, state_ == State::FileRoom, head_.eye);
+    if (city_ && cityStarted_) city_->update(dt, state_ == State::FileRoom, head_.eye);
     if (clearRoomPending_) {
         clearRoomPending_ = false;
         if (cityMode_ && state_ == State::FileRoom) room_->loadEmpty();

@@ -52,7 +52,10 @@ std::string upper(std::string s) {
 namespace {
 constexpr int kStepN = 7;  // treads in the ring round each slab: a gentle stair every foot can climb
 constexpr float kStepTread = 0.5f, kStepRise = 1.0f / 8.0f;
-constexpr float kStRun = 0.5f, kStMaxRise = 0.25f, kStDeck = 4.5f, kStHalfW = 2.8f;  // station stairs and deck
+// Street-level buses: they run on the ground and only climb over an earlier bus where they would cross it.
+constexpr float kBusGround = 0.14f, kBusBridge = 3.9f, kBusRamp = 8.0f, kBusFlat = 2.0f;
+constexpr float kStEnd = 4.0f;    // a bus ends this far outside the slab edge, at the foot of the step ring, where its station stands
+constexpr float kStGate = 3.6f;   // station gate pylons stand this far to either side of the bus
 constexpr int kRampSteps = 8;
 constexpr float kRampStep = 0.8f, kRampW = 7.0f;
 struct RampStep { float cx, cz, sx, sz, top; };
@@ -1010,19 +1013,18 @@ void City::bundles(std::vector<Bundle>& out) const {
         const NetRoute& nr = net_[ri];
         const Platform& pl = platforms_[nr.plat];
         if (pl.grow < 0.3f) continue;
-        const float level = 5.5f + 0.5f * float(ri % 5);
         Bundle b{3, nr.plat, pl.kind == 2 ? 4 : 1, 0.5f, pl.kind == 2 ? 0.28f : 0.45f, pl.grow, {}};
-        for (const Vec3& v : nr.pts) b.pts.push_back({v.x, level, v.z});
-        // The lane runs on into the region and ends over its station, which sits just inside the near edge.
+        for (const Vec3& v : nr.pts) b.pts.push_back(v);  // heights come from the network plan: street level, or a bridge
+        // The bus ends at the foot of the step ring, where its station stands.
         if (b.pts.size() >= 2) {
             Vec3& e = b.pts.back();
             const Vec3 q = b.pts[b.pts.size() - 2];
             if (std::fabs(e.x - q.x) > std::fabs(e.z - q.z)) {
                 const float s = e.x > q.x ? 1.0f : -1.0f;
-                e.x = pl.cx - s * pl.side * 0.5f + s * kStDeck;
+                e.x = pl.cx - s * (pl.side * 0.5f + kStEnd);
             } else {
                 const float s = e.z > q.z ? 1.0f : -1.0f;
-                e.z = pl.cz - s * pl.side * 0.5f + s * kStDeck;
+                e.z = pl.cz - s * (pl.side * 0.5f + kStEnd);
             }
         }
         out.push_back(std::move(b));
@@ -1059,7 +1061,7 @@ void City::drawBundle(Renderer& r, const Bundle& b, Vec3 col, float lf, float lb
                 ox = uz[s];
                 oz = -ux[s];
             }
-            v[k] = {b.pts[k].x + ox * o, laneY, b.pts[k].z + oz * o};
+            v[k] = {b.pts[k].x + ox * o, b.pts[k].y, b.pts[k].z + oz * o};
         }
         std::vector<float> cum{0.0f};
         for (size_t k = 0; k + 1 < n; ++k) cum.push_back(cum.back() + std::fabs(v[k + 1].x - v[k].x) + std::fabs(v[k + 1].z - v[k].z));
@@ -1067,14 +1069,18 @@ void City::drawBundle(Renderer& r, const Bundle& b, Vec3 col, float lf, float lb
             const float mx = (v[k].x + v[k + 1].x) * 0.5f, mz = (v[k].z + v[k + 1].z) * 0.5f;
             if (farFrom(mx, mz) && farFrom(v[k].x, v[k].z) && farFrom(v[k + 1].x, v[k + 1].z)) continue;
             const float lx = std::fabs(v[k + 1].x - v[k].x), lz = std::fabs(v[k + 1].z - v[k].z);
-            renderBox(r, {mx, laneY, mz}, lx > lz ? Vec3{lx + b.laneW, 0.18f, b.laneW} : Vec3{b.laneW, 0.18f, lz + b.laneW}, col * 0.45f, 0.3f, 5, 1, 0, 0);
+            if (std::fabs(v[k + 1].y - v[k].y) > 0.05f) {
+                drawSlope(r, {v[k].x, v[k].y + 0.09f, v[k].z}, {v[k + 1].x, v[k + 1].y + 0.09f, v[k + 1].z}, b.laneW, 0.18f, col * 0.45f, 0.3f, 5, 1);
+                continue;
+            }
+            renderBox(r, {mx, v[k].y, mz}, lx > lz ? Vec3{lx + b.laneW, 0.18f, b.laneW} : Vec3{b.laneW, 0.18f, lz + b.laneW}, col * 0.45f, 0.3f, 5, 1, 0, 0);
         }
         const float len = cum.back();
-        // Lane risers at both ends drop to the board.
+        // Lane risers at both ends drop to the board; a bus on the ground needs none.
         for (int e = 0; e < 2; ++e) {
             const Vec3 q = e ? v[n - 1] : v[0];
-            if (farFrom(q.x, q.z) || (e && b.kind == 3)) continue;  // drive lanes end in a station instead
-            renderBox(r, {q.x, (level + kSlabH) * 0.5f, q.z}, {0.2f, level - kSlabH, 0.2f}, col * (0.4f + 0.8f * act), 0.3f, 5, 1, 0, 0);
+            if (farFrom(q.x, q.z) || (e && b.kind == 3) || q.y < kSlabH + 0.5f) continue;  // drive buses end in a station instead
+            renderBox(r, {q.x, (q.y + kSlabH) * 0.5f, q.z}, {0.2f, q.y - kSlabH, 0.2f}, col * (0.4f + 0.8f * act), 0.3f, 5, 1, 0, 0);
         }
         if (!anim || len < 2.0f) continue;
         // Pulses: lanes in the first half carry data away from the start, the rest bring it back; a lone lane carries both.
@@ -1093,26 +1099,37 @@ void City::drawBundle(Renderer& r, const Bundle& b, Vec3 col, float lf, float lb
                 if (farFrom(px, pz)) continue;
                 const float fade = 0.35f + 0.65f * std::sin(clampf(d / len, 0.0f, 1.0f) * kPi);
                 const bool alongX = std::fabs(v[sgi + 1].x - v[sgi].x) > std::fabs(v[sgi + 1].z - v[sgi].z);
-                renderBox(r, {px, laneY + 0.06f, pz}, alongX ? Vec3{1.5f, 0.34f, b.laneW + 0.1f} : Vec3{b.laneW + 0.1f, 0.34f, 1.5f},
+                const float u1 = (sgi + 1 < v.size()) ? u : 0.0f;
+                const float py0 = v[sgi].y + (v[sgi + 1].y - v[sgi].y) * u1;
+                renderBox(r, {px, py0 + 0.06f, pz}, alongX ? Vec3{1.5f, 0.34f, b.laneW + 0.1f} : Vec3{b.laneW + 0.1f, 0.34f, 1.5f},
                           col * ((0.5f + 1.7f * load) * fade), 0.3f, 5, 1, 0, 0);
             }
         }
     }
-    // Gantry: a pair of legs and a crossbeam every so often, and at every corner.
-    auto gantry = [&](float x, float z, float ax, float az) {
+    // Gantry: a pair of legs and a crossbeam every so often, and at every corner. Drive buses lie on the ground and only
+    // have supports under their bridge spans.
+    auto gantry = [&](float x, float z, float ax, float az, float y) {
         if (farFrom(x, z)) return;
         const float sx = std::fabs(az), sz = std::fabs(ax);  // the span runs across the lane direction
-        renderBox(r, {x, (level - 0.3f) * 0.5f, z}, {0.5f, level - 0.3f, 0.5f}, col * 0.5f, 0.3f, 6, 1, 0, 0);
-        renderBox(r, {x, level - 0.3f, z}, {0.5f + sx * (width + 1.2f), 0.3f, 0.5f + sz * (width + 1.2f)}, col * 0.55f, 0.3f, 6, 1, 0, 0);
+        renderBox(r, {x, (y - 0.3f) * 0.5f, z}, {0.5f, y - 0.3f, 0.5f}, col * 0.5f, 0.3f, 6, 1, 0, 0);
+        renderBox(r, {x, y - 0.3f, z}, {0.5f + sx * (width + 1.2f), 0.3f, 0.5f + sz * (width + 1.2f)}, col * 0.55f, 0.3f, 6, 1, 0, 0);
     };
+    if (b.kind == 3) {
+        for (size_t k = 0; k + 1 < n; ++k)
+            if (b.pts[k].y > 1.0f && b.pts[k + 1].y > 1.0f) {
+                gantry(b.pts[k].x, b.pts[k].z, ux[k], uz[k], b.pts[k].y);
+                gantry(b.pts[k + 1].x, b.pts[k + 1].z, ux[k], uz[k], b.pts[k + 1].y);
+            }
+        return;
+    }
     for (size_t k = 0; k + 1 < n; ++k) {
         const float dx = b.pts[k + 1].x - b.pts[k].x, dz = b.pts[k + 1].z - b.pts[k].z, L = std::sqrt(dx * dx + dz * dz);
         const int cnt = int(L / 24.0f);
         for (int i = 0; i < cnt; ++i) {
             const float u = (i + 0.5f) / std::max(1, cnt);
-            gantry(b.pts[k].x + dx * u, b.pts[k].z + dz * u, ux[k], uz[k]);
+            gantry(b.pts[k].x + dx * u, b.pts[k].z + dz * u, ux[k], uz[k], level);
         }
-        if (k > 0) gantry(b.pts[k].x, b.pts[k].z, ux[k], uz[k]);
+        if (k > 0) gantry(b.pts[k].x, b.pts[k].z, ux[k], uz[k], level);
     }
 }
 
@@ -1127,7 +1144,7 @@ void City::renderAccess(Renderer& r, const Theme& th, Vec3 eye) {
         const float g = ease(sr.grow);
         for (int k = 0; k < kStepN; ++k) {
             const float h = kStepRise * (k + 1) * g, o = (kStepN - k) * kStepTread;
-            renderBox(r, {sr.cx, h * 0.5f, sr.cz}, {sr.sx + 2.0f * o, h, sr.sz + 2.0f * o}, col * 0.8f, 0.4f, 6, sr.grow, 1.0f, 0);
+            renderBox(r, {sr.cx, h * 0.5f, sr.cz}, {sr.sx + 2.0f * o, h, sr.sz + 2.0f * o}, col * 0.8f, 0.4f, 6, sr.grow, 4.0f, 0);
         }
     }
     std::vector<Station> sts;
@@ -1135,37 +1152,32 @@ void City::renderAccess(Renderer& r, const Theme& th, Vec3 eye) {
     for (const Station& st : sts) {
         if (std::fabs(eye.x - st.x) > cull || std::fabs(eye.z - st.z) > cull) continue;
         const Vec3 col = tintColor(platforms_[st.plat].tint);
-        const float deckTop = st.level - 0.3f, H = deckTop - kSlabH;
-        const int n = std::max(2, (int)std::ceil(H / kStMaxRise));
-        const float h = H / n;        const float nx = st.fz, nz = -st.fx;
+        // A street-level station: a flat plaza where the bus ends, a gate with read and write meters, and the step ring just ahead.
+        const float nx = st.fz, nz = -st.fx;
+        const bool alongX = std::fabs(st.fx) > 0.5f;
         auto at = [&](float a, float w, float y) { return Vec3{st.x + st.fx * a + nx * w, y, st.z + st.fz * a + nz * w}; };
-        auto box = [&](float a0, float a1, float y0, float y1, float w, Vec3 c, int kind) {
-            const Vec3 m = at((a0 + a1) * 0.5f, 0, (y0 + y1) * 0.5f);
-            const bool alongX = std::fabs(st.fx) > 0.5f;
-            const float len = std::fabs(a1 - a0);
-            renderBox(r, m, alongX ? Vec3{len, y1 - y0, w} : Vec3{w, y1 - y0, len}, c, 0.4f, kind, 1, 1.0f, 0);
+        auto box = [&](float a, float w, float y, float la, float lw, float ly, Vec3 c, int kind, float fill) {
+            renderBox(r, at(a, w, y), alongX ? Vec3{la, ly, lw} : Vec3{lw, ly, la}, c, 0.4f, kind, 1, fill, 0);
         };
-        box(-kStDeck, 0.4f, kSlabH, deckTop, 2.0f * kStHalfW, col * 0.5f, 6);
-        box(-kStDeck, 0.4f, deckTop, deckTop + 0.12f, 2.0f * kStHalfW + 0.2f, col * 1.1f, 5);
-        // stairs run on past the end of the lane, down onto the region platform
-        for (int k = 0; k + 1 < n; ++k) {
-            box(0.4f + k * kStRun, 0.4f + (k + 1) * kStRun, kSlabH, deckTop - (k + 1) * h, 2.0f * kStHalfW, col * 0.5f, 6);
-            box(0.4f + k * kStRun, 0.4f + k * kStRun + 0.1f, deckTop - (k + 1) * h - 0.02f, deckTop - (k + 1) * h + 0.05f, 2.0f * kStHalfW, col * 0.9f, 5);
-        }
-        // canopy on four posts
-        for (int i = 0; i < 4; ++i) {
-            const Vec3 q = at(i < 2 ? -kStDeck + 0.5f : -0.4f, (i % 2 ? 1.0f : -1.0f) * (kStHalfW - 0.3f), deckTop + 1.6f);
-            renderBox(r, q, {0.3f, 3.2f, 0.3f}, col * 0.6f, 0.4f, 6, 1, 1.0f, 0);
-        }
-        box(-kStDeck - 0.3f, 0.7f, deckTop + 3.2f, deckTop + 3.5f, 2.0f * kStHalfW + 0.8f, col * 0.9f, 5);
-        // handrails down both sides of the stairs
+        const float pw = kStGate + 0.9f;
+        box(-2.8f, 0, 0.06f, 7.2f, 2.0f * pw, 0.12f, col * 0.5f, 6, 2.0f);  // plaza, flush with the ground
+        box(-6.3f, 0, 0.07f, 0.12f, 2.0f * pw, 0.14f, col * 1.1f, 5, 0);     // glowing edges
+        box(0.8f, 0, 0.07f, 0.12f, 2.0f * pw, 0.14f, col * 1.1f, 5, 0);
+        for (int sd = -1; sd <= 1; sd += 2) box(-2.8f, sd * pw, 0.07f, 7.2f, 0.12f, 0.14f, col * 1.1f, 5, 0);
+        box(0.0f, 0, 0.3f, 0.3f, 3.4f, 0.6f, col * (0.5f + 0.8f * std::max(shownDiskR_, shownDiskW_)), 5, 0);  // end stop
+        const float gate = -1.6f;
         for (int sd = -1; sd <= 1; sd += 2) {
-            const Vec3 q0 = at(0.4f, sd * kStHalfW, deckTop + 0.9f), q1 = at(0.4f + n * kStRun, sd * kStHalfW, kSlabH + 0.9f);
-            for (int i = 0; i < 14; ++i) {
-                const float u = i / 13.0f;
-                renderBox(r, {q0.x + (q1.x - q0.x) * u, q0.y + (q1.y - q0.y) * u, q0.z + (q1.z - q0.z) * u}, {0.16f, 0.16f, 0.16f}, col * 1.2f, 0.3f, 5, 1, 1.0f, 0);
-            }
+            box(gate, sd * kStGate, 2.1f, 0.6f, 0.6f, 4.2f, col * 0.45f, 6, 1.0f);  // pylons
+            // meters: the left pylon shows writes, the right one reads, lit from the bottom up
+            const float load = sd < 0 ? shownDiskW_ : shownDiskR_;
+            const int lit = (int)std::ceil(clampf(load, 0.0f, 1.0f) * 8.0f);
+            for (int i = 0; i < 8; ++i)
+                box(gate - 0.34f, sd * (kStGate - 0.05f), 0.7f + 0.42f * i, 0.06f, 0.36f, 0.3f, col * (i < lit ? 1.3f + 0.05f * i : 0.12f), 5, 0);
         }
+        box(gate, 0, 4.3f, 0.7f, 2.0f * kStGate + 0.9f, 0.3f, col * 0.9f, 5, 0);  // header beam
+        box(gate, 0, 3.85f, 0.5f, 2.0f * kStGate - 0.4f, 0.1f, col * (0.35f + 0.8f * std::max(shownDiskR_, shownDiskW_)), 5, 0);
+        // guide strips lead on to the step ring
+        for (int sd = -1; sd <= 1; sd += 2) box(1.8f, sd * 1.2f, 0.06f, 3.0f, 0.16f, 0.12f, col * 0.9f, 5, 0);
     }
 }
 void City::renderBundles(Renderer& r, const Theme& th, Vec3 eye) {
@@ -1206,9 +1218,78 @@ void City::renderBundles(Renderer& r, const Theme& th, Vec3 eye) {
             moduleLabel(r, modLabel_[l.slot], l.text, m, 1.8f, eye, b.kind == 1 ? green : (b.kind == 2 ? th.alt : th.accent));
         }
 }
+// Street lights round the block, and a park (lawn, trees, benches, a pond) in every cell with no building on it.
+void City::renderBlockScenery(Renderer& r, const Platform& p, const Block& b, uint32_t seed, Vec3 tint, bool detail, int& draws) {
+    const float y0 = kSlabH + kPlateH;
+    const Vec3 green{0.2f, 0.85f, 0.45f}, water{0.2f, 0.6f, 1.0f}, lampC{1.0f, 0.95f, 0.8f};
+    // Street lights down all four sides of the block, one at every street line.
+    if (detail) {
+        const float half = b.side * 0.5f - 2.5f;
+        for (int s = 0; s < 4; ++s)
+            for (int k = 0; k <= b.g; ++k) {
+                const float along = (float(k) - b.g * 0.5f) * p.pitch;
+                const float x = b.cx + (s < 2 ? along : (s == 2 ? -half : half)), z = b.cz + (s < 2 ? (s == 0 ? -half : half) : along);
+                renderBox(r, {x, y0 + 2.4f, z}, {0.16f, 4.8f, 0.16f}, tint * 0.3f, 0.5f, 5, 1, 0, 0);
+                renderBox(r, {x, y0 + 4.9f, z}, {0.7f, 0.16f, 0.7f}, lampC * 0.9f, 0.5f, 5, 1, 0, 0);
+                draws += 2;
+            }
+    }
+    std::vector<char> used(size_t(b.g) * b.g, 0);
+    for (const auto& t : b.towers) {
+        const int ix = (int)std::lround((t.x - b.cx) / p.pitch + (b.g - 1) * 0.5f), iz = (int)std::lround((t.z - b.cz) / p.pitch + (b.g - 1) * 0.5f);
+        if (ix >= 0 && ix < b.g && iz >= 0 && iz < b.g) used[size_t(iz) * b.g + ix] = 1;
+    }
+    auto tree = [&](float x, float z, float k) {
+        const float h = 2.2f + 1.6f * k;
+        renderBox(r, {x, y0 + h * 0.5f, z}, {0.4f, h, 0.4f}, green * 0.3f, 0.5f, 5, 1, 0, 0);
+        renderBox(r, {x, y0 + h + 1.1f, z}, {2.8f + k, 2.4f, 2.8f + k}, green, 0.5f, 6, 1, 0, 0);
+        draws += 2;
+    };
+    auto bench = [&](float x, float z, bool alongX) {
+        const Vec3 c = tint * 0.8f;
+        renderBox(r, {x, y0 + 0.45f, z}, alongX ? Vec3{1.8f, 0.1f, 0.6f} : Vec3{0.6f, 0.1f, 1.8f}, c, 0.5f, 5, 1, 0, 0);
+        renderBox(r, {x + (alongX ? 0.0f : 0.28f), y0 + 0.75f, z + (alongX ? 0.28f : 0.0f)}, alongX ? Vec3{1.8f, 0.5f, 0.08f} : Vec3{0.08f, 0.5f, 1.8f}, c * 0.7f, 0.5f, 5, 1, 0, 0);
+        draws += 2;
+    };
+    for (int cz = 0; cz < b.g; ++cz)
+        for (int cx = 0; cx < b.g; ++cx) {
+            if (used[size_t(cz) * b.g + cx]) continue;
+            const float x = b.cx + (float(cx) - (b.g - 1) * 0.5f) * p.pitch, z = b.cz + (float(cz) - (b.g - 1) * 0.5f) * p.pitch;
+            const uint32_t sd = seed + uint32_t(cz * b.g + cx) * 2654435u;
+            renderBox(r, {x, y0 + 0.03f, z}, {20.0f, 0.06f, 20.0f}, green, 0.5f, 6, 1, 5.0f, 0);
+            ++draws;
+            if (!detail) continue;
+            if (rnd01(sd) < 0.45f) {
+                renderBox(r, {x, y0 + 0.07f, z}, {9.0f, 0.06f, 9.0f}, water, 0.5f, 6, 1, 6.0f, 0);
+                bench(x, z - 6.4f, true);
+                bench(x, z + 6.4f, true);
+                tree(x - 7.0f, z - 7.0f, rnd01(sd + 1));
+                tree(x + 7.0f, z + 7.0f, rnd01(sd + 2));
+                draws += 1;
+            } else {
+                renderBox(r, {x, y0 + 0.07f, z}, {20.0f, 0.05f, 2.2f}, tint, 0.5f, 6, 1, 4.0f, 0);
+                renderBox(r, {x, y0 + 0.07f, z}, {2.2f, 0.05f, 20.0f}, tint, 0.5f, 6, 1, 4.0f, 0);
+                bench(x + 3.5f, z - 2.2f, true);
+                tree(x - 6.5f, z - 6.5f, rnd01(sd + 3));
+                tree(x + 6.5f, z - 6.5f, rnd01(sd + 4));
+                tree(x - 6.5f, z + 6.5f, rnd01(sd + 5));
+                tree(x + 6.5f, z + 6.5f, rnd01(sd + 6));
+                draws += 2;
+            }
+        }
+}
+
 void City::render(Renderer& r, Vec3 eye) {
     labelBudget_ = 2;
     pendingLabels_.clear();
+    {
+        // The computer's own components stand on a region floor of their own; it is drawn first so it never covers them.
+        const float g0 = ease(coreGrow_[0]);
+        if (g0 > 0) {
+            renderBox(r, {0, 0.05f * g0, -10}, {184, 0.1f * g0, 170}, {0.9f, 0.95f, 1.0f}, 0.35f, 6, coreGrow_[0], 1.0f, 0);
+            renderBox(r, {0, kSlabH * 0.5f * g0, 0}, {26, kSlabH * g0, 26}, {0.9f, 0.95f, 1.0f}, 0.35f, 6, coreGrow_[0], 1.0f, 0);
+        }
+    }
     renderMonuments(r, eye);
     // While the file system is still being read, square scan pulses ripple out of the hub across the ground.
     bool scanning = !built_;
@@ -1232,7 +1313,6 @@ void City::render(Renderer& r, Vec3 eye) {
         const SystemStats& s = data_.stats();
         float g = ease(coreGrow_[0]);
         if (g > 0) {
-            renderBox(r, {0, kSlabH * 0.5f * g, 0}, {26, kSlabH * g, 26}, th.accent, 0.35f, 6, coreGrow_[0], 1.0f, 0);
             renderHub(r, th, g, eye);
         }
     }
@@ -1253,7 +1333,7 @@ void City::render(Renderer& r, Vec3 eye) {
 
         if (p.grow <= 0) continue;
         float pg = ease(p.grow);
-        renderBox(r, {p.cx, kSlabH * 0.5f * pg, p.cz}, {p.side, kSlabH * pg, p.side}, tint, 0.5f, 6, p.grow, 0, 0);
+        renderBox(r, {p.cx, kSlabH * 0.5f * pg, p.cz}, {p.side, kSlabH * pg, p.side}, tint, 0.5f, 6, p.grow, 1.0f, 0);
 
         const float base = kSlabH + kPlateH;
         for (size_t bi = 0; bi < p.blocks.size(); ++bi) {
@@ -1264,20 +1344,19 @@ void City::render(Renderer& r, Vec3 eye) {
             if (!r.visible({b.cx, base + b.maxH * 0.5f, b.cz}, b.side * 0.72f + b.maxH * 0.5f + 6.0f)) continue;
             // The block plate: a lighter raised pad the buildings stand on.
             const float plateH = (kSlabH + kPlateH) * pg;
+            // Painter's order matters for the glass: the pavement goes down first so the pad and roads draw over it.
+            if (p.grow > 0.95f) {
+                // Roads are the slab itself (hexagons); a grey pavement sits against the pad.
+                renderBox(r, {b.cx, kSlabH + 0.04f, b.cz}, {b.side + 3.5f, 0.06f, b.side + 3.5f}, tint, 0.5f, 6, 1, 2.0f, 0);
+                draws += 1;
+            }
             // The pad's rim is a three-step slope (matching blockPadHeight) so streets run up onto it smoothly.
             for (int st = 0; st < 3; ++st) {
                 const float sd = b.side - 2.0f - 2.0f * kPadSlope * st / 3.0f, hh = (kSlabH + kPlateH * (st + 1) / 3.0f) * pg;
                 renderBox(r, {b.cx, hh * 0.5f, b.cz}, {sd, hh, sd}, tint, 0.5f, 6, p.grow, 1.0f, 0);
             }
-            if (bd2 < 220.0f * 220.0f && p.grow > 0.95f) {
-                // Street grid: lane markings down the middle of every street between rows and columns of buildings.
-                const float y = kSlabH + kPlateH + 0.04f, len = b.side - 4.0f;
-                for (int k = 0; k + 1 < b.g; ++k) {
-                    const float off = (float(k) - (b.g - 1) * 0.5f + 0.5f) * p.pitch;
-                    renderBox(r, {b.cx, y, b.cz + off}, {len, 0.06f, 0.3f}, tint, 0.5f, 5, 1, 0, 0);
-                    renderBox(r, {b.cx + off, y, b.cz}, {0.3f, 0.06f, len}, tint, 0.5f, 5, 1, 0, 0);
-                    draws += 2;
-                }
+            if (!mirror && bd2 < 150.0f * 150.0f && p.grow > 0.95f && draws < 3200) {
+                renderBlockScenery(r, p, b, uint32_t(i * 7919 + bi * 104729), tint, bd2 < 100.0f * 100.0f, draws);
             }
             std::vector<TPart> parts;
             for (size_t ti = 0; ti < b.towers.size(); ++ti) {
@@ -1291,7 +1370,7 @@ void City::render(Renderer& r, Vec3 eye) {
                 float seed = rnd01(uint32_t(std::hash<std::string>{}(t.name) & 0xFFFFFF));
                 const bool hovered = !mirror && hoverP_ == i && hoverB_ == (int)bi && hoverT_ == (int)ti;
                 if (!mirror && tdx * tdx + tdz * tdz < 180.0f * 180.0f)  // raised sidewalk around the building
-                    renderBox(r, {t.x, base + 0.07f, t.z}, {w + 4.0f, 0.14f, dd + 4.0f}, tint, 0.5f, 6, t.grow, 1.0f, 0);
+                    renderBox(r, {t.x, base + 0.07f, t.z}, {w + 2.0f, 0.14f, dd + 2.0f}, tint, 0.5f, 6, t.grow, 2.0f, 0);
                 towerParts(t.style, w, dd, h, parts);
                 // Far away only the base and the tallest section are drawn; the rest are sub-pixel detail.
                 const bool farLod = tdx * tdx + tdz * tdz > 300.0f * 300.0f * drawScale_ * drawScale_;
@@ -1316,7 +1395,7 @@ void City::render(Renderer& r, Vec3 eye) {
                         for (float sg : {-1.0f, 1.0f}) renderBox(r, {t.x + sg * (dw * 0.5f + 0.12f), base + dh * 0.5f + 0.1f, zf + 0.1f}, {0.14f, dh + 0.2f, 0.22f}, glowC, 0.5f, 4, 1, 1.0f, 0);
                         renderBox(r, {t.x, base + dh + 0.18f, zf + 0.1f}, {dw + 0.5f, 0.16f, 0.26f}, glowC, 0.5f, 4, 1, 1.0f, 0);
                         renderBox(r, {t.x, base + dh + 0.6f, zf + 0.6f}, {dw + 1.6f, 0.1f, 1.3f}, tint, seed, 3, 1, 0, 0);
-                        renderBox(r, {t.x, base + 0.05f, zf + 1.5f}, {dw + 1.2f, 0.05f, 2.4f}, tint, 0.5f, 6, 1, 1.0f, 0);
+                        renderBox(r, {t.x, base + 0.05f, zf + 1.5f}, {dw + 1.2f, 0.05f, 2.4f}, tint, 0.5f, 6, 1, 2.0f, 0);
                         draws += 5;
                         r.drawCube(*t.doorLabel, Mat4::translate({t.x, base + dh * 0.5f, zf + 0.03f}) * Mat4::scale({dw, dh, 0.06f}),
                                    {1.0f, 1.0f, 1.0f}, false, true, 0.0f);
@@ -1609,13 +1688,43 @@ void City::buildNetwork() const {
         markPoly(bp);
         chosen[i] = bp;
     }
-    // Overhead gantries pass over one another at their own heights, so the planned routes need no bridges.
+    // Buses lie on the ground. Where a route crosses an earlier one it ramps up, spans over it and ramps back down.
     for (int i = 0; i < n; ++i) {
-        const Poly& src = chosen[i];
+        Poly src;
+        for (const Vec3& v : chosen[i])
+            if (src.empty() || std::fabs(v.x - src.back().x) + std::fabs(v.z - src.back().z) > 0.01f) src.push_back(v);
         if (src.size() < 2) continue;
         NetRoute nr{i, {}};
-        for (const Vec3& v : src)
-            if (nr.pts.empty() || std::fabs(v.x - nr.pts.back().x) + std::fabs(v.z - nr.pts.back().z) > 0.01f) nr.pts.push_back({v.x, 0, v.z});
+        auto push = [&](float x, float y, float z) {
+            if (!nr.pts.empty() && std::fabs(x - nr.pts.back().x) + std::fabs(z - nr.pts.back().z) < 0.01f && std::fabs(y - nr.pts.back().y) < 0.01f) return;
+            nr.pts.push_back({x, y, z});
+        };
+        push(src[0].x, kBusGround, src[0].z);
+        for (size_t k = 0; k + 1 < src.size(); ++k) {
+            const Seg sg = segOf(src, k);
+            const float L = segLen(sg);
+            const float ux = (sg.bx - sg.ax) / L, uz = (sg.bz - sg.az) / L;
+            std::vector<float> ts;
+            for (int j = 0; j < i; ++j)
+                for (size_t m = 0; m + 1 < chosen[j].size(); ++m) {
+                    float cx, cz;
+                    if (cross(sg, segOf(chosen[j], m), cx, cz)) ts.push_back(std::fabs(cx - sg.ax) + std::fabs(cz - sg.az));
+                }
+            std::sort(ts.begin(), ts.end());
+            auto at = [&](float d, float y) { push(sg.ax + ux * d, y, sg.az + uz * d); };
+            for (size_t g = 0; g < ts.size();) {
+                size_t h = g;
+                while (h + 1 < ts.size() && ts[h + 1] - ts[h] < 2.0f * (kBusRamp + kBusFlat)) ++h;
+                const float f0 = std::max(0.0f, ts[g] - kBusFlat), f1 = std::min(L, ts[h] + kBusFlat);
+                const float s0 = std::max(0.0f, f0 - kBusRamp), s1 = std::min(L, f1 + kBusRamp);
+                at(s0, kBusGround);
+                at(f0, kBusBridge);
+                at(f1, kBusBridge);
+                at(s1, kBusGround);
+                g = h + 1;
+            }
+            at(L, kBusGround);
+        }
         if (nr.pts.size() >= 2) net_.push_back(std::move(nr));
     }
 }
@@ -1720,32 +1829,33 @@ void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const 
     stations(sts);
     for (const Station& st : sts) {
         if (std::fabs(p.x - st.x) > 40.0f || std::fabs(p.z - st.z) > 40.0f) continue;
-        const float deckTop = st.level - 0.3f, H = deckTop - kSlabH;
-        const int n = std::max(2, (int)std::ceil(H / kStMaxRise));
-        const float h = H / n;
-        auto add = [&](float a0, float a1, float top) {
-            const float nx = st.fz, nz = -st.fx;
-            const float xa = st.x + st.fx * a0 + nx * kStHalfW, xb = st.x + st.fx * a1 - nx * kStHalfW;
-            const float za = st.z + st.fz * a0 + nz * kStHalfW, zb = st.z + st.fz * a1 - nz * kStHalfW;
-            boxes.push_back({std::min(xa, xb), std::max(xa, xb), top, std::min(za, zb), std::max(za, zb)});
-        };
-        add(-kStDeck, 0.4f, deckTop);
-        for (int k = 0; k + 1 < n; ++k) add(0.4f + k * kStRun, 0.4f + (k + 1) * kStRun, deckTop - (k + 1) * h);
+        const float nx = st.fz, nz = -st.fx;
+        for (int sd = -1; sd <= 1; sd += 2) {  // the two gate pylons
+            const float cx = st.x - st.fx * 1.6f + nx * sd * kStGate, cz = st.z - st.fz * 1.6f + nz * sd * kStGate;
+            boxes.push_back({cx - 0.3f, cx + 0.3f, 4.2f, cz - 0.3f, cz + 0.3f});
+        }
     }
-    // Data lanes are walkable decks. A box here is solid down to the ground, so a lane only counts once the feet are on or above it;
-    // that keeps the space under a lane open and lets you drop onto it from above or fly up through it from below.
+    // Raised bus spans are walkable decks. A box here is solid down to the ground, so a span only counts once the feet are on or above it;
+    // that keeps the space under a bridge open and lets you drop onto it from above. Ramps are cut into low steps. Buses on the ground need no box.
     {
         std::vector<Bundle> bs;
         bundles(bs);
         for (const Bundle& b : bs) {
             if (b.grow < 0.9f) continue;
-            const float top = b.pts[0].y + 0.09f, w = (b.lanes - 1) * b.gap + b.laneW, hw = w * 0.5f;
-            if (p.y - 1.7f + 0.6f < top) continue;
+            const float w = (b.lanes - 1) * b.gap + b.laneW, hw = w * 0.5f;
             for (size_t k = 0; k + 1 < b.pts.size(); ++k) {
                 const Vec3 a = b.pts[k], c = b.pts[k + 1];
+                if (std::max(a.y, c.y) < 1.0f) continue;
                 const float x0 = std::min(a.x, c.x) - hw, x1 = std::max(a.x, c.x) + hw, z0 = std::min(a.z, c.z) - hw, z1 = std::max(a.z, c.z) + hw;
                 if (p.x < x0 - 4 || p.x > x1 + 4 || p.z < z0 - 4 || p.z > z1 + 4) continue;
-                boxes.push_back({x0, x1, top, z0, z1});
+                const int steps = std::fabs(a.y - c.y) > 0.05f ? std::max(2, (int)std::ceil(std::fabs(a.y - c.y) / 0.45f)) : 1;
+                for (int s = 0; s < steps; ++s) {
+                    const float u0 = float(s) / steps, u1 = float(s + 1) / steps, um = (u0 + u1) * 0.5f;
+                    const float top = (steps == 1 ? a.y : a.y + (c.y - a.y) * um) + 0.09f;
+                    if (p.y - 1.7f + 0.6f < top) continue;
+                    const float ax = a.x + (c.x - a.x) * u0, az = a.z + (c.z - a.z) * u0, bx = a.x + (c.x - a.x) * u1, bz = a.z + (c.z - a.z) * u1;
+                    boxes.push_back({std::min(ax, bx) - hw, std::max(ax, bx) + hw, top, std::min(az, bz) - hw, std::max(az, bz) + hw});
+                }
             }
         }
     }

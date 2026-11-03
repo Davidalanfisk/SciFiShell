@@ -34,18 +34,23 @@ std::string lowerExt(const std::string& p) {
 
 ImageEditor::ImageEditor(Renderer& renderer) : PanelApp(renderer, 1480, 1250, 1.9f) {
     newBlank(1280, 800);
-    status_ = "New blank canvas - open a picture or paint";
 }
 
 void ImageEditor::newBlank(int w, int h) {
     w_ = w;
+    zoom_ = 1;
+    panX_ = panY_ = 0;
     h_ = h;
     px_.assign(static_cast<size_t>(w) * h * 4, 255);
     undo_.clear();
+    redo_.clear();
     path_.clear();
     dirty_ = false;
     tool_ = Tool::None;
-    cropN_ = 0;
+    cropN_ = shapeN_ = 0;
+    textOn_ = false;
+    penDown_ = false;
+    status_.clear();
     viewDirty_ = true;
     invalidate();
 }
@@ -61,14 +66,19 @@ bool ImageEditor::openPath(const std::string& path) {
         return false;
     }
     w_ = w;
+    zoom_ = 1;
+    panX_ = panY_ = 0;
     h_ = h;
     px_.assign(p, p + static_cast<size_t>(w) * h * 4);
     stbi_image_free(p);
     undo_.clear();
+    redo_.clear();
     path_ = path;
     dirty_ = false;
     tool_ = Tool::None;
-    cropN_ = 0;
+    cropN_ = shapeN_ = 0;
+    textOn_ = false;
+    penDown_ = false;
     saveAs_ = false;
     status_ = "Opened " + fs::u8path(path).filename().u8string();
     viewDirty_ = true;
@@ -77,9 +87,196 @@ bool ImageEditor::openPath(const std::string& path) {
 }
 
 void ImageEditor::pushUndo() {
-    undo_ = px_;
-    undoW_ = w_;
-    undoH_ = h_;
+    undo_.push_back({px_, w_, h_});
+    if (undo_.size() > 20) undo_.erase(undo_.begin());
+    redo_.clear();
+}
+
+void ImageEditor::redo() {
+    if (redo_.empty()) {
+        status_ = "Nothing to redo";
+        return;
+    }
+    undo_.push_back({px_, w_, h_});
+    Snap s = std::move(redo_.back());
+    redo_.pop_back();
+    px_.swap(s.px);
+    w_ = s.w;
+    h_ = s.h;
+    viewDirty_ = dirty_ = true;
+    status_ = "Redone";
+}
+
+void ImageEditor::flipV() {
+    pushUndo();
+    for (int y = 0; y < h_ / 2; ++y)
+        std::swap_ranges(px_.begin() + static_cast<size_t>(y) * w_ * 4, px_.begin() + static_cast<size_t>(y + 1) * w_ * 4, px_.begin() + static_cast<size_t>(h_ - 1 - y) * w_ * 4);
+    dirty_ = viewDirty_ = true;
+    status_ = "Flipped vertically";
+}
+
+float ImageEditor::brushRadius() const {
+    const float base = static_cast<float>(kBrush[size_ - 1]) * std::max(1.0f, std::max(w_, h_) / 800.0f);
+    return tool_ == Tool::Eraser ? base * 1.6f : base;
+}
+
+void ImageEditor::drawLinePx(float x0, float y0, float x1, float y1, Color8 c, float r) {
+    const float dx = x1 - x0, dy = y1 - y0, d = std::sqrt(dx * dx + dy * dy);
+    const int n = std::max(1, static_cast<int>(d / std::max(1.0f, r * 0.5f)));
+    for (int i = 0; i <= n; ++i) stamp(x0 + dx * i / n, y0 + dy * i / n, c, r);
+}
+
+void ImageEditor::drawShape(Tool t, float x0, float y0, float x1, float y1) {
+    const Color8 c = kPalette[colour_];
+    const float r = std::max(1.0f, brushRadius() * 0.5f);
+    if (t == Tool::Line) {
+        drawLinePx(x0, y0, x1, y1, c, r);
+    } else if (t == Tool::Rect) {
+        if (filled_) {
+            const int ax = std::max(0, static_cast<int>(std::min(x0, x1))), bx = std::min(w_ - 1, static_cast<int>(std::max(x0, x1)));
+            const int ay = std::max(0, static_cast<int>(std::min(y0, y1))), by = std::min(h_ - 1, static_cast<int>(std::max(y0, y1)));
+            for (int y = ay; y <= by; ++y)
+                for (int x = ax; x <= bx; ++x) {
+                    uint8_t* p = &px_[(static_cast<size_t>(y) * w_ + x) * 4];
+                    p[0] = c.r;
+                    p[1] = c.g;
+                    p[2] = c.b;
+                    p[3] = 255;
+                }
+        } else {
+            drawLinePx(x0, y0, x1, y0, c, r);
+            drawLinePx(x1, y0, x1, y1, c, r);
+            drawLinePx(x1, y1, x0, y1, c, r);
+            drawLinePx(x0, y1, x0, y0, c, r);
+        }
+    } else if (t == Tool::Oval) {
+        const float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f, rx = std::fabs(x1 - x0) * 0.5f, ry = std::fabs(y1 - y0) * 0.5f;
+        if (rx < 1 || ry < 1) return;
+        if (filled_) {
+            const int ay = std::max(0, static_cast<int>(cy - ry)), by = std::min(h_ - 1, static_cast<int>(cy + ry));
+            for (int y = ay; y <= by; ++y) {
+                const float k = (y - cy) / ry, hw = rx * std::sqrt(std::max(0.0f, 1 - k * k));
+                const int ax = std::max(0, static_cast<int>(cx - hw)), bx = std::min(w_ - 1, static_cast<int>(cx + hw));
+                for (int x = ax; x <= bx; ++x) {
+                    uint8_t* p = &px_[(static_cast<size_t>(y) * w_ + x) * 4];
+                    p[0] = c.r;
+                    p[1] = c.g;
+                    p[2] = c.b;
+                    p[3] = 255;
+                }
+            }
+        } else {
+            const int n = std::max(24, static_cast<int>((rx + ry) * 1.5f));
+            float px = cx + rx, py = cy;
+            for (int i = 1; i <= n; ++i) {
+                const float a = 6.2831853f * i / n, nx = cx + rx * std::cos(a), ny = cy + ry * std::sin(a);
+                drawLinePx(px, py, nx, ny, c, r);
+                px = nx;
+                py = ny;
+            }
+        }
+    }
+    dirty_ = viewDirty_ = true;
+}
+
+void ImageEditor::floodFill(int x, int y, Color8 c) {
+    if (x < 0 || y < 0 || x >= w_ || y >= h_) return;
+    pushUndo();
+    uint8_t seed[4];
+    std::memcpy(seed, &px_[(static_cast<size_t>(y) * w_ + x) * 4], 4);
+    if (seed[0] == c.r && seed[1] == c.g && seed[2] == c.b && seed[3] == 255) return;
+    auto match = [&](const uint8_t* p) {
+        return std::abs(p[0] - seed[0]) + std::abs(p[1] - seed[1]) + std::abs(p[2] - seed[2]) + std::abs(p[3] - seed[3]) <= 48;
+    };
+    std::vector<uint8_t> done(static_cast<size_t>(w_) * h_, 0);
+    std::vector<int> stack{y * w_ + x};
+    done[static_cast<size_t>(y) * w_ + x] = 1;
+    while (!stack.empty()) {
+        const int i = stack.back();
+        stack.pop_back();
+        uint8_t* p = &px_[static_cast<size_t>(i) * 4];
+        p[0] = c.r;
+        p[1] = c.g;
+        p[2] = c.b;
+        p[3] = 255;
+        const int cx = i % w_, cy = i / w_;
+        const int nb[4][2] = {{cx - 1, cy}, {cx + 1, cy}, {cx, cy - 1}, {cx, cy + 1}};
+        for (const auto& n : nb) {
+            if (n[0] < 0 || n[1] < 0 || n[0] >= w_ || n[1] >= h_) continue;
+            const size_t j = static_cast<size_t>(n[1]) * w_ + n[0];
+            if (done[j] || !match(&px_[j * 4])) continue;
+            done[j] = 1;
+            stack.push_back(static_cast<int>(j));
+        }
+    }
+    dirty_ = viewDirty_ = true;
+    status_ = "Filled";
+}
+
+void ImageEditor::adjust(int id) {
+    pushUndo();
+    auto each = [&](auto fn) {
+        for (size_t i = 0; i < px_.size(); i += 4) fn(&px_[i]);
+    };
+    auto cl = [](float v) { return static_cast<uint8_t>(std::clamp(v, 0.0f, 255.0f)); };
+    if (id == 70) {
+        each([&](uint8_t* p) { p[0] = p[1] = p[2] = cl(p[0] * 0.299f + p[1] * 0.587f + p[2] * 0.114f); });
+        status_ = "Grayscale";
+    } else if (id == 71) {
+        each([&](uint8_t* p) { p[0] = 255 - p[0]; p[1] = 255 - p[1]; p[2] = 255 - p[2]; });
+        status_ = "Inverted";
+    } else if (id == 72) {
+        each([&](uint8_t* p) {
+            const float r = p[0], g = p[1], b = p[2];
+            p[0] = cl(r * 0.393f + g * 0.769f + b * 0.189f);
+            p[1] = cl(r * 0.349f + g * 0.686f + b * 0.168f);
+            p[2] = cl(r * 0.272f + g * 0.534f + b * 0.131f);
+        });
+        status_ = "Sepia";
+    } else if (id == 73 || id == 74) {
+        const float d = id == 73 ? 24.0f : -24.0f;
+        each([&](uint8_t* p) { p[0] = cl(p[0] + d); p[1] = cl(p[1] + d); p[2] = cl(p[2] + d); });
+        status_ = id == 73 ? "Lighter" : "Darker";
+    } else if (id == 75 || id == 76) {
+        const float k = id == 75 ? 1.2f : 0.83f;
+        each([&](uint8_t* p) { p[0] = cl((p[0] - 128) * k + 128); p[1] = cl((p[1] - 128) * k + 128); p[2] = cl((p[2] - 128) * k + 128); });
+        status_ = id == 75 ? "More contrast" : "Less contrast";
+    } else if (id == 77) {
+        std::vector<uint8_t> o = px_;
+        for (int y = 0; y < h_; ++y)
+            for (int x = 0; x < w_; ++x)
+                for (int c = 0; c < 3; ++c) {
+                    int sum = 0, n = 0;
+                    for (int dy = -1; dy <= 1; ++dy)
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            const int xx = x + dx, yy = y + dy;
+                            if (xx < 0 || yy < 0 || xx >= w_ || yy >= h_) continue;
+                            sum += px_[(static_cast<size_t>(yy) * w_ + xx) * 4 + c];
+                            ++n;
+                        }
+                    o[(static_cast<size_t>(y) * w_ + x) * 4 + c] = static_cast<uint8_t>(sum / n);
+                }
+        px_.swap(o);
+        status_ = "Blurred";
+    }
+    dirty_ = viewDirty_ = true;
+}
+
+void ImageEditor::commitText() {
+    if (!textOn_) return;
+    textOn_ = false;
+    if (textBuf_.empty()) return;
+    pushUndo();
+    Bitmap tmp;
+    tmp.w = w_;
+    tmp.h = h_;
+    tmp.rgba.swap(px_);
+    const float px = 28.0f * static_cast<float>(1 << (size_ - 1)) * std::max(1.0f, std::max(w_, h_) / 800.0f);
+    drawText(tmp, tx_, ty_ + px * 0.8f, textBuf_, px, FontFace::UIBold, kPalette[colour_]);
+    px_.swap(tmp.rgba);
+    textBuf_.clear();
+    dirty_ = viewDirty_ = true;
+    status_ = "Text added";
 }
 
 void ImageEditor::rotate(bool right) {
@@ -118,6 +315,8 @@ void ImageEditor::cropTo(int x0, int y0, int x1, int y1) {
     for (int y = 0; y < nh; ++y) std::memcpy(&o[static_cast<size_t>(y) * nw * 4], &px_[(static_cast<size_t>(y0 + y) * w_ + x0) * 4], static_cast<size_t>(nw) * 4);
     px_.swap(o);
     w_ = nw;
+    zoom_ = 1;
+    panX_ = panY_ = 0;
     h_ = nh;
     dirty_ = true;
     viewDirty_ = true;
@@ -149,15 +348,15 @@ void ImageEditor::resizePct(int pct) {
     }
     px_.swap(o);
     w_ = nw;
+    zoom_ = 1;
+    panX_ = panY_ = 0;
     h_ = nh;
     dirty_ = true;
     viewDirty_ = true;
     status_ = "Resized to " + std::to_string(nw) + " x " + std::to_string(nh);
 }
 
-void ImageEditor::stamp(float ix, float iy) {
-    const float r = static_cast<float>(kBrush[size_ - 1]) * std::max(1.0f, std::max(w_, h_) / 800.0f);
-    const Color8 c = kPalette[colour_];
+void ImageEditor::stamp(float ix, float iy, Color8 c, float r) {
     const int x0 = std::max(0, static_cast<int>(ix - r)), x1 = std::min(w_ - 1, static_cast<int>(ix + r));
     const int y0 = std::max(0, static_cast<int>(iy - r)), y1 = std::min(h_ - 1, static_cast<int>(iy + r));
     for (int y = y0; y <= y1; ++y)
@@ -173,11 +372,10 @@ void ImageEditor::stamp(float ix, float iy) {
 }
 
 void ImageEditor::stroke(float ix, float iy) {
-    if (lastX_ >= 0) {
-        const float dx = ix - lastX_, dy = iy - lastY_, d = std::sqrt(dx * dx + dy * dy);
-        const int n = std::max(1, static_cast<int>(d / 2.0f));
-        for (int i = 1; i <= n; ++i) stamp(lastX_ + dx * i / n, lastY_ + dy * i / n);
-    } else stamp(ix, iy);
+    const Color8 c = tool_ == Tool::Eraser ? Color8{255, 255, 255, 255} : kPalette[colour_];
+    const float r = brushRadius();
+    if (lastX_ >= 0) drawLinePx(lastX_, lastY_, ix, iy, c, r);
+    else stamp(ix, iy, c, r);
     lastX_ = ix;
     lastY_ = iy;
     dirty_ = true;
@@ -189,6 +387,21 @@ bool ImageEditor::toImage(float x, float y, float& ix, float& iy) const {
     ix = (x - ox_) / scale_;
     iy = (y - oy_) / scale_;
     return ix >= 0 && iy >= 0 && ix < w_ && iy < h_;
+}
+
+void ImageEditor::onWheel(float x, float y, float notches) {
+    if (!view_.contains(x, y) || w_ <= 0 || fit_ <= 0) return;
+    const float old = scale_;
+    zoom_ = std::clamp(zoom_ * std::pow(1.2f, notches), 0.25f, 40.0f / fit_);
+    if (zoom_ < 1.05f && zoom_ > 0.95f) zoom_ = 1;
+    scale_ = fit_ * zoom_;
+    // Keep the pixel under the cursor fixed.
+    const float cx = (view_.x0 + view_.x1) * 0.5f, cy = (view_.y0 + view_.y1) * 0.5f;
+    const float k = scale_ / old;
+    panX_ = (x - cx) - ((x - cx) - panX_) * k;
+    panY_ = (y - cy) - ((y - cy) - panY_) * k;
+    if (zoom_ == 1) panX_ = panY_ = 0;
+    viewDirty_ = true;
 }
 
 void ImageEditor::save() {
@@ -227,6 +440,87 @@ void ImageEditor::commitSaveAs() {
     } else status_ = "Save failed";
 }
 
+namespace {
+void ring(sf::Bitmap& bm, float cx, float cy, float rx, float ry, float th, sf::Color8 col) {
+    float px = cx + rx, py = cy;
+    for (int i = 1; i <= 24; ++i) {
+        const float a = 6.2831853f * i / 24, nx = cx + rx * std::cos(a), ny = cy + ry * std::sin(a);
+        sf::ui::line(bm, px, py, nx, ny, th, col);
+        px = nx;
+        py = ny;
+    }
+}
+
+// Simple line-art icons for the toolbox, drawn around (cx, cy) inside a 64 px button.
+void drawToolIcon(sf::Bitmap& bm, int id, float cx, float cy, sf::Color8 c) {
+    using namespace sf::ui;
+    switch (id) {
+    case 15:  // brush
+        line(bm, cx - 14, cy + 14, cx + 10, cy - 10, 5, c);
+        line(bm, cx + 10, cy - 10, cx + 16, cy - 16, 8, c);
+        dot(bm, cx - 17, cy + 17, 4, c);
+        break;
+    case 17:  // eraser
+        line(bm, cx - 16, cy + 6, cx - 4, cy - 12, 3, c);
+        line(bm, cx - 4, cy - 12, cx + 16, cy + 2, 3, c);
+        line(bm, cx + 16, cy + 2, cx + 4, cy + 18, 3, c);
+        line(bm, cx + 4, cy + 18, cx - 16, cy + 6, 3, c);
+        line(bm, cx - 8, cy + 12, cx + 10, cy - 8, 3, c);
+        break;
+    case 18:  // fill bucket
+        strokeRect(bm, cx - 14, cy - 6, cx + 8, cy + 16, 3, c);
+        line(bm, cx - 14, cy - 6, cx - 4, cy - 16, 3, c);
+        line(bm, cx - 4, cy - 16, cx + 8, cy - 6, 3, c);
+        dot(bm, cx + 15, cy + 8, 4, c);
+        line(bm, cx + 15, cy, cx + 15, cy + 6, 3, c);
+        break;
+    case 19:  // picker
+        line(bm, cx - 16, cy + 16, cx + 4, cy - 4, 4, c);
+        line(bm, cx + 2, cy - 14, cx + 14, cy - 2, 7, c);
+        line(bm, cx + 12, cy - 18, cx + 18, cy - 12, 4, c);
+        break;
+    case 22:  // line
+        line(bm, cx - 16, cy + 16, cx + 16, cy - 16, 3.5f, c);
+        dot(bm, cx - 16, cy + 16, 4, c);
+        dot(bm, cx + 16, cy - 16, 4, c);
+        break;
+    case 23: strokeRect(bm, cx - 17, cy - 12, cx + 17, cy + 12, 3.5f, c); break;  // rectangle
+    case 24: ring(bm, cx, cy, 18, 12, 3.5f, c); break;                              // oval
+    case 25:  // text
+        line(bm, cx - 14, cy - 14, cx + 14, cy - 14, 5, c);
+        line(bm, cx, cy - 14, cx, cy + 16, 5, c);
+        break;
+    case 13:  // crop
+        line(bm, cx - 8, cy - 18, cx - 8, cy + 8, 3.5f, c);
+        line(bm, cx - 18, cy - 8, cx + 18, cy - 8, 0.01f, c);
+        line(bm, cx - 18, cy + 8, cx + 8, cy + 8, 3.5f, c);
+        line(bm, cx + 8, cy - 8, cx + 8, cy + 18, 3.5f, c);
+        line(bm, cx - 18, cy - 8, cx + 8, cy - 8, 3.5f, c);
+        break;
+    case 14:  // resize
+        strokeRect(bm, cx - 17, cy - 3, cx + 3, cy + 17, 3, c);
+        strokeRect(bm, cx - 17, cy - 17, cx + 17, cy + 17, 1.5f, c);
+        line(bm, cx - 2, cy + 2, cx + 14, cy - 14, 3.5f, c);
+        line(bm, cx + 14, cy - 14, cx + 6, cy - 14, 3.5f, c);
+        line(bm, cx + 14, cy - 14, cx + 14, cy - 6, 3.5f, c);
+        break;
+    case 26:  // pan: four-way arrow
+        line(bm, cx - 17, cy, cx + 17, cy, 3.5f, c);
+        line(bm, cx, cy - 17, cx, cy + 17, 3.5f, c);
+        dot(bm, cx - 17, cy, 4, c);
+        dot(bm, cx + 17, cy, 4, c);
+        dot(bm, cx, cy - 17, 4, c);
+        dot(bm, cx, cy + 17, 4, c);
+        break;
+    case 16:  // camera
+        strokeRect(bm, cx - 18, cy - 10, cx + 18, cy + 14, 3.5f, c);
+        line(bm, cx - 8, cy - 14, cx + 6, cy - 14, 5, c);
+        ring(bm, cx, cy + 2, 8, 8, 3.5f, c);
+        break;
+    default: break;
+    }
+}
+}  // namespace
 void ImageEditor::act(int id) {
     if (id == 1) {
         if (requestOpen) requestOpen();
@@ -241,22 +535,37 @@ void ImageEditor::act(int id) {
             status_ = "Nothing to undo";
             return;
         }
-        px_.swap(undo_);
-        std::swap(w_, undoW_);
-        std::swap(h_, undoH_);
+        redo_.push_back({px_, w_, h_});
+        Snap s = std::move(undo_.back());
+        undo_.pop_back();
+        px_.swap(s.px);
+        w_ = s.w;
+        h_ = s.h;
         viewDirty_ = true;
         dirty_ = true;
         status_ = "Undone";
-    } else if (id == 10) rotate(false);
+    } else if (id == 5) {
+        newBlank(1280, 800);
+        status_ = "New blank canvas";
+    } else if (id == 6) redo();
+    else if (id == 7) flipV();
+    else if (id == 10) rotate(false);
     else if (id == 11) rotate(true);
     else if (id == 12) flip();
-    else if (id >= 13 && id <= 16) {
-        tool_ = id == 13 ? Tool::Crop : id == 14 ? Tool::Resize : id == 15 ? Tool::Brush : Tool::Shot;
-        cropN_ = 0;
+    else if ((id >= 13 && id <= 19) || (id >= 22 && id <= 26)) {
+        commitText();
+        tool_ = id == 13 ? Tool::Crop : id == 14 ? Tool::Resize : id == 15 ? Tool::Brush : id == 16 ? Tool::Shot : id == 17 ? Tool::Eraser
+              : id == 18 ? Tool::Fill : id == 19 ? Tool::Pick : id == 22 ? Tool::Line : id == 23 ? Tool::Rect : id == 24 ? Tool::Oval : id == 26 ? Tool::Pan : Tool::Text;
+        cropN_ = shapeN_ = 0;
         penDown_ = false;
         lastX_ = -1;
         status_ = tool_ == Tool::Crop ? "Click two opposite corners of the area to keep"
-                : tool_ == Tool::Brush ? "Click to start painting, move, click again to lift the brush"
+                : tool_ == Tool::Brush || tool_ == Tool::Eraser ? "Click to start, move, click again to lift"
+                : tool_ == Tool::Fill ? "Click an area to fill it with the chosen colour"
+                : tool_ == Tool::Pick ? "Click the picture to pick up a colour"
+                : tool_ == Tool::Line || tool_ == Tool::Rect || tool_ == Tool::Oval ? "Click the start point, then the end point"
+                : tool_ == Tool::Text ? "Click where the text goes, type, then press Enter"
+                : tool_ == Tool::Pan ? "Drag the picture to move it; scroll to zoom"
                 : tool_ == Tool::Resize ? "Pick a size"
                                         : "Pick a delay, then Start - this window steps aside before the shot";
     } else if (id == 20) {
@@ -268,6 +577,8 @@ void ImageEditor::act(int id) {
     else if (id >= 30 && id < 35) resizePct(kPct[id - 30]);
     else if (id >= 40 && id < 48) colour_ = id - 40;
     else if (id >= 50 && id < 53) size_ = id - 49;
+    else if (id >= 70 && id <= 77) adjust(id);
+    else if (id == 80) filled_ = !filled_;
     else if (id >= 60 && id < 63) delay_ = kDelay[id - 60];
     else if (id == 63) {
         timerOn_ = true;
@@ -287,12 +598,24 @@ bool ImageEditor::onHover(float x, float y) {
     hover_ = h;
     hoverX_ = x;
     hoverY_ = y;
+    if (panning_) {
+        panX_ += x - panLastX_;
+        panY_ += y - panLastY_;
+        panLastX_ = x;
+        panLastY_ = y;
+        viewDirty_ = true;
+        return true;
+    }
     float ix, iy;
     if (tool_ == Tool::Brush && penDown_ && toImage(x, y, ix, iy)) {
         stroke(ix, iy);
         return true;
     }
-    if ((tool_ == Tool::Crop && cropN_ == 1) || tool_ == Tool::Brush) changed = true;
+    if (tool_ == Tool::Eraser && penDown_ && toImage(x, y, ix, iy)) {
+        stroke(ix, iy);
+        return true;
+    }
+    if ((tool_ == Tool::Crop && cropN_ == 1) || (shapeN_ == 1) || tool_ == Tool::Brush || tool_ == Tool::Eraser) changed = true;
     return changed;
 }
 
@@ -302,6 +625,12 @@ void ImageEditor::onClick(float x, float y, bool) {
             act(h.id);
             return;
         }
+    if (tool_ == Tool::Pan && view_.contains(x, y)) {
+        panning_ = true;
+        panLastX_ = x;
+        panLastY_ = y;
+        return;
+    }
     float ix, iy;
     if (!toImage(x, y, ix, iy)) return;
     if (tool_ == Tool::Crop) {
@@ -315,7 +644,34 @@ void ImageEditor::onClick(float x, float y, bool) {
             cropN_ = 2;
             status_ = "Press APPLY CROP to keep this area";
         }
-    } else if (tool_ == Tool::Brush) {
+    } else if (tool_ == Tool::Fill) {
+        floodFill(static_cast<int>(ix), static_cast<int>(iy), kPalette[colour_]);
+    } else if (tool_ == Tool::Pick) {
+        const uint8_t* p = &px_[(static_cast<size_t>(static_cast<int>(iy)) * w_ + static_cast<int>(ix)) * 4];
+        int best = 0, bd = 1 << 30;
+        for (int i = 0; i < 8; ++i) {
+            const int d = std::abs(p[0] - kPalette[i].r) + std::abs(p[1] - kPalette[i].g) + std::abs(p[2] - kPalette[i].b);
+            if (d < bd) { bd = d; best = i; }
+        }
+        colour_ = best;
+        status_ = "Picked the nearest palette colour";
+    } else if (tool_ == Tool::Line || tool_ == Tool::Rect || tool_ == Tool::Oval) {
+        if (shapeN_ == 0) {
+            sx_ = ix;
+            sy_ = iy;
+            shapeN_ = 1;
+        } else {
+            pushUndo();
+            drawShape(tool_, sx_, sy_, ix, iy);
+            shapeN_ = 0;
+        }
+    } else if (tool_ == Tool::Text) {
+        commitText();
+        textOn_ = true;
+        textBuf_.clear();
+        tx_ = ix;
+        ty_ = iy;
+    } else if (tool_ == Tool::Brush || tool_ == Tool::Eraser) {
         if (!penDown_) {
             pushUndo();
             penDown_ = true;
@@ -334,7 +690,11 @@ void ImageEditor::onCtrl(const std::string& s) {
     if (saveAs_) {
         saveAs_ = false;
         status_ = "Save cancelled";
-    } else if (penDown_) {
+    } else if (textOn_) {
+        textOn_ = false;
+        textBuf_.clear();
+    } else if (shapeN_) shapeN_ = 0;
+    else if (penDown_) {
         penDown_ = false;
         lastX_ = -1;
     } else if (cropN_) cropN_ = 0;
@@ -343,6 +703,7 @@ void ImageEditor::onCtrl(const std::string& s) {
 
 void ImageEditor::onText(const std::string& s) {
     if (saveAs_) field_ += s;
+    else if (textOn_) textBuf_ += s;
 }
 
 void ImageEditor::onKey(EditKey k) {
@@ -350,15 +711,18 @@ void ImageEditor::onKey(EditKey k) {
         save();
         return;
     }
-    if (!saveAs_) return;
-    if (k == EditKey::Enter) commitSaveAs();
-    else if (k == EditKey::Backspace) {
-        while (!field_.empty() && (field_.back() & 0xC0) == 0x80) field_.pop_back();
-        if (!field_.empty()) field_.pop_back();
+    if (!saveAs_ && !textOn_) return;
+    std::string& field = saveAs_ ? field_ : textBuf_;
+    if (k == EditKey::Enter) {
+        if (saveAs_) commitSaveAs();
+        else commitText();
+    } else if (k == EditKey::Backspace) {
+        while (!field.empty() && (field.back() & 0xC0) == 0x80) field.pop_back();
+        if (!field.empty()) field.pop_back();
     } else if (k == EditKey::Paste) {
         if (char* t = SDL_GetClipboardText()) {
             for (const char* c = t; *c; ++c)
-                if (static_cast<unsigned char>(*c) >= 0x20) field_ += *c;
+                if (static_cast<unsigned char>(*c) >= 0x20) field += *c;
             SDL_free(t);
         }
     }
@@ -408,15 +772,16 @@ void ImageEditor::renderView(int vw, int vh) {
         surf_.rgba[i + 2] = t.bg.b;
         surf_.rgba[i + 3] = 255;
     }
-    scale_ = std::min(8.0f, std::min(static_cast<float>(vw - 8) / w_, static_cast<float>(vh - 8) / h_));
+    fit_ = std::min(8.0f, std::min(static_cast<float>(vw - 8) / w_, static_cast<float>(vh - 8) / h_));
+    scale_ = fit_ * zoom_;
     const float dw = w_ * scale_, dh = h_ * scale_;
-    const float lx = (vw - dw) * 0.5f, ly = (vh - dh) * 0.5f;
+    const float lx = (vw - dw) * 0.5f + panX_, ly = (vh - dh) * 0.5f + panY_;
     ox_ = view_.x0 + lx;
     oy_ = view_.y0 + ly;
-    for (int y = std::max(0, static_cast<int>(ly)); y < std::min(vh, static_cast<int>(ly + dh)); ++y) {
-        const int sy = std::min(h_ - 1, static_cast<int>((y - ly) / scale_));
-        for (int x = std::max(0, static_cast<int>(lx)); x < std::min(vw, static_cast<int>(lx + dw)); ++x) {
-            const int sx = std::min(w_ - 1, static_cast<int>((x - lx) / scale_));
+    for (int y = std::max(0, static_cast<int>(std::floor(ly))); y < std::min(vh, static_cast<int>(ly + dh)); ++y) {
+        const int sy = std::clamp(static_cast<int>((y - ly) / scale_), 0, h_ - 1);
+        for (int x = std::max(0, static_cast<int>(std::floor(lx))); x < std::min(vw, static_cast<int>(lx + dw)); ++x) {
+            const int sx = std::clamp(static_cast<int>((x - lx) / scale_), 0, w_ - 1);
             const uint8_t* s = &px_[(static_cast<size_t>(sy) * w_ + sx) * 4];
             uint8_t* d = &surf_.rgba[(static_cast<size_t>(y) * vw + x) * 4];
             const bool chk = ((x / 16) + (y / 16)) & 1;
@@ -443,35 +808,51 @@ void ImageEditor::paint(Bitmap& bm) {
     struct B {
         const char* l;
         int id;
-        float w;
     };
-    auto row = [&](float y, std::initializer_list<B> items, int sel) {
-        float x = c.x0 + 4;
-        for (const B& b : items) {
-            const Rect r{x, y, x + b.w, y + 46};
-            State s = hot(r, b.id);
-            if (b.id == sel) s = State::Selected;
-            button(bm, r, b.l, s, false, 20);
-            x += b.w + 8;
-        }
-    };
-
     float y = c.y0 + 4;
-    row(y, {{"OPEN", 1, 100}, {"SAVE", 2, 100}, {"SAVE AS", 3, 130}, {"UNDO", 4, 100}}, -1);
-    const Rect fr{c.x0 + 460, y, c.x1 - 4, y + 46};
-    card(bm, fr, saveAs_ ? State::Selected : State::Normal);
-    if (saveAs_) {
-        const bool caret = (SDL_GetTicks() / 500) % 2 == 0;
-        label(bm, fr.x0 + 14, fr.y0 + 31, "SAVE TO:", 20, FontFace::UIBold, t.accent);
-        label(bm, fr.x0 + 120, fr.y0 + 31, ellipsize(field_, 22, FontFace::Mono, fr.w() - 150) + (caret ? "|" : ""), 22, FontFace::Mono, t.text);
-    } else {
-        label(bm, fr.x0 + 14, fr.y0 + 31, ellipsize(path_.empty() ? "Not saved yet  -  Ctrl+S to save" : path_, 20, FontFace::UI, fr.w() - 28), 20, FontFace::UI, t.dim);
+    const int toolId = tool_ == Tool::Crop ? 13 : tool_ == Tool::Resize ? 14 : tool_ == Tool::Brush ? 15 : tool_ == Tool::Shot ? 16 : tool_ == Tool::Eraser ? 17
+                     : tool_ == Tool::Fill ? 18 : tool_ == Tool::Pick ? 19 : tool_ == Tool::Line ? 22 : tool_ == Tool::Rect ? 23 : tool_ == Tool::Oval ? 24
+                     : tool_ == Tool::Text ? 25 : tool_ == Tool::Pan ? 26 : -1;
+    // Top row: file and history buttons plus the path / save-as field.
+    float fx = c.x0 + 4;
+    {
+        const B top[] = {{"OPEN", 1}, {"NEW", 5}, {"SAVE", 2}, {"SAVE AS", 3}, {"UNDO", 4}, {"REDO", 6}};
+        for (const B& b : top) {
+            const float bw = std::max(84.0f, measureText(b.l, 20, FontFace::UIBold) + 40);
+            const Rect r{fx, y, fx + bw, y + 46};
+            button(bm, r, b.l, hot(r, b.id), false, 20);
+            fx += bw + 8;
+        }
     }
-    y += 54;
-    const int toolId = tool_ == Tool::Crop ? 13 : tool_ == Tool::Resize ? 14 : tool_ == Tool::Brush ? 15 : tool_ == Tool::Shot ? 16 : -1;
-    row(y, {{"ROTATE L", 10, 140}, {"ROTATE R", 11, 140}, {"FLIP", 12, 100}, {"CROP", 13, 100}, {"RESIZE", 14, 120}, {"BRUSH", 15, 120}, {"SHOT TIMER", 16, 170}}, toolId);
-    y += 54;
-    float x = c.x0 + 4;
+    // Right-hand sidebar: transform and adjustment buttons in two columns.
+    const float sideW = 2 * 128 + 8, sideX = c.x1 - 4 - sideW;
+    {
+        const B side[][2] = {{{"ROTATE L", 10}, {"ROTATE R", 11}}, {{"FLIP H", 12}, {"FLIP V", 7}},   {{"GRAYSCALE", 70}, {"INVERT", 71}},
+                             {{"SEPIA", 72}, {"BLUR", 77}},        {{"LIGHTER", 73}, {"DARKER", 74}}, {{"CONTRAST +", 75}, {"CONTRAST -", 76}}};
+        float sy2 = y + 54;
+        int gap = 0;
+        for (const auto& pr : side) {
+            if (gap == 2) sy2 += 14;
+            for (int k = 0; k < 2; ++k) {
+                const Rect r{sideX + k * 136, sy2, sideX + k * 136 + 128, sy2 + 46};
+                button(bm, r, pr[k].l, hot(r, pr[k].id), false, 18);
+            }
+            sy2 += 54;
+            ++gap;
+        }
+    }
+    const Rect fr{fx + 4, y, c.x1 - 4, y + 46};
+    if (saveAs_ || !path_.empty()) {
+        card(bm, fr, saveAs_ ? State::Selected : State::Normal);
+        if (saveAs_) {
+            const bool caret = (SDL_GetTicks() / 500) % 2 == 0;
+            label(bm, fr.x0 + 14, fr.y0 + 31, "SAVE TO:", 20, FontFace::UIBold, t.accent);
+            label(bm, fr.x0 + 120, fr.y0 + 31, ellipsize(field_, 22, FontFace::Mono, fr.w() - 150) + (caret ? "|" : ""), 22, FontFace::Mono, t.text);
+        } else {
+            label(bm, fr.x0 + 14, fr.y0 + 31, ellipsize(path_, 20, FontFace::UI, fr.w() - 28), 20, FontFace::UI, t.dim);
+        }
+    }    y += 54;    const float tbW = 140;
+    float x = c.x0 + 4 + tbW + 12;
     if (tool_ == Tool::Crop) {
         const Rect a{x, y, x + 190, y + 46}, b{x + 198, y, x + 338, y + 46};
         button(bm, a, "APPLY CROP", cropN_ == 2 ? hot(a, 20) : State::Disabled, true, 20);
@@ -485,26 +866,39 @@ void ImageEditor::paint(Bitmap& bm) {
             x += 118;
         }
         label(bm, x + 10, y + 31, std::to_string(w_) + " x " + std::to_string(h_), 20, FontFace::Mono, t.dim);
-    } else if (tool_ == Tool::Brush) {
-        for (int i = 0; i < 8; ++i) {
-            const Rect r{x, y, x + 46, y + 46};
-            const State s = hot(r, 40 + i);
-            fillRound(bm, r.x0 + 4, r.y0 + 4, r.x1 - 4, r.y1 - 4, 8, kPalette[i]);
-            strokeRect(bm, r.x0 + 1, r.y0 + 1, r.x1 - 1, r.y1 - 1, i == colour_ ? 3.0f : 1.0f, i == colour_ ? t.accent : (s == State::Hover ? t.text : t.border));
-            x += 54;
+    } else if (isDrawTool()) {
+        if (tool_ != Tool::Eraser) {
+            for (int i = 0; i < 8; ++i) {
+                const Rect r{x, y, x + 46, y + 46};
+                const State s = hot(r, 40 + i);
+                fillRound(bm, r.x0 + 4, r.y0 + 4, r.x1 - 4, r.y1 - 4, 8, kPalette[i]);
+                strokeRect(bm, r.x0 + 1, r.y0 + 1, r.x1 - 1, r.y1 - 1, i == colour_ ? 3.0f : 1.0f, i == colour_ ? t.accent : (s == State::Hover ? t.text : t.border));
+                x += 54;
+            }
+            x += 16;
         }
-        x += 16;
-        int i = 1;
-        for (const char* l : {"S", "M", "L"}) {
-            const Rect r{x, y, x + 60, y + 46};
-            State s = hot(r, 49 + i);
-            if (i == size_) s = State::Selected;
-            button(bm, r, l, s, false, 20);
-            x += 68;
-            ++i;
+        if (tool_ != Tool::Fill && tool_ != Tool::Pick) {
+            int i = 1;
+            for (const char* l : {"S", "M", "L"}) {
+                const Rect r{x, y, x + 60, y + 46};
+                State s = hot(r, 49 + i);
+                if (i == size_) s = State::Selected;
+                button(bm, r, l, s, false, 20);
+                x += 68;
+                ++i;
+            }
         }
-        label(bm, x + 10, y + 31, penDown_ ? "PAINTING - click to lift" : "Click to start a stroke", 20, FontFace::UI, penDown_ ? t.accent : t.dim);
-    } else if (tool_ == Tool::Shot) {
+        if (tool_ == Tool::Rect || tool_ == Tool::Oval) {
+            const Rect r{x + 8, y, x + 158, y + 46};
+            const State fs = hot(r, 80);
+            button(bm, r, "FILLED", filled_ ? State::Selected : fs, false, 20);
+            x += 166;
+        }
+        const char* hint = (tool_ == Tool::Brush || tool_ == Tool::Eraser) ? (penDown_ ? "PAINTING - click to lift" : "Click to start a stroke")
+                         : (tool_ == Tool::Line || tool_ == Tool::Rect || tool_ == Tool::Oval) ? (shapeN_ ? "Click the end point" : "Click the start point")
+                         : tool_ == Tool::Text ? (textOn_ ? "Type, then press Enter" : "Click where the text goes")
+                         : tool_ == Tool::Fill ? "Click an area to fill" : "Click to pick a colour";
+        label(bm, x + 10, y + 31, ellipsize(hint, 20, FontFace::UI, std::max(40.0f, sideX - 16 - x - 10)), 20, FontFace::UI, (penDown_ || shapeN_ || textOn_) ? t.accent : t.dim);    } else if (tool_ == Tool::Shot) {
         int i = 0;
         for (const char* l : {"3 SEC", "5 SEC", "10 SEC"}) {
             const Rect r{x, y, x + 120, y + 46};
@@ -525,7 +919,30 @@ void ImageEditor::paint(Bitmap& bm) {
         }
     }
 
-    view_ = Rect{c.x0 + 4, y + 56, c.x1 - 4, c.y1 - 44};
+    // Toolbox down the left side: icon buttons with tooltips.
+    std::vector<std::pair<int, std::string>> tips;
+    {
+        struct T {
+            int id;
+            const char* tip;
+        };
+        const T tools[] = {{15, "Brush - paint freehand strokes"}, {17, "Eraser - rub out to transparent"}, {18, "Fill - flood an area with the chosen colour"},
+                           {19, "Picker - pick up a colour from the picture"}, {22, "Line - click the start, then the end"}, {23, "Rectangle - outline or filled"},
+                           {24, "Oval - outline or filled"}, {25, "Text - click, type, press Enter"}, {13, "Crop - keep a selected area"},
+                           {14, "Resize - scale the whole picture"}, {26, "Pan - drag to move the picture, scroll to zoom"}, {16, "Screenshot timer - grab the shell after a countdown"}};
+        int i = 0;
+        for (const T& tl : tools) {
+            const float bx = c.x0 + 4 + (i % 2) * 70, by = y + (i / 2) * 70;
+            const Rect r{bx, by, bx + 64, by + 64};
+            State s = hot(r, tl.id);
+            tips.push_back({static_cast<int>(hits_.size()) - 1, tl.tip});
+            if (tl.id == toolId) s = State::Selected;
+            card(bm, r, s);
+            drawToolIcon(bm, tl.id, (r.x0 + r.x1) * 0.5f, (r.y0 + r.y1) * 0.5f, (tl.id == toolId || s == State::Hover) ? t.accent : t.text);
+            ++i;
+        }
+    }
+    view_ = Rect{c.x0 + 4 + tbW + 12, y + 56, sideX - 8, c.y1 - 44};
     const int vw = static_cast<int>(view_.w()), vh = static_cast<int>(view_.h());
     if (viewDirty_ || surf_.w != vw || surf_.h != vh || surf_.rgba.empty()) renderView(vw, vh);
     const int vx = static_cast<int>(view_.x0), vy = static_cast<int>(view_.y0);
@@ -546,17 +963,50 @@ void ImageEditor::paint(Bitmap& bm) {
         }
         strokeRect(bm, ox_ + std::min(cx0_, bx) * scale_, oy_ + std::min(cy0_, by) * scale_, ox_ + std::max(cx0_, bx) * scale_, oy_ + std::max(cy0_, by) * scale_, 3, t.accent);
     }
-    if (tool_ == Tool::Brush) {
+    if (tool_ == Tool::Brush || tool_ == Tool::Eraser) {
         float ix, iy;
         if (toImage(hoverX_, hoverY_, ix, iy)) {
-            const float r = kBrush[size_ - 1] * std::max(1.0f, std::max(w_, h_) / 800.0f) * scale_;
+            const float r = brushRadius() * scale_;
             strokeRect(bm, hoverX_ - r, hoverY_ - r, hoverX_ + r, hoverY_ + r, 1.5f, t.accent);
         }
+    }
+    if (shapeN_ == 1) {
+        float ix, iy;
+        if (toImage(hoverX_, hoverY_, ix, iy)) {
+            const float ax = ox_ + sx_ * scale_, ay = oy_ + sy_ * scale_;
+            if (tool_ == Tool::Line) line(bm, ax, ay, hoverX_, hoverY_, 2.5f, t.accent);
+            else if (tool_ == Tool::Rect) strokeRect(bm, std::min(ax, hoverX_), std::min(ay, hoverY_), std::max(ax, hoverX_), std::max(ay, hoverY_), 2.5f, t.accent);
+            else if (tool_ == Tool::Oval) {
+                const float cx = (ax + hoverX_) * 0.5f, cy = (ay + hoverY_) * 0.5f, rx = std::fabs(hoverX_ - ax) * 0.5f, ry = std::fabs(hoverY_ - ay) * 0.5f;
+                float px = cx + rx, py = cy;
+                for (int i = 1; i <= 48; ++i) {
+                    const float a = 6.2831853f * i / 48, nx = cx + rx * std::cos(a), ny = cy + ry * std::sin(a);
+                    line(bm, px, py, nx, ny, 2.5f, t.accent);
+                    px = nx;
+                    py = ny;
+                }
+            }
+        }
+    }
+    if (textOn_) {
+        const float px = 28.0f * static_cast<float>(1 << (size_ - 1)) * std::max(1.0f, std::max(w_, h_) / 800.0f) * scale_;
+        const float bx = ox_ + tx_ * scale_, by = oy_ + ty_ * scale_;
+        const bool caret = (SDL_GetTicks() / 500) % 2 == 0;
+        drawText(bm, bx, by + px * 0.8f, textBuf_ + (caret ? "|" : ""), px, FontFace::UIBold, kPalette[colour_]);
     }
 
     const float sy = c.y1 - 12;
     label(bm, c.x0 + 8, sy, ellipsize(status_, 20, FontFace::UI, 900), 20, FontFace::UI, t.dim);
     labelRight(bm, c.x1 - 8, sy, std::to_string(w_) + " x " + std::to_string(h_), 20, FontFace::UI, t.muted);
+    for (const auto& tp : tips) {
+        if (tp.first != hover_) continue;
+        const float tw = measureText(tp.second, 20, FontFace::UI) + 28;
+        float tx = std::min(hoverX_ + 14, static_cast<float>(bm.w) - tw - 6), ty = hoverY_ + 22;
+        if (ty + 40 > bm.h) ty = hoverY_ - 46;
+        fillRound(bm, tx, ty, tx + tw, ty + 38, 6, Color8{8, 14, 20, 245});
+        strokeRect(bm, tx, ty, tx + tw, ty + 38, 1.5f, t.accent);
+        label(bm, tx + 14, ty + 26, tp.second, 20, FontFace::UI, t.text);
+    }
 }
 
 }  // namespace sf

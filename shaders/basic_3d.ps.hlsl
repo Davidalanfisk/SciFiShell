@@ -48,6 +48,20 @@ float spillLight(float3 p, float3 n)
     return s * g_Tune[0].x;
 }
 
+// Cheap gloss: mirror-reflected highlights of the hanging lights (one dot product and a power per light, no extra textures).
+float3 glossLights(float3 p, float3 r, float sharp)
+{
+    float s = 0.0;
+    [unroll]
+    for (int i = 0; i < 24; ++i)
+    {
+        float3 d = g_Lights[i].xyz - p;
+        float r2 = dot(d, d);
+        float a = saturate(dot(r, d * rsqrt(r2 + 1e-4)));
+        s += g_Lights[i].w * pow(a, sharp) / (1.0 + r2 * 0.004);
+    }
+    return float3(0.75, 0.9, 1.0) * s * g_Tune[0].x;
+}
 struct PSInput
 {
     float4 Pos  : SV_POSITION;
@@ -151,6 +165,8 @@ float3 skyColor(float3 d, float t, float3 accent, float3 alt)
 
 // City buildings (axis-aligned boxes). Params: x = emergence 0..1, y = fill fraction, z = flash (+add / -remove),
 // w = kind (3 tower, 4 fill bar, 5 road, 6 platform, 7 beam). Colour: rgb neon, a = per-building random seed.
+static float gSolid = 0.0;
+
 float3 buildingColor(PSInput In)
 {
     float tm = g_Accent.w;
@@ -248,17 +264,96 @@ float3 buildingColor(PSInput In)
         // fillF = 0: the drive's footprint slab; fillF > 0: the lit "used space" pad on top of it.
         // Drawn as a glass pane: no body colour, just a faint tint, the grid and a clear outline.
         col = float3(0, 0, 0);
+        float rimMul = 0.55 + 0.7 * min(fillF, 1.0);
+        float3 rimCol = neon;
+        gSolid = top ? smoothstep(0.0, 1.0, emerge) : 0.0;  // region floors hide the world grid beneath
         if (top)
         {
-            float2 wp = In.WPos.xz;
-            float2 g = abs(frac(wp / 10.0) - 0.5);
-            float2 fw = max(fwidth(wp / 10.0), 1e-4);
-            float gl = 1.0 - smoothstep(0.0, 2.0, min((0.5 - g.x) / fw.x, (0.5 - g.y) / fw.y));
-            gl *= saturate(1.0 - max(fw.x, fw.y) * 3.0);
-            col += neon * gl * (0.10 + 0.5 * fillF);
-            col += neon * (0.012 + 0.04 * fillF);
+            float2 wp2 = In.WPos.xz;
+            if (fillF > 5.5)
+            {
+                // Pond: deep water with slow ripples.
+                float rp = 0.5 + 0.5 * sin(length(wp2 - ctr.xz) * 2.4 - tm * 1.4);
+                col += float3(0.10, 0.45, 0.80) * (0.09 + 0.06 * pow(rp, 6.0));
+                rimCol = float3(0.2, 0.6, 1.0);
+                rimMul = 0.5;
+            }
+            else if (fillF > 4.5)
+            {
+                // Lawn: a faint green wash with fine stipple.
+                float2 sc = frac(wp2 * 0.8) - 0.5;
+                float fws = max(fwidth(wp2.x) * 0.8, 1e-4);
+                float st = (1.0 - smoothstep(0.07, 0.07 + fws * 1.5, length(sc))) * saturate(1.0 - fws * 4.0);
+                col += float3(0.15, 0.80, 0.35) * (0.045 + 0.16 * st);
+                rimCol = float3(0.2, 0.85, 0.45);
+                rimMul = 0.35;
+            }
+            else if (fillF > 3.5)
+            {
+                // Path: small paving squares, a simple cousin of the street hexagons.
+                float2 pp = wp2 / 1.6;
+                float2 gp = abs(frac(pp) - 0.5);
+                float fwp = max(fwidth(pp.x) + fwidth(pp.y), 1e-4);
+                float pl = saturate(1.0 - (0.5 - max(gp.x, gp.y)) / (fwp * 1.2)) * saturate(1.0 - fwp * 3.0);
+                col += neon * (0.04 + 0.22 * pl) + float3(0.5, 0.55, 0.6) * 0.012;
+                rimMul = 0.9;
+            }
+            else if (fillF > 2.5)
+            {
+                // The computer's own region: solid pale panel plating, 8 m panels with fine seams and a dot at each corner.
+                float2 pp = wp2 / 8.0;
+                float2 gp = abs(frac(pp) - 0.5);
+                float fwp = max(fwidth(pp.x) + fwidth(pp.y), 1e-4);
+                float pl = saturate(1.0 - (0.5 - max(gp.x, gp.y)) / (fwp * 1.2)) * saturate(1.0 - fwp * 3.0);
+                float2 pf = wp2 / 1.0;
+                float2 gf = abs(frac(pf) - 0.5);
+                float fwf = max(fwidth(pf.x) + fwidth(pf.y), 1e-4);
+                float pf1 = saturate(1.0 - (0.5 - max(gf.x, gf.y)) / (fwf * 1.2)) * saturate(1.0 - fwf * 3.0);
+                float2 dc = (frac(pp + 0.5) - 0.5) * 8.0;
+                float dd = (1.0 - smoothstep(0.12, 0.12 + fwp * 8.0 * 1.5, length(dc))) * saturate(1.0 - fwp * 3.0);
+                col += float3(0.92, 0.96, 1.0) * (0.20 + 0.05 * hash12(floor(pp)) + 0.07 * pl + 0.025 * pf1 + 0.12 * dd);
+                rimCol = float3(0.92, 0.96, 1.0);
+                rimMul = 0.9;
+            }
+            else if (fillF > 1.5)
+            {
+                // Pavement: muted grey with faint slab joints.
+                float2 pp = wp2 / 1.2;
+                float2 gp = abs(frac(pp) - 0.5);
+                float fwp = max(fwidth(pp.x) + fwidth(pp.y), 1e-4);
+                float pl = saturate(1.0 - (0.5 - max(gp.x, gp.y)) / (fwp * 1.2)) * saturate(1.0 - fwp * 3.0);
+                col += float3(0.62, 0.65, 0.68) * (0.15 + 0.10 * pl);
+                rimCol = float3(0.62, 0.65, 0.68);
+                rimMul = 0.12;
+            }
+            else if (fillF > 0.5)
+            {
+                // Main road: a tessellating hexagon texture on a darker tinted bed.
+                float2 wp = wp2 / 12.0;
+                const float2 hs = float2(1.0, 1.7320508);
+                float2 a = (frac(wp / hs) - 0.5) * hs;
+                float2 b = (frac((wp + hs * 0.5) / hs) - 0.5) * hs;
+                float2 gv = dot(a, a) < dot(b, b) ? a : b;
+                float2 q = abs(gv);
+                float hd = max(dot(q, normalize(hs)), q.x);  // 0 at the centre, 0.5 at the cell edge
+                float fwh = max(fwidth(hd), 1e-4);
+                float he = (0.5 - hd) / max(0.03, fwh * 1.5);  // soft, slightly blurred line
+                float hl = exp(-he * he * 0.5) * 0.55;
+                hl *= saturate(1.0 - fwh * 6.0);
+                col += neon * hl * 0.55 + neon * 0.06 + float3(0.5, 0.55, 0.6) * 0.01;
+                rimMul = 0.5;
+            }
+            else
+            {
+                // Empty ground: a pale fill with a sparse dot lattice.
+                float2 dp = wp2 / 3.0;
+                float2 dc = frac(dp) - 0.5;
+                float fwd = max(fwidth(dp.x), 1e-4);
+                float dt = (1.0 - smoothstep(0.05, 0.05 + fwd * 1.5, length(dc))) * saturate(1.0 - fwd * 5.0);
+                col += float3(0.70, 0.82, 0.88) * 0.02 + neon * dt * 0.16;
+            }
         }
-        col += neon * rim * (0.55 + 0.7 * fillF);
+        col += rimCol * rim * rimMul;
     }
     else if (kind == 8)
     {
@@ -312,9 +407,10 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
     float tm = g_Accent.w;
     if (g_Params.w > 2.5)
     {
+        gSolid = 0.0;
         const float3 bc = buildingColor(In);
         const bool glass = (int)(g_Params.w + 0.5) == 6;
-        Color = float4(bc, glass ? saturate(0.06 + 0.9 * max(bc.r, max(bc.g, bc.b))) : 1.0);
+        Color = float4(bc, glass ? max(gSolid, saturate(0.06 + 0.9 * max(bc.r, max(bc.g, bc.b)))) : 1.0);
         return;
     }
     // Cloud dome (cube centred on the eye, seen from inside).
@@ -349,6 +445,11 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
             float sheen = pow(1.0 - saturate(abs(vd.y)), 4.0) * 0.5;
             float3 c = tile * 0.35 * (1.0 + sheen) + float3(0.0004, 0.0004, 0.0005);
             c += float3(0.8, 0.85, 0.9) * spillLight(In.WPos, float3(0, 1, 0)) * 0.06 * (0.5 + 0.5 * tr) * (1.0 - 0.6 * seam);
+            // Glossy polish: faint, slightly blurred mirror of the ceiling lights plus a soft horizon gradient, stronger on some tiles.
+            float3 rv = float3(vd.x, -vd.y, vd.z);
+            float gl = 0.6 + 0.8 * hash12(tid + 7.0);
+            float3 gloss = glossLights(In.WPos, rv, 28.0 + 40.0 * tr) * (0.5 + 0.5 * sheen) + float3(0.10, 0.13, 0.16) * pow(1.0 - saturate(abs(vd.y)), 3.0) * 0.5;
+            c += gloss * gl * (1.0 - 0.8 * seam) * 0.6;
             Color = float4(c, 1.0);
             return;
         }

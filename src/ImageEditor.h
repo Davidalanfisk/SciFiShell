@@ -14,7 +14,7 @@ class ImageEditor : public PanelApp {
 public:
     explicit ImageEditor(Renderer& renderer);
     const char* name() const override { return "IMAGE"; }
-    bool wantsText() const override { return saveAs_; }
+    bool wantsText() const override { return saveAs_ || textOn_; }
     bool keepAlive() const override { return timerOn_ || shotWait_ > 0; }
     bool openPath(const std::string& path);
     void newBlank(int w, int h);
@@ -29,6 +29,8 @@ protected:
     void tick(double dt) override;
     bool onHover(float x, float y) override;
     void onClick(float x, float y, bool dbl) override;
+    void onWheel(float x, float y, float notches) override;
+    void onRelease() override { panning_ = false; }
     void onKey(EditKey k) override;
     void onText(const std::string& s) override;
     void onCtrl(const std::string& s) override;
@@ -37,7 +39,7 @@ protected:
     void onResize(int, int) override { viewDirty_ = true; }
 
 private:
-    enum class Tool { None, Crop, Resize, Brush, Shot };
+    enum class Tool { None, Crop, Resize, Brush, Eraser, Fill, Pick, Line, Rect, Oval, Text, Shot, Pan };
     struct Hit {
         ui::Rect r;
         int id;
@@ -48,7 +50,16 @@ private:
     void flip();
     void cropTo(int x0, int y0, int x1, int y1);
     void resizePct(int pct);
-    void stamp(float ix, float iy);
+    void stamp(float ix, float iy, Color8 c, float r);
+    float brushRadius() const;
+    void drawLinePx(float x0, float y0, float x1, float y1, Color8 c, float r);
+    void drawShape(Tool t, float x0, float y0, float x1, float y1);
+    void floodFill(int x, int y, Color8 c);
+    void adjust(int id);
+    void flipV();
+    void redo();
+    void commitText();
+    bool isDrawTool() const { return tool_ >= Tool::Brush && tool_ <= Tool::Text; }
     void stroke(float ix, float iy);
     bool toImage(float x, float y, float& ix, float& iy) const;
     void save();
@@ -56,8 +67,20 @@ private:
     void renderView(int vw, int vh);
 
     int w_ = 0, h_ = 0;
-    std::vector<uint8_t> px_, undo_;
-    int undoW_ = 0, undoH_ = 0;
+    struct Snap {
+        std::vector<uint8_t> px;
+        int w = 0, h = 0;
+    };
+    std::vector<uint8_t> px_;
+    std::vector<Snap> undo_, redo_;
+    // two-click shapes
+    int shapeN_ = 0;
+    float sx_ = 0, sy_ = 0;
+    bool filled_ = false;
+    // text tool
+    bool textOn_ = false;
+    std::string textBuf_;
+    float tx_ = 0, ty_ = 0;
     std::string path_, field_, status_;
     bool dirty_ = false, saveAs_ = false;
     Tool tool_ = Tool::None;
@@ -79,6 +102,9 @@ private:
     bool viewDirty_ = true;
     ui::Rect view_;
     float scale_ = 1, ox_ = 0, oy_ = 0;
+    bool panning_ = false;
+    float panLastX_ = 0, panLastY_ = 0;
+    float fit_ = 1, zoom_ = 1, panX_ = 0, panY_ = 0;  // zoom relative to fit-to-view; pan in view pixels
     std::vector<Hit> hits_;
     int hover_ = -1;
     float hoverX_ = -1, hoverY_ = -1;

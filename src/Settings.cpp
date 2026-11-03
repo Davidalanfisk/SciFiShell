@@ -39,6 +39,8 @@ void Settings::load() {
                 if (f >> ak) arrangeKey = ak;
                 float la, lb, lc, ld, le;
                 if (f >> la >> lb >> lc >> ld >> le) { lightSpot = la; lightCap = lb; lightBase = lc; lightAmbient = ld; lightFalloff = le; }
+                int sc = 1;
+                if (f >> sc) showCity = sc != 0;
             }
         }
     }
@@ -59,7 +61,7 @@ void Settings::save() const {
     if (p.empty()) return;
     std::error_code ec;
     std::filesystem::create_directories(p.parent_path(), ec);
-    std::ofstream(p) << lookIdx << ' ' << speedIdx << ' ' << (invertY ? 1 : 0) << ' ' << (crosshair ? 1 : 0) << ' ' << (showFps ? 1 : 0) << ' ' << webQuality << ' ' << aaIdx << ' ' << distIdx << ' ' << (reflections ? 1 : 0) << ' ' << (postFx ? 1 : 0) << ' ' << (vsync ? 1 : 0) << ' ' << (carryWins ? 1 : 0) << ' ' << (snapWins ? 1 : 0) << ' ' << arrangeKey << ' ' << lightSpot << ' ' << lightCap << ' ' << lightBase << ' ' << lightAmbient << ' ' << lightFalloff;
+    std::ofstream(p) << lookIdx << ' ' << speedIdx << ' ' << (invertY ? 1 : 0) << ' ' << (crosshair ? 1 : 0) << ' ' << (showFps ? 1 : 0) << ' ' << webQuality << ' ' << aaIdx << ' ' << distIdx << ' ' << (reflections ? 1 : 0) << ' ' << (postFx ? 1 : 0) << ' ' << (vsync ? 1 : 0) << ' ' << (carryWins ? 1 : 0) << ' ' << (snapWins ? 1 : 0) << ' ' << arrangeKey << ' ' << lightSpot << ' ' << lightCap << ' ' << lightBase << ' ' << lightAmbient << ' ' << lightFalloff << ' ' << (showCity ? 1 : 0);
 }
 
 }  // namespace sf

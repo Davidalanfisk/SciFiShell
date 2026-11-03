@@ -64,6 +64,8 @@ private:
     void leaveFileRoom();
     void toggleVR();
     void toggleCity(bool on);
+    void setCityEnabled(bool on);
+    bool cityStarted_ = false;
     [[noreturn]] void fastExit();
     void tick(double dt);
     void handleSwitcher(FrameInput& in, PadState& pad);

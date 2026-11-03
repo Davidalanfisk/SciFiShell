@@ -26,7 +26,10 @@ public:
     bool hidden() const { return hidden_; }
     bool exists() const { return open_ || hidden_; }
     void leave();                      // the pointer is on another window
-    void releaseButton() { dragging_ = false; }
+    void releaseButton() {
+        dragging_ = false;
+        onRelease();
+    }
     bool busy() const { return dragging_; }
     bool overTitle() const { return open_ && !fullscreen_ && mx_ >= 0 && my_ < 86 && hoverBtn_ == 0; }
     bool fullscreen() const { return fullscreen_; }
@@ -66,6 +69,7 @@ protected:
     virtual bool onHover(float /*x*/, float /*y*/) { return false; }  // true when the look changed
     virtual void onClick(float /*x*/, float /*y*/, bool /*dbl*/) {}
     virtual void onWheel(float /*x*/, float /*y*/, float /*notches*/) {}
+    virtual void onRelease() {}
     virtual void onKey(EditKey) {}
     virtual void onText(const std::string&) {}
     virtual void onCtrl(const std::string&) {}

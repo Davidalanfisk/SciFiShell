@@ -13,6 +13,14 @@ constexpr float kRingRadius = 7.0f;
 constexpr int kCardsPerTier = 14;
 constexpr size_t kMaxEntries = 1000;
 constexpr size_t kMaxRooms = 400;
+// A room stays a comfortable gallery: past these limits a folder opens as a building of its own (lobby floors and a lift),
+// and loose files are split across several rooms.
+constexpr size_t kMaxRoomItems = 120, kMaxRoomDoors = 24;
+
+static std::vector<DirEntry> looseSlice(const std::vector<DirEntry>& all, size_t from, size_t count) {
+    const size_t b = std::min(from, all.size()), e = std::min(all.size(), from + count);
+    return std::vector<DirEntry>(all.begin() + b, all.begin() + e);
+}
 constexpr size_t kInfoScan = 300;  // files inspected per room for the hallway preview
 constexpr int kMaxTiers = 16;
 constexpr float kCardPitch = 1.7f;
@@ -389,11 +397,16 @@ void FileRoom::load(std::string path) {
         std::vector<DirEntry> dirs;
         for (size_t i = 1; i < entries.size(); ++i) (entries[i].isDir ? dirs : looseItems_).push_back(entries[i]);
         if (!looseItems_.empty() || dirs.empty()) {
-            RoomInfo loose;
-            loose.name = "(FILES)";
-            loose.path = path;
-            loose.loose = true;
-            rooms_.push_back(std::move(loose));
+            const size_t chunks = std::max<size_t>(1, (looseItems_.size() + kMaxRoomItems - 1) / kMaxRoomItems);
+            for (size_t c = 0; c < chunks; ++c) {
+                RoomInfo loose;
+                loose.name = chunks > 1 ? "(FILES " + std::to_string(c + 1) + "/" + std::to_string(chunks) + ")" : "(FILES)";
+                loose.path = path;
+                loose.loose = true;
+                loose.from = c * kMaxRoomItems;
+                loose.count = kMaxRoomItems;
+                rooms_.push_back(std::move(loose));
+            }
         }
         for (size_t i = 0; i < dirs.size() && rooms_.size() < kMaxRooms; ++i) {
             RoomInfo r;
@@ -759,8 +772,8 @@ float FileRoom::roomDoorX(int r) const { return slots_[r].x; }
 void FileRoom::fillRoomInfo(int r) {
     RoomInfo& ri = rooms_[r];
     ri.ready = true;
-    const std::vector<DirEntry> scanned = ri.loose ? std::vector<DirEntry>() : listDirectory(ri.path, kInfoScan);
-    const std::vector<DirEntry>& items = ri.loose ? looseItems_ : scanned;
+    const std::vector<DirEntry> scanned = ri.loose ? looseSlice(looseItems_, ri.from, ri.count) : listDirectory(ri.path, kInfoScan);
+    const std::vector<DirEntry>& items = scanned;
     ri.capped = !ri.loose && items.size() >= kInfoScan;
     bool havePreview = false;
     for (const DirEntry& e : items) {
@@ -816,7 +829,15 @@ void FileRoom::addRoomExtras(int r) {
 void FileRoom::enterRoom(int idx, bool setSpawn) {
     if (idx < 0 || idx >= static_cast<int>(rooms_.size())) return;
     const RoomInfo ri = rooms_[idx];
-    std::vector<DirEntry> items = ri.loose ? looseItems_ : listDirectory(ri.path, kMaxEntries);
+    std::vector<DirEntry> items = ri.loose ? looseSlice(looseItems_, ri.from, ri.count) : listDirectory(ri.path, kMaxEntries);
+    if (setSpawn && !ri.loose) {  // too much for one room: open the folder as its own building instead
+        const size_t dc = static_cast<size_t>(std::count_if(items.begin(), items.end(), [](const DirEntry& e) { return e.isDir; }));
+        if (dc > kMaxRoomDoors || items.size() > kMaxRoomItems) {
+            const std::string target = ri.path;
+            load(target);
+            return;
+        }
+    }
     if (setSpawn && items.size() == 1 && items[0].isDir) {  // a room holding just one folder: go straight through
         const std::string target = items[0].path;
         load(target);
@@ -832,7 +853,7 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     std::stable_partition(items.begin(), items.end(), [](const DirEntry& e) { return e.isDir; });
     const int n = static_cast<int>(items.size());
     const int dirCount = static_cast<int>(std::count_if(items.begin(), items.end(), [](const DirEntry& e) { return e.isDir; }));
-    const int tiers = std::clamp((n + 24) / 25, 2, 5);
+    const int tiers = std::clamp((n + 24) / 25, 2, 3);
     const float pitch = 2.4f, tierH = 1.5f;
     struct Slot { Vec3 p; float yaw; };
     auto makeSlots = [&](float S) {

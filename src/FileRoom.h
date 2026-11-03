@@ -103,6 +103,7 @@ private:
     void addSky();
     struct RoomInfo {
         std::string name, path;
+        size_t from = 0, count = 0;  // a loose room shows looseItems_[from, from + count)
         bool loose = false, ready = false, capped = false, hasPreview = false, previewIsImage = false;
         int files = 0, dirs = 0, imgs = 0, vids = 0, auds = 0, txts = 0, others = 0;
         DirEntry preview;

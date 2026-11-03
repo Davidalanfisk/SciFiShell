@@ -155,7 +155,7 @@ void SettingsHub::rebuild() {
     }
     if (!rects_.empty()) sel_ = std::clamp(sel_, 0, static_cast<int>(rects_.size()) - 1);
     aspect_ = static_cast<float>(bm.w) / bm.h;
-    label_ = renderer_.createLabel(bm);
+    label_ = renderer_.createLabel(bm, true);
 }
 
 int SettingsHub::hitIndex(Vec3 o, Vec3 d) const {

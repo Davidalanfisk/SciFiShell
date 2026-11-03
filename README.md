@@ -37,6 +37,7 @@ and just *fly around inside your own machine*.
 | Toggle VR | `V` |
 | On-screen keyboard | `F7` |
 | Arrange windows (arc, then tiles) | `F8` (remap in Settings → Windows → Arrange Key) |
+| Show / hide the city | `F9` (also Settings → Graphics → City) |
 | Screenshot | `F12` (saved to `Pictures\SciFiShell`) |
 
 **Xbox controller:** left stick move · right stick look (snap turn in VR) · **RT / LT** up / down · **A** select · **B** back · **Y** Start menu · **X** on-screen keyboard · **LB / RB** previous / next window (then **A**)
@@ -44,6 +45,8 @@ and just *fly around inside your own machine*.
 **VR headset only (no controllers needed):** a gaze reticle aims; use mouse, keyboard or Xbox pad for everything else. The on-screen keyboard (`F7`) floats in front of you and pops up when a text field is focused. Picking up a controller switches aiming to its ray; touching mouse, keyboard or pad switches back to gaze.
 
 **VR controllers (OpenXR):** right ray + trigger select · left stick / trackpad move (the way you face) · right stick / trackpad: left-right snap turn, up-down altitude · left menu / Y / B Start menu · right menu / B back · left grip or X / A on-screen keyboard · right grip window switcher (trigger confirms)
+
+**City layout:** each region is a solid-floored district with hexagon-paved main roads, grey pavements, paths, parks with ponds, trees and benches, and street lights. The machine's own components (hub, CPU, RAM, GPU, cache) sit in a white region at the centre. PCIe buses run at street level and only rise onto bridges to cross one another; stations are street-level plazas with read/write meters at their gates. Very large folders (more than 24 subfolders or 120 items) open as their own multi-floor lobby with a lift, and loose files are split across rooms of up to 120.
 
 **Window management:** open windows follow you between the city, lobbies and rooms, gliding to a comfortable spot in front of you. Aim at the bracket at a window's bottom-right corner to resize it (hold and drag with the mouse; with a pad or VR controller click to grab, move, click to drop). While dragging a window the mouse wheel pushes it away or pulls it closer, and it snaps to the edges, plane and eye height of its neighbours. `F8` or **Settings → Windows** curves every open window around you in an arc, or lays them out as tiles. Carrying and snapping can be switched off there too.
 
@@ -111,7 +114,7 @@ gently turns to face them and stays put until you move.
 | **System Monitor** | Live CPU, memory, GPU, per-thread load, top processes, network and drives. Also opens when you click the **CPU building**. |
 | **File Browser** | A classic 2D file manager: places, drives, search, sorting, copy / cut / paste, rename, delete (to the Recycle Bin), and **Open in 3D Room**. |
 | **Editor** | A text editor that always starts with a blank document: New, Open, Save, Save As. |
-| **Image Editor** | Opens images (also from file rooms): rotate, flip, crop, resize, paintbrush, undo, save as PNG/JPG/BMP, plus a **shot timer** that hides the window and saves a screenshot to Pictures\SciFiShell. |
+| **Image Editor** | Opens images (also from file rooms): a file bar along the top, an icon toolbox with tooltips on the left (brush, eraser, fill, shapes, text, picker, crop, pan and more), text buttons for transforms and adjustments on the right, mouse-wheel zoom and a pan tool, undo/redo, save as PNG/JPG/BMP, plus a **shot timer** that hides the window and saves a screenshot to Pictures\SciFiShell. |
 | **FTP** | A basic FTP client: host / user / password (anonymous if empty), browse, download to Downloads, upload via the in-app file picker. |
 | **Calculator** | Standard, Scientific (trig, logs, powers, factorial, DEG/RAD) and Computer (64-bit HEX / DEC / OCT / BIN, bitwise operators, clickable bit grid) modes, with full keyboard input. |
 | **Terminal** | PowerShell, CMD or WSL in a window (Windows 10 1809+). |

@@ -124,6 +124,7 @@ private:
     struct NetRoute { int plat; std::vector<Vec3> pts; };  // pts: x, height above road, z
     void buildNetwork() const;
     void drawSlope(Renderer& r, Vec3 a, Vec3 b, float width, float th, Vec3 neon, float seed, int kind, float emerge);
+    void renderBlockScenery(Renderer& r, const Platform& p, const Block& b, uint32_t seed, Vec3 tint, bool detail, int& draws);
     mutable bool netBuilt_ = false;
     mutable std::vector<NetRoute> net_;
     mutable std::vector<Piece> pieces_;

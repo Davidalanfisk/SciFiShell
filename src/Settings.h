@@ -18,6 +18,7 @@ struct Settings {
     bool carryWins = true;  // windows follow you between the city, lobbies and rooms
     int arrangeKey = 0;     // SDL keycode that arranges windows; 0 = the default, F8
     bool snapWins = true;   // dragged windows snap to the edges and height of their neighbours
+    bool showCity = true;  // the city is the home view; off saves the generation and drawing cost
     float lightSpot = 1.07f, lightCap = 0.02f, lightBase = 0.01f, lightAmbient = 0.0f, lightFalloff = 0.6f;  // interior lighting sliders
     static constexpr float kDistScale[4] = {0.4f, 0.65f, 1.0f, 1.3f};
     float distScale() const { return kDistScale[distIdx]; }
