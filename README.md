@@ -237,6 +237,25 @@ This is only the first lap. The grid is about to get **gnarly**:
 
 # For developers
 
+## Tech stack
+
+| Area | What it uses |
+|---|---|
+| Language / build | C++20, CMake 3.20+ (dependencies fetched with `FetchContent`), Visual Studio 2022 and vcpkg on Windows |
+| Rendering | [Diligent Engine](https://github.com/DiligentGraphics/DiligentEngine) (DiligentCore): Direct3D 12 on Windows, Vulkan on Linux, Metal on macOS. HLSL shaders in `shaders/` (LCARS panels, the 3D world, post-processing, web layers) |
+| The city | Procedural. The folder tree is scanned (and cached) and turned into districts, buildings, bus lanes, parks, ponds, the race track and more. Everything is drawn with a few custom pipelines: glass, neon wireframe and reflective grid floors |
+| Post-processing | Bloom, light streaks and a dark colour grade, plus MSAA (off, 2x or 4x) |
+| Windowing and input | SDL2 (window, keyboard, mouse, game controllers). XInput for Xbox pads |
+| VR | OpenXR (SteamVR compatible): head pose, controller rays, swapchains, gaze reticle |
+| 2D and in-world UI | A custom UI kit (`UiKit`, `LCARSUI`) on top of `stb_truetype` text, with Inter, Space Grotesk and JetBrains Mono fonts |
+| Web browser | Chromium Embedded Framework (CEF) rendering into a texture, with a depth compositor that lifts images and video off the page |
+| Media | Windows Media Foundation for video and audio. Metadata is read in-house, plus a background library scan |
+| Images and models | `stb_image` and `stb_image_write` for images, `cgltf` for glTF/GLB models such as the car |
+| Audio | SDL audio. The sound effects and the electric car hum are synthesised in code (`Sfx`), with no audio files |
+| Hosted Windows apps | Window capture plus a UI Automation helper (`SciFiUia.exe`) that mirrors real programs onto panels |
+| Tools | Built-in system monitor, terminal, file browser, image editor, FTP client, calculator and code editor |
+| Packaging | Inno Setup installer, an updater script that checks GitHub Releases, and releases published with the `gh` CLI |
+
 ## Dependencies
 
 | Dependency | Source |
