@@ -152,15 +152,13 @@ void Sfx::fill(short* out, int frames) {
         carBoost_ += (carBoostTarget_ - carBoost_) * 4.0f * k;
         if (carGain_ > 0.002f) {
             const float sp = carSpeed_ / 100.0f;
-            const float f = 48.0f + sp * 150.0f + carBoost_ * 12.0f;
+            const float f = 42.0f + sp * 78.0f + carBoost_ * 8.0f;
             ph1_ += kTau * f * k;
-            ph2_ += kTau * f * 1.498f * k;
-            ph3_ += kTau * (380.0f + sp * 1500.0f) * k;
-            whineLp_ += (rnd(noise_) - whineLp_) * 0.08f;
-            const float body = tri(ph1_) * 0.55f + std::sin(ph2_) * 0.3f;
-            const float whine = std::sin(ph3_) * (0.03f + 0.09f * sp) + whineLp_ * 0.08f * sp;
-            const float idle = 0.35f + 0.65f * std::min(1.0f, sp * 1.6f);
-            s += (body * idle * 0.16f + whine) * carGain_ * (1.0f + carBoost_ * 0.25f);
+            ph2_ += kTau * f * 2.0f * k;
+            const float raw = std::sin(ph1_) * 0.7f + std::sin(ph2_) * 0.25f * (0.3f + sp);
+            whineLp_ += (raw - whineLp_) * 0.04f;  // one-pole low-pass keeps everything warm and low
+            const float idle = 0.45f + 0.55f * std::min(1.0f, sp * 1.6f);
+            s += whineLp_ * idle * 0.2f * carGain_ * (1.0f + carBoost_ * 0.2f);
         }
         s *= master_;
         s = std::tanh(s * 1.2f);

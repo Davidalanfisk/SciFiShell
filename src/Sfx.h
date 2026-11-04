@@ -18,7 +18,7 @@ public:
     void play(SfxId id, float volume = 1.0f);
     // Called every frame: speed in m/s, whether the car is being driven, and whether boost is held.
     void setCar(bool driving, float speed, bool boost);
-    void setMasterVolume(float v) { master_ = v; }
+    void setMasterVolume(float v) { master_ = 0.8f * v; }
 
 private:
     struct Voice {

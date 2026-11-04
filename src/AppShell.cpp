@@ -149,6 +149,7 @@ bool AppShell::init() {
     SDL_free(base);
     if (!loadFonts(fontDir)) std::fprintf(stderr, "No fonts found in %s\n", fontDir.c_str());
     settings_.load();
+    sfx_.setMasterVolume(settings_.sfxVol);
     renderer_.setMsaaPreference(settings_.aaIdx);
     if (!renderer_.init(window_, shaderDir)) {
         std::fprintf(stderr, "Renderer initialisation failed (shader dir: %s)\n", shaderDir.c_str());
@@ -446,6 +447,13 @@ void AppShell::buildSettingsHub() {
                            [this, save] { settings_.lookIdx = (settings_.lookIdx + 1) % Settings::kSteps; save(); }});
     shell.items.push_back({"MOVE SPEED", "Walking speed in the room", [this, pct] { return pct(settings_.speedScale()); },
                            [this, save] { settings_.speedIdx = (settings_.speedIdx + 1) % Settings::kSteps; save(); }});
+    shell.items.push_back({"SOUND EFFECTS", "Effects and car volume", [this, pct] { return pct(settings_.sfxVol); },
+                           [this, save] {
+                               settings_.sfxVol = settings_.sfxVol <= 0.01f ? 1.0f : settings_.sfxVol - 0.25f;
+                               sfx_.setMasterVolume(settings_.sfxVol);
+                               sfx_.play(SfxId::Pickup);
+                               save();
+                           }});
     shell.items.push_back({"INVERT LOOK Y", "Flip vertical look", [this, onOff] { return onOff(settings_.invertY); },
                            [this, save] { settings_.invertY = !settings_.invertY; save(); }});
     shell.items.push_back({"CROSSHAIR", "Aiming dot", [this, onOff] { return onOff(settings_.crosshair); },
