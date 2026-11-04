@@ -328,19 +328,8 @@ float3 buildingColor(PSInput In)
             }
             else if (fillF > 0.5)
             {
-                // Main road: a tessellating hexagon texture on a darker tinted bed.
-                float2 wp = wp2 / 12.0;
-                const float2 hs = float2(1.0, 1.7320508);
-                float2 a = (frac(wp / hs) - 0.5) * hs;
-                float2 b = (frac((wp + hs * 0.5) / hs) - 0.5) * hs;
-                float2 gv = dot(a, a) < dot(b, b) ? a : b;
-                float2 q = abs(gv);
-                float hd = max(dot(q, normalize(hs)), q.x);  // 0 at the centre, 0.5 at the cell edge
-                float fwh = max(fwidth(hd), 1e-4);
-                float he = (0.5 - hd) / max(0.03, fwh * 1.5);  // soft, slightly blurred line
-                float hl = exp(-he * he * 0.5) * 0.55;
-                hl *= saturate(1.0 - fwh * 6.0);
-                col += neon * hl * 0.55 + neon * 0.06 + float3(0.5, 0.55, 0.6) * 0.01;
+                // Main road and region floor: a plain, dark tinted bed.
+                col += neon * 0.05 + float3(0.5, 0.55, 0.6) * 0.008;
                 rimMul = 0.5;
             }
             else

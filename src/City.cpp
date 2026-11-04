@@ -163,7 +163,7 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap, int first, int co
     }
     // Greedy compact packing: biggest platforms first, each at the smallest radius from the hub where it clears the hub and
     // every platform already placed. Target angles follow the golden angle so the regions spread evenly around the centre.
-    constexpr float kHubHalf = 75.0f, kClear = 22.0f;
+    constexpr float kHubHalf = 112.0f, kClear = 22.0f;
     std::vector<float> px(n, 0.0f), pz(n, 0.0f);
     std::vector<int> order;
     std::vector<int> placed;
@@ -1251,6 +1251,37 @@ void City::renderBlockScenery(Renderer& r, const Platform& p, const Block& b, ui
         renderBox(r, {x + (alongX ? 0.0f : 0.28f), y0 + 0.75f, z + (alongX ? 0.28f : 0.0f)}, alongX ? Vec3{1.8f, 0.5f, 0.08f} : Vec3{0.08f, 0.5f, 1.8f}, c * 0.7f, 0.5f, 5, 1, 0, 0);
         draws += 2;
     };
+    const Vec3 warm{1.0f, 0.55f, 0.2f}, pink{1.0f, 0.5f, 0.75f};
+    // A hot dog cart: a body on two wheels with a striped awning. `dir` turns the serving side.
+    auto hotdogCart = [&](float x, float z, bool alongX) {
+        const Vec3 sz = alongX ? Vec3{2.0f, 1.0f, 1.0f} : Vec3{1.0f, 1.0f, 2.0f};
+        renderBox(r, {x, y0 + 0.9f, z}, sz, warm * 0.7f, 0.5f, 5, 1, 0, 0);
+        renderBox(r, {x, y0 + 1.6f, z}, alongX ? Vec3{2.4f, 0.12f, 1.4f} : Vec3{1.4f, 0.12f, 2.4f}, warm, 0.5f, 5, 1, 0, 0);
+        renderBox(r, {x, y0 + 0.35f, z}, alongX ? Vec3{0.2f, 0.7f, 1.1f} : Vec3{1.1f, 0.7f, 0.2f}, tint * 0.4f, 0.5f, 5, 1, 0, 0);
+        draws += 3;
+    };
+    // An ice cream stand: a small kiosk with a cone on the roof.
+    auto iceCream = [&](float x, float z) {
+        renderBox(r, {x, y0 + 0.9f, z}, {1.6f, 1.8f, 1.6f}, pink * 0.6f, 0.5f, 5, 1, 0, 0);
+        renderBox(r, {x, y0 + 1.9f, z}, {2.0f, 0.12f, 2.0f}, pink, 0.5f, 5, 1, 0, 0);
+        renderBox(r, {x, y0 + 2.45f, z}, {0.5f, 0.9f, 0.5f}, {0.95f, 0.9f, 0.8f}, 0.5f, 5, 1, 0, 0);
+        renderBox(r, {x, y0 + 3.0f, z}, {0.8f, 0.5f, 0.8f}, pink, 0.5f, 5, 1, 0, 0);
+        draws += 4;
+    };
+    // Carts and stands among the towers: on the pad edge between street lights, so dense blocks get them too.
+    if (detail) {
+        const float half = b.side * 0.5f - 4.2f;
+        for (int s = 0; s < 4; ++s)
+            for (int k = 0; k < b.g; ++k) {
+                const uint32_t hs = seed * 31u + uint32_t(s * 64 + k) * 40503u;
+                if (rnd01(hs) > 0.16f) continue;
+                const float along = (float(k) + 0.5f - b.g * 0.5f) * p.pitch;
+                const bool xs = s < 2;
+                const float x = b.cx + (xs ? along : (s == 2 ? -half : half)), z = b.cz + (xs ? (s == 0 ? -half : half) : along);
+                if (rnd01(hs + 9) < 0.5f) hotdogCart(x, z, xs);
+                else iceCream(x, z);
+            }
+    }
     for (int cz = 0; cz < b.g; ++cz)
         for (int cx = 0; cx < b.g; ++cx) {
             if (used[size_t(cz) * b.g + cx]) continue;
@@ -1259,14 +1290,18 @@ void City::renderBlockScenery(Renderer& r, const Platform& p, const Block& b, ui
             renderBox(r, {x, y0 + 0.03f, z}, {20.0f, 0.06f, 20.0f}, green, 0.5f, 6, 1, 5.0f, 0);
             ++draws;
             if (!detail) continue;
-            if (rnd01(sd) < 0.45f) {
+            const float v = rnd01(sd);
+            const Vec3 stone{0.75f, 0.85f, 0.9f};
+            if (v < 0.2f) {
+                // Pond park: a pond ringed with benches and two trees.
                 renderBox(r, {x, y0 + 0.07f, z}, {9.0f, 0.06f, 9.0f}, water, 0.5f, 6, 1, 6.0f, 0);
                 bench(x, z - 6.4f, true);
                 bench(x, z + 6.4f, true);
                 tree(x - 7.0f, z - 7.0f, rnd01(sd + 1));
                 tree(x + 7.0f, z + 7.0f, rnd01(sd + 2));
                 draws += 1;
-            } else {
+            } else if (v < 0.4f) {
+                // Cross-path garden with four trees.
                 renderBox(r, {x, y0 + 0.07f, z}, {20.0f, 0.05f, 2.2f}, tint, 0.5f, 6, 1, 4.0f, 0);
                 renderBox(r, {x, y0 + 0.07f, z}, {2.2f, 0.05f, 20.0f}, tint, 0.5f, 6, 1, 4.0f, 0);
                 bench(x + 3.5f, z - 2.2f, true);
@@ -1275,6 +1310,41 @@ void City::renderBlockScenery(Renderer& r, const Platform& p, const Block& b, ui
                 tree(x - 6.5f, z + 6.5f, rnd01(sd + 5));
                 tree(x + 6.5f, z + 6.5f, rnd01(sd + 6));
                 draws += 2;
+            } else if (v < 0.55f) {
+                // Fountain plaza: a paved square with a stepped fountain and benches facing it.
+                renderBox(r, {x, y0 + 0.07f, z}, {14.0f, 0.05f, 14.0f}, tint, 0.5f, 6, 1, 4.0f, 0);
+                renderBox(r, {x, y0 + 0.3f, z}, {5.0f, 0.5f, 5.0f}, stone * 0.5f, 0.5f, 5, 1, 0, 0);
+                renderBox(r, {x, y0 + 0.62f, z}, {4.0f, 0.2f, 4.0f}, water, 0.5f, 6, 1, 6.0f, 0);
+                renderBox(r, {x, y0 + 1.5f, z}, {0.7f, 2.0f, 0.7f}, water, 0.5f, 5, 1, 0, 0);
+                bench(x - 5.2f, z, false);
+                bench(x + 5.2f, z, false);
+                tree(x - 7.5f, z - 7.5f, rnd01(sd + 7));
+                tree(x + 7.5f, z + 7.5f, rnd01(sd + 8));
+                draws += 6;
+            } else if (v < 0.7f) {
+                // Grove: a dense stand of trees on open lawn.
+                for (int q = 0; q < 6; ++q) tree(x + (rnd01(sd + 20 + q) - 0.5f) * 15.0f, z + (rnd01(sd + 30 + q) - 0.5f) * 15.0f, rnd01(sd + 40 + q));
+                bench(x, z + 8.0f, true);
+                draws += 1;
+            } else if (v < 0.85f) {
+                // Market square: paved, with a hot dog cart, an ice cream stand and a bench.
+                renderBox(r, {x, y0 + 0.07f, z}, {16.0f, 0.05f, 16.0f}, tint, 0.5f, 6, 1, 4.0f, 0);
+                hotdogCart(x - 4.0f, z - 3.0f, true);
+                iceCream(x + 4.0f, z + 3.0f);
+                bench(x, z + 6.5f, true);
+                tree(x - 7.0f, z + 7.0f, rnd01(sd + 9));
+                tree(x + 7.0f, z - 7.0f, rnd01(sd + 10));
+                draws += 2;
+            } else {
+                // Duck pond: a long narrow pond with a path along it and benches.
+                renderBox(r, {x, y0 + 0.07f, z}, {14.0f, 0.06f, 5.0f}, water, 0.5f, 6, 1, 6.0f, 0);
+                renderBox(r, {x, y0 + 0.07f, z + 6.0f}, {20.0f, 0.05f, 2.2f}, tint, 0.5f, 6, 1, 4.0f, 0);
+                bench(x - 4.0f, z + 4.4f, true);
+                bench(x + 4.0f, z + 4.4f, true);
+                tree(x - 7.0f, z - 7.0f, rnd01(sd + 11));
+                tree(x + 7.0f, z - 7.0f, rnd01(sd + 12));
+                hotdogCart(x, z - 7.5f, true);
+                draws += 3;
             }
         }
 }

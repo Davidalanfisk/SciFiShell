@@ -989,6 +989,14 @@ void AppShell::addMediaFolders(const std::vector<std::string>& paths) {
 
 void AppShell::flyToWin(const WinRef& t) {
     if (!t.p || vrOn_ || recT_ >= 0.0f) return;
+    // A window still gliding into its arranged slot is snapped there first so the camera aims at where it will end up.
+    for (size_t i = 0; i < winAnims_.size(); ++i) {
+        if (winAnims_[i].w != t) continue;
+        const WinAnim a = winAnims_[i];
+        winAnims_.erase(winAnims_.begin() + static_cast<long>(i));
+        winMoveTo(a.w, a.c1, a.yaw1, a.w1);
+        break;
+    }
     Vec3 c, n;
     float bw, bh;
     if (!winBoundsOf(t, c, n, bw, bh)) return;
