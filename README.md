@@ -39,6 +39,9 @@ and just *fly around inside your own machine*.
 | Arrange windows (arc, then tiles) | `F8` (remap in Settings → Windows → Arrange Key) |
 | Show / hide the city | `F9` (also Settings → Graphics → City) |
 | Screenshot | `F12` (saved to `Pictures\SciFiShell`) |
+| Summon / exit the car | `F10` |
+| Car: drive / drift / boost / camera | `W` `A` `S` `D` / `Space` / `Shift` / `C` |
+| Hot dog / ice cream stand: take one, then throw it | Click the stand, click again |
 
 **Xbox controller:** left stick move · right stick look (snap turn in VR) · **RT / LT** up / down · **A** select · **B** back · **Y** Start menu · **X** on-screen keyboard · **LB / RB** previous / next window (then **A**)
 
@@ -101,6 +104,29 @@ Districts sit on glass-pane floors with a neon outline, and the whole city has a
 ![A lane station on a storage region](docs/city-station.jpg)
 ![The Start menu](docs/start-menu.jpg)
 ![Settings](docs/settings.jpg)
+
+### Play in the city
+Ground-level fog drifts between the towers, and the parks have wireframe neon ducks paddling around their ponds.
+
+![Ducks in a park pond](docs/ducks.jpg)
+
+**Hot dog and ice cream stands.** Click a stand to be handed a neon-outline snack, held just off to one side. Click again to lob it like a grenade: five seconds later it bursts in a neon explosion that shoves you back if you're close. Blow up a duck and a score pops up on your HUD. Every effect has a synthesised retro sound.
+
+![Hot dog](docs/hotdog.jpg)
+![Thrown](docs/throw.jpg)
+![Ice cream](docs/icecream.jpg)
+![Explosion](docs/explosion.jpg)
+
+**The car.** Press `F10` anywhere in the city to summon a neon hologram sports car, and `F10` again to leave it. `C` swaps first and third person; `Space` drifts and `Shift` boosts. A speedo appears on the HUD. The wheels steer and spin, and a quiet electric hum rises with speed. Parked, it is solid: you can stand on it. Ramps on every region let you drive up onto the platforms.
+
+![The car](docs/car.jpg)
+
+**The race track.** While you're driving, a roughly 3 km neon track fades in. Drive up the ramp beside the CPU region, then ride it through the city with loops, and the driver assist keeps you on it. It fades out when you leave the car.
+
+![Track ramp](docs/track-ramp.jpg)
+![Track tour](docs/track-tour.jpg)
+![A loop](docs/track-loop.jpg)
+![Riding the track](docs/track-ride.jpg)
 
 ## Built-in tools
 

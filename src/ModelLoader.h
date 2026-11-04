@@ -9,6 +9,13 @@
 
 namespace sf {
 
-bool loadGltfMesh(const std::string& path, std::vector<float>& vertices, std::vector<uint32_t>& indices, Vec3& size, Bitmap* atlas = nullptr);
+// The two front wheel subtrees (nodes named WheelFrontL* / WheelFrontR*) can be split out so they can be steered; the pivot is the wheel's vertical axis.
+struct WheelPart {
+    std::vector<float> vertices;
+    std::vector<uint32_t> indices;
+    Vec3 pivot{0, 0, 0};
+};
+
+bool loadGltfMesh(const std::string& path, std::vector<float>& vertices, std::vector<uint32_t>& indices, Vec3& size, Bitmap* atlas = nullptr, std::vector<WheelPart>* wheels = nullptr);
 
 }  // namespace sf

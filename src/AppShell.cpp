@@ -92,6 +92,7 @@ Bitmap makeArrowBitmap() {
 AppShell::AppShell() = default;
 
 AppShell::~AppShell() {
+    sfx_.shutdown();
     renderer_.waitIdle();
     vr_.stop();
 #ifdef SCIFI_HAS_CEF
@@ -127,6 +128,7 @@ bool AppShell::init() {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return false;
     }
+    sfx_.init();
     SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");  // hosted programs take focus; don't minimize the shell
     SDL_SetHint(SDL_HINT_ALLOW_ALT_TAB_WHILE_GRABBED, "0");   // with the keyboard grabbed, Alt+Tab goes to our task switcher
     Uint32 flags = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_RESIZABLE;
@@ -1224,6 +1226,42 @@ bool AppShell::scriptExec(const std::string& line) {
         is >> v;
         flying_ = (v != "off");
         vy_ = 0;
+    } else if (cmd == "give") {
+        if (city_) { city_->giveItem((int)num(0)); sfx_.play(SfxId::Pickup); }
+    } else if (cmd == "car") {
+        toggleCar();
+    } else if (cmd == "track") {
+        if (!driving_) toggleCar();
+        if (city_ && city_->trackReady()) {
+            const float s = num(0);
+            City::TrackFrame f0;
+            city_->trackSample(s, f0);
+            carPos_ = f0.p;
+            carYaw_ = chaseYaw_ = railYaw_ = std::atan2(-f0.flat.x, -f0.flat.z);
+            carVel_ = f0.flat * 30.0f;
+            carVy_ = 0.0f;
+            if (s > 14.0f) {
+                onTrack_ = true;
+                trackS_ = s;
+                trackD_ = 0.0f;
+                trackV_ = 40.0f;
+                camera_.position = f0.p - f0.flat * 8.5f + Vec3{0, 3.4f, 0};
+            }
+        }
+    } else if (cmd == "carcam") {
+        carFirst_ = !carFirst_;
+    } else if (cmd == "drive") {
+        scriptThrottle_ = num(0);
+        scriptSteer_ = num(1);
+    } else if (cmd == "throw") {
+        if (city_) city_->throwHeld(head_.eye);
+    } else if (cmd == "pond") {
+        Vec3 pp;
+        if (city_ && city_->debugPond(pp)) {
+            camera_.position = {pp.x, pp.y + 2.2f, pp.z + 11.0f};
+            camera_.yaw = 0;
+            camera_.pitch = -0.2f;
+        }
     } else if (cmd == "city") {
         if (!cityMode_) toggleCity(true);
     } else if (cmd == "leave") {
@@ -1633,6 +1671,215 @@ Vec3 AppShell::mouseRayDirection(int mx, int my) const {
     return normalize(camera_.world().transformDir({ndcX * t * aspect, ndcY * t, -1.0f}));
 }
 
+// Summon the car just ahead of the player and climb in, or climb out again leaving it parked.
+void AppShell::toggleCar() {
+    if (!cityMode_ || !city_ || vrOn_) return;
+    if (driving_) {
+        driving_ = false;
+        if (onTrack_) {
+            onTrack_ = false;
+            City::TrackFrame f0;
+            if (city_->trackSample(0.0f, f0)) {
+                carPos_ = {f0.p.x, 0.0f, f0.p.z};
+                carYaw_ = std::atan2(-f0.flat.x, -f0.flat.z);
+                carPos_.y = city_->floorAt({carPos_.x, 3.0f, carPos_.z}, 1.7f, 1.0f);
+            }
+        }
+        const Vec3 rt{std::cos(carYaw_), 0, -std::sin(carYaw_)};
+        camera_.position = {carPos_.x + rt.x * 3.0f, carPos_.y + 1.7f, carPos_.z + rt.z * 3.0f};
+        camera_.yaw = carYaw_;
+        camera_.pitch = 0.0f;
+        flying_ = false;
+        vy_ = 0.0f;
+        carVel_ = {};
+        return;
+    }
+    city_->ensureTrack();
+    onTrack_ = false;
+    trackCool_ = 0.0f;
+    const Vec3 f{-std::sin(camera_.yaw), 0, -std::cos(camera_.yaw)};
+    Vec3 p{camera_.position.x + f.x * 7.0f, 0, camera_.position.z + f.z * 7.0f};
+    p.y = city_->floorAt({p.x, camera_.position.y, p.z}, 1.7f, 1.0f) + 1.0f;
+    city_->resolve(p, 1.7f, 1.0f);
+    carPos_ = {p.x, city_->floorAt({p.x, p.y + 1.0f, p.z}, 1.7f, 1.0f), p.z};
+    carYaw_ = chaseYaw_ = camera_.yaw;
+    carVel_ = {};
+    carVy_ = carPitch_ = carSteer_ = carSpeed_ = lookOffX_ = lookOffY_ = 0.0f;
+    carSpawn_ = 0.0f;
+    carOn_ = driving_ = true;
+    sfx_.play(SfxId::CarSummon);
+}
+
+// Riding the race track: speed follows the throttle and the slope, steering slides across the deck, the camera follows the track's own frame.
+void AppShell::updateRail(float dt, float throttle, float steer, bool boost, float lookX, float lookY) {
+    const float L = city_->trackLength();
+    City::TrackFrame f;
+    city_->trackSample(trackS_, f);
+    if (throttle > 0.05f) trackV_ += throttle * (boost ? 60.0f : 40.0f) * dt;
+    else if (throttle < -0.05f) trackV_ += throttle * 55.0f * dt;
+    trackV_ -= 9.0f * f.t.y * dt;
+    trackV_ = clampf(trackV_, 24.0f, boost ? 100.0f : 78.0f);
+    trackS_ += trackV_ * dt;
+    const float lim = City::kTrackHalf - 1.4f;
+    trackD_ = clampf(trackD_ + steer * 16.0f * dt, -lim, lim);
+    carSteer_ += (steer - carSteer_) * std::min(1.0f, 8.0f * dt);
+    if (trackS_ >= L - 1.0f) {
+        city_->trackSample(L, f);
+        onTrack_ = false;
+        trackCool_ = 3.0f;
+        carVel_ = f.flat * trackV_;
+        carVy_ = 0.0f;
+        carPos_ = {f.p.x, f.p.y, f.p.z};
+        carYaw_ = std::atan2(-f.flat.x, -f.flat.z);
+        carPitch_ = 0.0f;
+        return;
+    }
+    city_->trackSample(trackS_, f);
+    const Vec3 R = cross(f.t, f.u);
+    carPos_ = f.p + R * trackD_;
+    railT_ = f.t;
+    railU_ = f.u;
+    carYaw_ = std::atan2(-f.flat.x, -f.flat.z);
+    carPitch_ = 0.0f;
+    carSpeed_ = trackV_;
+    carVel_ = f.t * trackV_;
+    carSpin_ = std::fmod(carSpin_ + trackV_ * dt / 0.34f, 6.2831853f);
+
+    lookOffX_ -= lookX;
+    lookOffY_ -= lookY;
+    if (lookX == 0.0f && lookY == 0.0f) {
+        lookOffX_ *= std::exp(-2.5f * dt);
+        lookOffY_ *= std::exp(-2.5f * dt);
+    }
+    lookOffX_ = clampf(lookOffX_, -3.0f, 3.0f);
+    lookOffY_ = clampf(lookOffY_, -0.8f, 0.8f);
+    if (carFirst_) {
+        camera_.position = carPos_ + f.u * 1.15f - R * 0.38f;
+        if (std::hypot(f.t.x, f.t.z) > 0.25f) railYaw_ = std::atan2(-f.t.x, -f.t.z);
+        camera_.yaw = railYaw_ + lookOffX_;
+        camera_.pitch = clampf(std::asin(clampf(f.t.y, -1.0f, 1.0f)) + lookOffY_, -1.3f, 1.3f);
+    } else {
+        const Vec3 target = carPos_ - f.flat * 8.5f + Vec3{0, 3.4f, 0};
+        const float k = 1.0f - std::exp(-9.0f * dt);
+        camera_.position = camera_.position + (target - camera_.position) * k;
+        const Vec3 look = (carPos_ + f.u * 1.0f) - camera_.position;
+        camera_.yaw = std::atan2(-look.x, -look.z) + lookOffX_;
+        camera_.pitch = clampf(std::atan2(look.y, std::hypot(look.x, look.z)) + lookOffY_, -1.3f, 1.3f);
+    }
+}
+// Arcade driving: strong lateral grip (cut by the handbrake for drifts), speed-scaled steering, gravity over ramps and slabs.
+void AppShell::updateCar(double dtd, float throttle, float steer, bool handbrake, bool boost, float lookX, float lookY) {
+    const float dt = std::min(float(dtd), 0.05f);
+    trackCool_ = std::max(0.0f, trackCool_ - dt);
+    carBoostOn_ = boost;
+    if (onTrack_) {
+        updateRail(dt, throttle, steer, boost, lookX, lookY);
+        return;
+    }
+    const Vec3 fwd{-std::sin(carYaw_), 0, -std::cos(carYaw_)}, rt{std::cos(carYaw_), 0, -std::sin(carYaw_)};
+    float vf = carVel_.x * fwd.x + carVel_.z * fwd.z, vl = carVel_.x * rt.x + carVel_.z * rt.z;
+    if (trackCool_ <= 0.0f && vf > 4.0f && city_->trackReady()) {
+        City::TrackFrame f0;
+        for (float s = 0.0f; s <= 14.0f; s += 1.0f) {
+            city_->trackSample(s, f0);
+            const float dx = carPos_.x - f0.p.x, dz = carPos_.z - f0.p.z;
+            const Vec3 R0 = cross(f0.t, f0.u);
+            const float lat = dx * R0.x + dz * R0.z, lon = dx * f0.flat.x + dz * f0.flat.z;
+            if (std::fabs(lat) < 3.2f && std::fabs(lon) < 1.6f && std::fabs(carPos_.y - f0.p.y) < 1.6f && fwd.x * f0.flat.x + fwd.z * f0.flat.z > 0.3f) {
+                onTrack_ = true;
+                sfx_.play(SfxId::RailOn);
+                trackS_ = s;
+                trackD_ = clampf(lat, -2.3f, 2.3f);
+                trackV_ = std::max(vf, 22.0f);
+                railYaw_ = carYaw_;
+                updateRail(dt, throttle, steer, boost, lookX, lookY);
+                return;
+            }
+        }
+    }
+    const float top = boost ? 100.0f : 62.0f;
+    if (throttle > 0.05f) vf += throttle * (vf < 0 ? 70.0f : (boost ? 64.0f : 42.0f)) * dt;
+    else if (throttle < -0.05f) vf += throttle * (vf > 0 ? 75.0f : 26.0f) * dt;
+    else vf *= std::exp(-0.7f * dt);
+    vf *= std::exp(-0.06f * dt);
+    if (vf > top) vf = std::max(top, vf - 40.0f * dt);
+    vf = std::max(vf, -18.0f);
+    vl *= std::exp(-(handbrake ? 1.1f : 9.0f) * dt);
+    if (handbrake) vf *= std::exp(-0.5f * dt);
+    const float turn = steer * 2.3f * clampf(std::fabs(vf) / 7.0f, 0.0f, 1.0f) / (1.0f + std::fabs(vf) / 55.0f) * (handbrake ? 1.5f : 1.0f);
+    carYaw_ -= turn * (vf < 0 ? -1.0f : 1.0f) * dt;
+    carSteer_ += (steer - carSteer_) * std::min(1.0f, 8.0f * dt);
+    const Vec3 nf{-std::sin(carYaw_), 0, -std::cos(carYaw_)}, nr{std::cos(carYaw_), 0, -std::sin(carYaw_)};
+    carVel_ = {nf.x * vf + nr.x * vl, 0, nf.z * vf + nr.z * vl};
+
+    Vec3 p{carPos_.x + carVel_.x * dt, carPos_.y + 1.0f, carPos_.z + carVel_.z * dt};
+    const float want = std::hypot(carVel_.x, carVel_.z);
+    Vec3 q = p;
+    city_->resolve(q, 1.8f, 1.0f);
+    const float px = q.x - p.x, pz = q.z - p.z, pl = std::hypot(px, pz);
+    if (pl > 0.002f) {
+        const float nx = px / pl, nz = pz / pl, into = carVel_.x * nx + carVel_.z * nz;
+        if (into < 0) {
+            carVel_.x -= nx * into * 1.15f;
+            carVel_.z -= nz * into * 1.15f;
+            carVel_.x *= 0.985f;
+            carVel_.z *= 0.985f;
+        }
+    }
+    carPos_.x = q.x;
+    carPos_.z = q.z;
+    const float maxR = city_->extent() * 1.3f, r = std::hypot(carPos_.x, carPos_.z);
+    if (r > maxR) {
+        carPos_.x *= maxR / r;
+        carPos_.z *= maxR / r;
+    }
+    (void)want;
+    // Vertical: gravity, snapping to the ground over small dips so ramps feel smooth.
+    auto groundAt = [&](float x, float z) { return city_->floorAt({x, carPos_.y + 1.0f, z}, 0.6f, 1.0f); };
+    const float fl = groundAt(carPos_.x, carPos_.z);
+    carVy_ -= 32.0f * dt;
+    carPos_.y += carVy_ * dt;
+    if (carPos_.y <= fl || (carPos_.y - fl < 0.25f && carVy_ <= 0.0f)) {
+        if (carPos_.y < fl - 0.001f || carVy_ <= 0) carPos_.y = fl;
+        carVy_ = 0.0f;
+    }
+    const float hf = groundAt(carPos_.x + nf.x * 2.0f, carPos_.z + nf.z * 2.0f), hb = groundAt(carPos_.x - nf.x * 2.0f, carPos_.z - nf.z * 2.0f);
+    const bool grounded = carPos_.y - fl < 0.3f;
+    const float tp = grounded ? std::atan2(hf - hb, 4.0f) : clampf(carVy_ * 0.02f, -0.3f, 0.3f);
+    carPitch_ += (tp - carPitch_) * std::min(1.0f, 10.0f * dt);
+    carSpeed_ = vf;
+    carSpin_ = std::fmod(carSpin_ + vf * static_cast<float>(dtd) / 0.34f, 6.2831853f);
+
+    // Camera: chase with a lagging heading, or the driver's seat; the mouse looks around and springs back.
+    lookOffX_ -= lookX;
+    lookOffY_ -= lookY;
+    if (lookX == 0.0f && lookY == 0.0f) {
+        lookOffX_ *= std::exp(-2.5f * dt);
+        lookOffY_ *= std::exp(-2.5f * dt);
+    }
+    lookOffX_ = clampf(lookOffX_, -3.0f, 3.0f);
+    lookOffY_ = clampf(lookOffY_, -0.8f, 0.8f);
+    float dy = carYaw_ - chaseYaw_;
+    while (dy > kPi) dy -= 2.0f * kPi;
+    while (dy < -kPi) dy += 2.0f * kPi;
+    chaseYaw_ += dy * std::min(1.0f, 4.5f * dt);
+    if (carFirst_) {
+        const float y = carYaw_ + lookOffX_;
+        const Vec3 f{-std::sin(carYaw_), 0, -std::cos(carYaw_)}, r2{std::cos(carYaw_), 0, -std::sin(carYaw_)};
+        camera_.position = {carPos_.x + f.x * 0.1f - r2.x * 0.38f, carPos_.y + 1.12f, carPos_.z + f.z * 0.1f - r2.z * 0.38f};
+        camera_.yaw = y;
+        camera_.pitch = clampf(carPitch_ * 0.6f + lookOffY_, -1.2f, 1.2f);
+    } else {
+        const float y = chaseYaw_ + lookOffX_;
+        const Vec3 f{-std::sin(y), 0, -std::cos(y)};
+        const float back = 7.4f + std::min(carSpeed_, 100.0f) * 0.03f;
+        Vec3 c{carPos_.x - f.x * back, carPos_.y + 2.7f, carPos_.z - f.z * back};
+        c.y = std::max(c.y, city_->floorAt({c.x, c.y, c.z}, 0.5f, 0.0f) + 0.8f);
+        camera_.position = c;
+        camera_.yaw = y;
+        camera_.pitch = clampf(-0.2f + lookOffY_, -1.2f, 1.0f);
+    }
+}
 void AppShell::updateCamera(double dt, float moveX, float moveY, float moveZ, float lookX, float lookY, float speedMul) {
     const bool inVR = vrOn_ && head_.vr;
     if (inVR && lookX != 0.0f) {
@@ -1653,6 +1900,9 @@ void AppShell::updateCamera(double dt, float moveX, float moveY, float moveZ, fl
     Vec3 right{std::cos(moveYaw), 0, -std::sin(moveYaw)};
     Vec3 p = camera_.position + fwd * (moveY * speed * static_cast<float>(dt)) +
              right * (moveX * speed * static_cast<float>(dt));
+    p.x += knock_.x * static_cast<float>(dt);
+    p.z += knock_.z * static_cast<float>(dt);
+    knock_ = knock_ * std::exp(-3.0f * static_cast<float>(dt));
     const bool inBuilding = !cityMode_ && room_->building();
     float r = std::sqrt(p.x * p.x + p.z * p.z);
     const float maxR = cityMode_ && city_ ? city_->extent() * 1.3f : std::max(40.0f, room_->extent());  // stay inside the room
@@ -1978,7 +2228,10 @@ void AppShell::tick(double dt) {
     bool pointerSelect = in.click || vrInput_.selectPressed;
     bool back = in.back || pad.bPressed || vrInput_.backPressed;
     bool vrPointer = vrOn_ && vrInput_.valid && !vrGaze_;
-    const bool ringToggle = in.ring || pad.yPressed || vrInput_.menuPressed;
+    if ((in.carToggle || (driving_ && pad.yPressed)) && !(focus_.p && winTyping(focus_))) toggleCar();
+    if (in.carCam && driving_ && !typing) carFirst_ = !carFirst_;
+    if (driving_) pointerSelect = keySelect = false;
+    const bool ringToggle = !driving_ && (in.ring || pad.yPressed || vrInput_.menuPressed);
     if (in.themeCycle) cycleTheme();
     if (in.screenshot) shotPending_ = true;    
     {
@@ -2358,7 +2611,12 @@ void AppShell::tick(double dt) {
                 if (viewer_->wantsClose()) viewer_->close();
             }
         } else {
-            updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed);
+            if (driving_) {
+                const Uint8* ks = SDL_GetKeyboardState(nullptr);
+                updateCar(dt, clampf(moveY + scriptThrottle_, -1, 1), clampf(moveX + scriptSteer_, -1, 1), ks[SDL_SCANCODE_SPACE] != 0 || pad.lt > 0.5f, in.shift || pad.rt > 0.5f, lookX, lookY);
+            } else {
+                updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed);
+            }
             static bool dbgPlaced = std::getenv("SCIFI_CITY_STREET") == nullptr;
             if (cityMode_ && !dbgPlaced && city_ && city_->debugStreet(camera_.position)) {
                 dbgPlaced = true;
@@ -2368,11 +2626,19 @@ void AppShell::tick(double dt) {
                 camera_.yaw = 0.0f;
             }
             hudTarget_.clear();
-            if (cityMode_) {
+            if (driving_) hudTarget_ = "F10 EXIT   C CAMERA   SPACE DRIFT   SHIFT BOOST";
+            if (cityMode_ && !driving_) {
                 room_->setHover(nullptr);
                 std::string path, name;
                 std::vector<Vec3> routePath;
-                if (!overWin && city_ && city_->pick(o, d, path, name)) {
+                int standKind = -1;
+                if (!overWin && city_ && !riding_ && city_->holding() && pointerSelect) {
+                    city_->throwHeld(head_.eye);
+                    hudTarget_.clear();
+                } else if (!overWin && city_ && !riding_ && !city_->holding() && city_->pickStand(o, d, standKind)) {
+                    hudTarget_ = standKind == 0 ? "HOT DOG" : "ICE CREAM";
+                    if (pointerSelect || keySelect) { city_->giveItem(standKind); sfx_.play(SfxId::Pickup); }
+                } else if (!overWin && city_ && city_->pick(o, d, path, name)) {
                     hudTarget_ = name;
                     if ((pointerSelect || keySelect) && !deferred_) {
                         city_->markEntered();
@@ -2505,7 +2771,47 @@ void AppShell::tick(double dt) {
     for (auto& a : apps_) a->update(dt);
 #endif
     }
-    if (city_ && cityStarted_) city_->update(dt, state_ == State::FileRoom, head_.eye);
+    if (city_ && cityStarted_) {
+        carSpawn_ = std::min(1.0f, carSpawn_ + float(dt) * 2.5f);
+        City::CarView cv;
+        cv.show = carOn_;
+        cv.hideBody = driving_ && carFirst_;
+        cv.solid = !driving_;
+        cv.pos = carPos_;
+        cv.yaw = carYaw_;
+        cv.pitch = carPitch_;
+        cv.steer = carSteer_;
+        cv.speed = carSpeed_;
+        cv.spin = carSpin_;
+        cv.rail = onTrack_;
+        cv.railT = railT_;
+        cv.railU = railU_;
+        trackFade_ = clampf(trackFade_ + float(dt) * (driving_ ? 0.5f : -0.85f), 0.0f, 1.0f);
+        city_->setTrackFade(trackFade_);
+        cv.spawn = carSpawn_;
+        city_->setCar(cv);
+        sfx_.setCar(driving_ && cityMode_, carSpeed_, carBoostOn_);
+        City::SfxEvent se;
+        while (city_->takeSfx(se)) {
+            const float d = length(se.p - head_.eye);
+            const float vol = clampf(1.0f - d / (se.id == 2 ? 140.0f : 60.0f), 0.0f, 1.0f);
+            sfx_.play(se.id == 1 ? SfxId::Throw : se.id == 2 ? SfxId::Boom : SfxId::DuckPop, se.id == 1 ? 0.8f : 0.15f + 0.85f * vol);
+        }
+        city_->setLook(head_.forward);
+        city_->update(dt, state_ == State::FileRoom, head_.eye);
+        int pts = 0, tot = 0;
+        scoreT_ = std::max(0.0f, scoreT_ - float(dt));
+        if (city_->takeScore(pts, tot)) {
+            scoreLabel_ = renderer_.createLabel(makeLabel("+" + std::to_string(pts) + "   SCORE " + std::to_string(tot), 54.0f, FontFace::UI, Color8{}, 96, 4));
+            scoreT_ = 3.5f;
+        }
+        Vec3 imp;
+        if (cityMode_ && city_->takeBlast(imp)) {
+            knock_ = {imp.x, 0.0f, imp.z};
+            vy_ += imp.y;
+            flying_ = false;
+        }
+    }
     if (clearRoomPending_) {
         clearRoomPending_ = false;
         if (cityMode_ && state_ == State::FileRoom) room_->loadEmpty();
@@ -2611,6 +2917,22 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         const float tw = th * hudTimeLabel_->aspect;
         const float rx = vrOn_ ? 0.3f : halfW - 0.008f, ty = vrOn_ ? 0.2f : halfH - 0.008f - th * 0.5f;
         put(*hudTimeLabel_, th, {rx - tw * 0.5f, ty, -dist});
+        if (driving_) {
+            const int kmh = int(std::fabs(carSpeed_) * 3.6f / 2.0f + 0.5f) * 2;
+            auto& sl = speedLabels_[kmh];
+            if (!sl) sl = renderer_.createLabel(makeLabel(std::to_string(kmh), 72.0f, FontFace::UI, Color8{}, 96, 4));
+            if (!kmhLabel_) kmhLabel_ = renderer_.createLabel(makeLabel("KM/H", 40.0f, FontFace::UI, Color8{}, 96, 4));
+            const float by = vrOn_ ? -0.2f : -halfH * 0.8f, bx = halfW * 0.72f;
+            put(*sl, 0.1f, {bx, by + 0.06f, -dist});
+            put(*kmhLabel_, 0.035f, {bx, by - 0.03f, -dist});
+            const int segs = 24, lit = std::min(segs, int(std::fabs(carSpeed_) / 100.0f * segs + 0.5f));
+            for (int i = 0; i < segs; ++i) {
+                const bool on = i < lit;
+                const Vec3 col = on ? (i > segs * 0.75f ? Vec3{1.0f, 0.2f, 0.3f} : Vec3{0.1f, 0.9f, 1.0f}) : Vec3{0.05f, 0.14f, 0.18f};
+                const float sx = bx - 0.3f + i * 0.0262f;
+                renderer_.drawCube(*crosshair_, view.rigidInverse() * Mat4::translate({sx, by - 0.075f, -dist}) * Mat4::scale({0.009f, 0.012f + 0.0004f * i, 0.0005f}), col);
+            }
+        }        if (scoreLabel_ && scoreT_ > 0.0f) put(*scoreLabel_, 0.07f, {0.0f, vrOn_ ? 0.18f : halfH * 0.55f, -dist});
         if (hudTargetLabel_) {
             const float gh = 0.06f;
             put(*hudTargetLabel_, gh, {0.0f, vrOn_ ? -0.22f : -halfH * 0.62f, -dist});

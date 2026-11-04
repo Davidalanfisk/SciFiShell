@@ -33,6 +33,7 @@ struct FrameInput {
     bool pin = false;               // right click: pin the view to the window under the aim (or release it)
     bool themeCycle = false;        // F6: next colour theme
     int keyCaptured = 0;            // the key pressed while a remap was waiting for one
+    bool carToggle = false, carCam = false;  // F10: summon / leave the car; C: first / third person
     bool cityToggle = false;        // F9: show or hide the city
     bool arrange = false;           // F8: arrange the open windows (arc, then tiled, then arc ...)
     bool osk = false;               // F7: show / hide the on-screen keyboard

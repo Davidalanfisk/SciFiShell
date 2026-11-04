@@ -18,9 +18,18 @@ constexpr int kTile = 256;
 struct Ctx {
     const cgltf_data* data;
     int grid;
+    bool split;  // route the front wheel subtrees into their own meshes
 };
 
-void walk(const Ctx& cx, const cgltf_node* node, std::vector<float>& v, std::vector<uint32_t>& idx) {
+void walk(const Ctx& cx, const cgltf_node* node, std::vector<float>* const* V, std::vector<uint32_t>* const* I, int part) {
+    if (cx.split && node->name) {
+        if (std::strncmp(node->name, "WheelFrontL", 11) == 0) part = 1;
+        else if (std::strncmp(node->name, "WheelFrontR", 11) == 0) part = 2;
+        else if (std::strncmp(node->name, "WheelRearL", 10) == 0) part = 3;
+        else if (std::strncmp(node->name, "WheelRearR", 10) == 0) part = 4;
+    }
+    std::vector<float>& v = *V[part];
+    std::vector<uint32_t>& idx = *I[part];
     if (node->mesh) {
         float m[16];
         cgltf_node_transform_world(node, m);
@@ -77,11 +86,11 @@ void walk(const Ctx& cx, const cgltf_node* node, std::vector<float>& v, std::vec
             }
         }
     }
-    for (cgltf_size i = 0; i < node->children_count; ++i) walk(cx, node->children[i], v, idx);
+    for (cgltf_size i = 0; i < node->children_count; ++i) walk(cx, node->children[i], V, I, part);
 }
 }  // namespace
 
-bool loadGltfMesh(const std::string& path, std::vector<float>& vertices, std::vector<uint32_t>& indices, Vec3& size, Bitmap* atlas) {
+bool loadGltfMesh(const std::string& path, std::vector<float>& vertices, std::vector<uint32_t>& indices, Vec3& size, Bitmap* atlas, std::vector<WheelPart>* wheels) {
     cgltf_options opt;
     std::memset(&opt, 0, sizeof opt);
     cgltf_data* data = nullptr;
@@ -94,12 +103,16 @@ bool loadGltfMesh(const std::string& path, std::vector<float>& vertices, std::ve
     indices.clear();
     // Every material becomes one tile of a square atlas: its base-colour texture (if embedded) times its colour factor.
     const int grid = std::clamp(static_cast<int>(std::ceil(std::sqrt(static_cast<double>(std::max<cgltf_size>(1, data->materials_count))))), 1, 4);
-    const Ctx ctx{data, grid};
+    const Ctx ctx{data, grid, wheels != nullptr};
+    std::vector<float> wv[5];
+    std::vector<uint32_t> wi[5];
+    std::vector<float>* V[5] = {&vertices, &wv[1], &wv[2], &wv[3], &wv[4]};
+    std::vector<uint32_t>* I[5] = {&indices, &wi[1], &wi[2], &wi[3], &wi[4]};
     if (data->scene) {
-        for (cgltf_size i = 0; i < data->scene->nodes_count; ++i) walk(ctx, data->scene->nodes[i], vertices, indices);
+        for (cgltf_size i = 0; i < data->scene->nodes_count; ++i) walk(ctx, data->scene->nodes[i], V, I, 0);
     } else {
         for (cgltf_size i = 0; i < data->nodes_count; ++i)
-            if (!data->nodes[i].parent) walk(ctx, &data->nodes[i], vertices, indices);
+            if (!data->nodes[i].parent) walk(ctx, &data->nodes[i], V, I, 0);
     }
     if (atlas) {
         atlas->w = atlas->h = grid * kTile;
@@ -143,19 +156,63 @@ bool loadGltfMesh(const std::string& path, std::vector<float>& vertices, std::ve
     if (vertices.empty() || indices.empty()) return false;
 
     float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
-    for (size_t i = 0; i < vertices.size(); i += 8)
-        for (int k = 0; k < 3; ++k) {
-            lo[k] = std::min(lo[k], vertices[i + k]);
-            hi[k] = std::max(hi[k], vertices[i + k]);
-        }
+    for (const std::vector<float>* arr : {&vertices, &wv[1], &wv[2], &wv[3], &wv[4]})
+        for (size_t i = 0; i < arr->size(); i += 8)
+            for (int k = 0; k < 3; ++k) {
+                lo[k] = std::min(lo[k], (*arr)[i + k]);
+                hi[k] = std::max(hi[k], (*arr)[i + k]);
+            }
     const float h = std::max(1e-6f, hi[1] - lo[1]), s = 1.0f / h;
     const float cx = (lo[0] + hi[0]) * 0.5f, cz = (lo[2] + hi[2]) * 0.5f;
-    for (size_t i = 0; i < vertices.size(); i += 8) {
-        vertices[i] = (vertices[i] - cx) * s;
-        vertices[i + 1] = (vertices[i + 1] - lo[1]) * s;
-        vertices[i + 2] = (vertices[i + 2] - cz) * s;
-    }
-    size = {(hi[0] - lo[0]) * s, 1.0f, (hi[2] - lo[2]) * s};
+    for (std::vector<float>* arr : {&vertices, &wv[1], &wv[2], &wv[3], &wv[4]})
+        for (size_t i = 0; i < arr->size(); i += 8) {
+            (*arr)[i] = ((*arr)[i] - cx) * s;
+            (*arr)[i + 1] = ((*arr)[i + 1] - lo[1]) * s;
+            (*arr)[i + 2] = ((*arr)[i + 2] - cz) * s;
+        }
+    if (wheels) {
+        wheels->clear();
+        for (int p = 1; p <= 4; ++p) {
+            WheelPart w;
+            w.vertices = wv[p];
+            w.indices = wi[p];
+            const size_t n = w.vertices.size() / 8;
+            if (n) {
+                // The model bakes toe and steering into the wheel vertices; find the axle (minor axis of the disc seen from above) and square it up to x.
+                double mx = 0, mz = 0;
+                for (size_t i = 0; i < n; ++i) { mx += w.vertices[i * 8]; mz += w.vertices[i * 8 + 2]; }
+                mx /= n; mz /= n;
+                double sxx = 0, szz = 0, sxz = 0;
+                for (size_t i = 0; i < n; ++i) {
+                    const double dx = w.vertices[i * 8] - mx, dz = w.vertices[i * 8 + 2] - mz;
+                    sxx += dx * dx; szz += dz * dz; sxz += dx * dz;
+                }
+                double th = 0.5 * std::atan2(2 * sxz, sxx - szz) + 1.5707963;
+                while (th > 1.5707963) th -= 3.1415926;
+                while (th <= -1.5707963) th += 3.1415926;
+                if (std::fabs(th) < 1.3) {
+                    const float c = static_cast<float>(std::cos(th)), s2 = static_cast<float>(std::sin(th));
+                    for (size_t i = 0; i < n; ++i) {
+                        float* q = &w.vertices[i * 8];
+                        const float dx = q[0] - static_cast<float>(mx), dz = q[2] - static_cast<float>(mz);
+                        q[0] = static_cast<float>(mx) + c * dx + s2 * dz;
+                        q[2] = static_cast<float>(mz) - s2 * dx + c * dz;
+                        const float nx = q[3], nz = q[5];
+                        q[3] = c * nx + s2 * nz;
+                        q[5] = -s2 * nx + c * nz;
+                    }
+                }
+                float blo[3] = {1e30f, 1e30f, 1e30f}, bhi[3] = {-1e30f, -1e30f, -1e30f};
+                for (size_t i = 0; i < n; ++i)
+                    for (int k = 0; k < 3; ++k) {
+                        blo[k] = std::min(blo[k], w.vertices[i * 8 + k]);
+                        bhi[k] = std::max(bhi[k], w.vertices[i * 8 + k]);
+                    }
+                w.pivot = {(blo[0] + bhi[0]) * 0.5f, (blo[1] + bhi[1]) * 0.5f, (blo[2] + bhi[2]) * 0.5f};
+            }
+            wheels->push_back(std::move(w));
+        }
+    }    size = {(hi[0] - lo[0]) * s, 1.0f, (hi[2] - lo[2]) * s};
     return true;
 }
 

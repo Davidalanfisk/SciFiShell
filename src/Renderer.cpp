@@ -717,7 +717,7 @@ void Renderer::drawBuilding(const GpuLabel& any, const Mat4& world, Vec3 neon, f
     const float params[4] = {emerge, fill, flash, static_cast<float>(kind)};
     Vec3 eye = view_.rigidInverse().transformPoint({0, 0, 0});
     const float eyeL[4] = {eye.x, eye.y, eye.z, 0};
-    if (kind == 6) draw(floorPipeline_, any.floorSRB, cube_, world, color, params, eyeL);  // glass pane: blended, no depth write
+    if (kind == 6 || kind == 10) draw(floorPipeline_, any.floorSRB, cube_, world, color, params, eyeL);  // glass pane: blended, no depth write
     else draw(solidPipeline_, any.solidSRB, cube_, world, color, params, eyeL);
 }
 
@@ -730,11 +730,20 @@ int Renderer::model(const std::string& name) {
     std::vector<uint32_t> idx;
     Vec3 size;
     Bitmap atlas;
-    if (loadGltfMesh(std::string(base ? base : "./") + "assets/models/" + name + ".glb", v, idx, size, &atlas)) {
+    std::vector<WheelPart> wheels;  // the car's front wheels come out as separate meshes (name#FL / name#FR, pivot in modelSize) so they can steer
+    if (loadGltfMesh(std::string(base ? base : "./") + "assets/models/" + name + ".glb", v, idx, size, &atlas, name == "CarConcept" ? &wheels : nullptr)) {
         models_.push_back(createMesh(v, idx));
         modelTex_.push_back(createLabel(atlas, true));
         modelSizes_.push_back(size);
         id = static_cast<int>(models_.size()) - 1;
+        for (size_t w = 0; w < wheels.size(); ++w) {
+            if (wheels[w].indices.empty()) continue;
+            models_.push_back(createMesh(wheels[w].vertices, wheels[w].indices));
+            const auto tex = modelTex_[id];
+            modelTex_.push_back(tex);
+            modelSizes_.push_back(wheels[w].pivot);
+            modelIds_.push_back({name + (w == 0 ? "#FL" : w == 1 ? "#FR" : w == 2 ? "#RL" : "#RR"), static_cast<int>(models_.size()) - 1});
+        }
     }
     modelIds_.push_back({name, id});
     return id;

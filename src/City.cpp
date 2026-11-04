@@ -50,8 +50,8 @@ std::string upper(std::string s) {
 }
 }  // namespace
 namespace {
-constexpr int kStepN = 7;  // treads in the ring round each slab: a gentle stair every foot can climb
-constexpr float kStepTread = 0.5f, kStepRise = 1.0f / 8.0f;
+constexpr int kStepN = 20;  // fine treads in the ring round each slab: a shallow ramp (about 6 degrees) that feet and wheels both climb
+constexpr float kStepTread = 0.45f, kStepRise = 1.0f / 21.0f;
 // Street-level buses: they run on the ground and only climb over an earlier bus where they would cross it.
 constexpr float kBusGround = 0.14f, kBusBridge = 3.9f, kBusRamp = 8.0f, kBusFlat = 2.0f;
 constexpr float kStEnd = 4.0f;    // a bus ends this far outside the slab edge, at the foot of the step ring, where its station stands
@@ -114,7 +114,7 @@ std::shared_ptr<GpuLabel> City::makeText(const std::string& s) {
 void City::layoutPlatforms(const std::vector<CityDrive>& snap, int first, int count) {
     if (first == 0) platforms_.clear();
     const int n = count < 0 ? (int)snap.size() : count;
-    constexpr float kPitch = 24.0f, kMargin = 14.0f, kGap = 14.0f;
+    constexpr float kPitch = 28.0f, kMargin = 14.0f, kGap = 14.0f;
     float maxSide = 0, sum = 0;
     std::vector<float> contentW(n, 0.0f), contentH(n, 0.0f);
 
@@ -236,6 +236,7 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap, int first, int co
     }
     built_ = true;
     netBuilt_ = false;
+    trackDirty_ = true;
     clock_ = std::max(clock_, 0.0);
 }
 
@@ -357,10 +358,12 @@ void City::refreshTargets(const std::vector<CityDrive>& snap) {
                 // never changes between runs.
                 const uint32_t hs = uint32_t(std::hash<std::string>{}(t.name) & 0x7FFFFFFF);
                 const float h1 = rnd01(hs + 11), h2 = rnd01(hs + 23), h3 = rnd01(hs + 37), h4 = rnd01(hs + 51);
-                t.tgtH = clampf((3.0f + 12.0f * std::log10(1.0f + float(t.files))) * (0.78f + 0.5f * h3), 3.0f, 110.0f);
+                float bigH = (3.0f + 12.0f * std::log10(1.0f + float(t.files))) * (0.78f + 0.5f * h3) * 1.3f;
+                const float tall = clampf((bigH - 25.0f) / 60.0f, 0.0f, 1.0f);
+                t.tgtH = clampf(bigH * (1.0f + 0.7f * tall), 4.0f, 220.0f);
                 float share = p.total ? clampf(float(t.bytes) / (0.05f * float(p.total)), 0.0f, 1.0f) : 0.3f;
-                const float maxF = p.pitch * 0.84f;
-                t.tgtW = clampf(p.pitch * (0.5f + 0.28f * std::sqrt(share)) * (0.8f + 0.34f * h1), 3.0f, maxF);
+                const float maxF = p.pitch * 0.88f;
+                t.tgtW = clampf(p.pitch * (0.5f + 0.28f * std::sqrt(share)) * (0.8f + 0.34f * h1) * (1.1f + 0.2f * tall), 4.0f, maxF);
                 t.tgtD = clampf(t.tgtW * (0.58f + 0.6f * h2), 3.0f, maxF);
                 if (h2 > 0.8f) std::swap(t.tgtW, t.tgtD);
                 static const int smallStyles[3] = {0, 5, 7};
@@ -387,7 +390,7 @@ void City::refreshTargets(const std::vector<CityDrive>& snap) {
 }
 
 void City::update(double dt, bool active, Vec3 eye) {
-    (void)eye;
+    stepShots(dt, eye);
     wall_ += dt;
     data_.pollStats(dt);
     const SystemStats& s = data_.stats();
@@ -467,7 +470,247 @@ void City::update(double dt, bool active, Vec3 eye) {
 
 void City::renderBox(Renderer& r, Vec3 c, Vec3 size, Vec3 neon, float seed, int kind, float emerge, float fill,
                      float flash) {
+    if (dry_) return;
     r.drawBuilding(*dummy_, Mat4::translate(c) * Mat4::scale(size), neon, seed, kind, emerge, fill, flash);
+}
+
+void City::renderBoxM(Renderer& r, const Mat4& m, Vec3 neon) {
+    if (dry_) return;
+    r.drawBuilding(*dummy_, m, neon, 0.5f, 6, 1.0f, 0.0f, 0.0f);
+}
+
+// A wireframe snack built from a few outlined boxes, in the local frame of `base` (origin = its centre).
+void City::drawItem(Renderer& r, int kind, const Mat4& base, float glow) {
+    auto part = [&](Vec3 at, Vec3 sz, Vec3 col) { renderBoxM(r, base * Mat4::translate(at) * Mat4::scale(sz), col * glow); };
+    if (kind == 0) {
+        part({0, 0, 0}, {0.5f, 0.15f, 0.2f}, {1.0f, 0.62f, 0.2f});         // bun
+        part({0, 0.06f, 0}, {0.58f, 0.1f, 0.1f}, {1.0f, 0.25f, 0.25f});    // sausage
+    } else {
+        part({0, -0.2f, 0}, {0.12f, 0.1f, 0.12f}, {1.0f, 0.8f, 0.45f});    // cone
+        part({0, -0.1f, 0}, {0.18f, 0.1f, 0.18f}, {1.0f, 0.8f, 0.45f});
+        part({0, 0.04f, 0}, {0.26f, 0.2f, 0.26f}, {1.0f, 0.45f, 0.8f});    // scoop
+        part({0, 0.22f, 0}, {0.16f, 0.15f, 0.16f}, {1.0f, 0.7f, 0.9f});
+    }
+}
+
+bool City::debugPond(Vec3& pos) {
+    if (!built_) return false;
+    std::vector<Vec3> ponds;
+    pondSink_ = &ponds;
+    dry_ = true;
+    int draws = 0;
+    for (size_t i = 0; i < platforms_.size(); ++i)
+        for (size_t bi = 0; bi < platforms_[i].blocks.size(); ++bi)
+            renderBlockScenery(renderer_, platforms_[i], platforms_[i].blocks[bi], uint32_t(i * 7919 + bi * 104729), tintColor(platforms_[i].tint), true, draws);
+    dry_ = false;
+    pondSink_ = nullptr;
+    if (ponds.empty()) return false;
+    pos = ponds[0];
+    for (const auto& q : ponds) if (q.x * q.x + q.z * q.z < pos.x * pos.x + pos.z * pos.z) pos = q;
+    return true;
+}
+
+bool City::pickStand(Vec3 o, Vec3 d, int& kind) {
+    if (!built_) return false;
+    std::vector<Stand> st;
+    standSink_ = &st;
+    dry_ = true;
+    int draws = 0;
+    for (size_t i = 0; i < platforms_.size(); ++i) {
+        auto& p = platforms_[i];
+        if (p.grow <= 0.95f) continue;
+        for (size_t bi = 0; bi < p.blocks.size(); ++bi) {
+            auto& b = p.blocks[bi];
+            const float dx = o.x - b.cx, dz = o.z - b.cz, lim = b.side * 0.75f + 18.0f;
+            if (dx * dx + dz * dz > lim * lim) continue;
+            renderBlockScenery(renderer_, p, b, uint32_t(i * 7919 + bi * 104729), tintColor(p.tint), true, draws);
+        }
+    }
+    dry_ = false;
+    standSink_ = nullptr;
+    const float y0 = kSlabH + kPlateH;
+    float best = 1e9f;
+    for (const auto& s : st) {
+        const Vec3 c{s.x, y0 + 1.4f, s.z};
+        const Vec3 oc = c - o;
+        const float t = dot(oc, d);
+        if (t < 0.0f || t > 14.0f) continue;
+        if (dot(oc, oc) - t * t < 1.7f * 1.7f && t < best) {
+            best = t;
+            kind = s.kind;
+        }
+    }
+    return best < 1e8f;
+}
+
+void City::throwHeld(Vec3 eye) {
+    if (held_ < 0) return;
+    const Vec3 up{0, 1, 0};
+    const Vec3 right = normalize(cross(look_, up));
+    Shot s;
+    s.p = eye + look_ * 1.0f + right * 0.5f + up * -0.35f;
+    s.v = look_ * 15.0f + up * 3.5f;
+    s.kind = held_;
+    shots_.push_back(s);
+    if (shots_.size() > 8) shots_.erase(shots_.begin());
+    held_ = -1;
+    sfxQ_.push_back({1, s.p});
+}
+
+bool City::takeScore(int& points, int& total) {
+    if (!scorePending_) return false;
+    points = scorePending_;
+    total = scoreTotal_;
+    scorePending_ = 0;
+    return true;
+}
+
+void City::popDucks(Vec3 at) {
+    std::vector<DuckPos> ducks;
+    duckSink_ = &ducks;
+    dry_ = true;
+    int draws = 0;
+    for (size_t i = 0; i < platforms_.size(); ++i) {
+        auto& p = platforms_[i];
+        for (size_t bi = 0; bi < p.blocks.size(); ++bi) {
+            auto& b = p.blocks[bi];
+            const float dx = at.x - b.cx, dz = at.z - b.cz, lim = b.side * 0.75f + 10.0f;
+            if (dx * dx + dz * dz > lim * lim) continue;
+            renderBlockScenery(renderer_, p, b, uint32_t(i * 7919 + bi * 104729), tintColor(p.tint), true, draws);
+        }
+    }
+    dry_ = false;
+    duckSink_ = nullptr;
+    for (const auto& d : ducks)
+        if (length(d.p - at) < 7.0f) {
+            deadDucks_[d.key] = wall_;
+            sfxQ_.push_back({3, d.p});
+            scorePending_ += 100;
+            scoreTotal_ += 100;
+        }
+}
+
+bool City::takeBlast(Vec3& impulse) {
+    if (!blastPending_) return false;
+    blastPending_ = false;
+    impulse = blast_;
+    return true;
+}
+
+void City::stepShots(double dt, Vec3 eye) {
+    const float fdt = float(dt);
+    for (auto& s : shots_) {
+        if (s.boom) {
+            s.boomT += fdt;
+            continue;
+        }
+        s.age += fdt;
+        s.v.y -= 20.0f * fdt;
+        Vec3 np = s.p + s.v * fdt;
+        Vec3 q = np;
+        resolve(q, 0.2f, 0.0f);
+        if (std::fabs(q.x - np.x) > 1e-4f) s.v.x *= -0.35f;
+        if (std::fabs(q.z - np.z) > 1e-4f) s.v.z *= -0.35f;
+        np.x = q.x;
+        np.z = q.z;
+        const float fl = floorAt(np, 0.2f, 0.0f) + 0.15f;
+        if (np.y < fl) {
+            np.y = fl;
+            if (s.v.y < 0.0f) s.v.y = std::fabs(s.v.y) > 2.0f ? -s.v.y * 0.35f : 0.0f;
+            s.v.x *= 0.8f;
+            s.v.z *= 0.8f;
+        }
+        s.p = np;
+        if (s.age >= 5.0f) {
+            s.boom = true;
+            sfxQ_.push_back({2, s.p});
+            popDucks(s.p);
+            const Vec3 away = eye - s.p;
+            const float d = length(away);
+            const float kRange = 18.0f;
+            if (d < kRange) {
+                const float f = 1.0f - d / kRange;
+                Vec3 h{away.x, 0, away.z};
+                h = length(h) > 0.01f ? normalize(h) : Vec3{0, 0, 1};
+                blast_ = {h.x * 30.0f * f, 5.0f + 8.0f * f, h.z * 30.0f * f};
+                blastPending_ = true;
+            }
+        }
+    }
+    shots_.erase(std::remove_if(shots_.begin(), shots_.end(), [](const Shot& s) { return s.boom && s.boomT > 1.3f; }), shots_.end());
+}
+
+// The sports car: the glTF mesh drawn as a neon hologram, with an underglow pool, headlight beams and tail lights.
+void City::renderCar(Renderer& r) {
+    if (!car_.show || car_.spawn <= 0.01f) return;
+    if (carModel_ == -2) carModel_ = r.model("CarConcept");
+    const Vec3 neon{0.1f, 0.85f, 1.0f};
+    const float s = car_.spawn * car_.spawn * (3.0f - 2.0f * car_.spawn);
+    const Vec3 fwd{-std::sin(car_.yaw), 0, -std::cos(car_.yaw)}, rt{std::cos(car_.yaw), 0, -std::sin(car_.yaw)};
+    const Vec3 railR = cross(car_.railT, car_.railU);
+    Mat4 orient = Mat4::rotateY(car_.yaw);
+    if (car_.rail) {
+        orient = Mat4::identity();
+        const Vec3 ax[3] = {railR, car_.railU, car_.railT * -1.0f};
+        for (int c = 0; c < 3; ++c) { orient.m[c * 4] = ax[c].x; orient.m[c * 4 + 1] = ax[c].y; orient.m[c * 4 + 2] = ax[c].z; }
+    }
+    const Mat4 base = Mat4::translate(car_.pos) * orient;
+    constexpr float kLen = 4.6f;
+    if (carModel_ >= 0 && !(car_.hideBody && !r.mirror())) {
+        const Vec3 sz = r.modelSize(carModel_);
+        const bool alongX = sz.x > sz.z;
+        const float k = kLen / std::max(sz.x, sz.z) * s;
+        const Mat4 M = base * Mat4::rotateX(car_.pitch) * Mat4::rotateY(alongX ? -1.5708f : 3.14159265f) * Mat4::scale({k, k, k});
+        r.drawModel(carModel_, *dummy_, M, neon * 0.22f, 0.3f, false);
+        // Each wheel is its own mesh: fronts also steer (up to ~32 degrees), all roll with the car's speed.
+        const float ang = -car_.steer * 0.55f;
+        const char* names[4] = {"CarConcept#FL", "CarConcept#FR", "CarConcept#RL", "CarConcept#RR"};
+        for (int w = 0; w < 4; ++w) {
+            const int wid = r.model(names[w]);
+            if (wid < 0) continue;
+            const Vec3 pv = r.modelSize(wid);
+            const Mat4 steer = w < 2 ? Mat4::rotateY(ang) : Mat4::identity();
+            r.drawModel(wid, *dummy_, M * Mat4::translate(pv) * steer * Mat4::rotateX(car_.spin) * Mat4::translate({-pv.x, -pv.y, -pv.z}), neon * 0.22f, 0.3f, false);
+        }
+    }
+    const float pulse = 0.85f + 0.15f * std::sin(float(wall_) * 6.0f);
+    const Vec3 red{1.0f, 0.1f, 0.2f};
+    const float brake = car_.speed < 0 ? 1.6f : 1.0f;
+    renderBoxM(r, base * Mat4::translate({0, 0.62f, 2.3f}) * Mat4::scale({1.5f * s, 0.12f, 0.1f}), red * (0.7f * brake));
+    (void)fwd; (void)rt;
+}
+void City::renderToys(Renderer& r, Vec3 eye) {
+    const Vec3 up{0, 1, 0};
+    if (held_ >= 0) {
+        const Vec3 right = normalize(cross(look_, up));
+        const float bob = 0.02f * std::sin(float(wall_) * 2.0f);
+        const Vec3 at = eye + look_ * 1.2f + right * 0.55f + up * (-0.42f + bob);
+        drawItem(r, held_, Mat4::translate(at) * Mat4::rotateY(std::atan2(look_.x, look_.z) + 1.5708f) * Mat4::scale({1.6f, 1.6f, 1.6f}), 0.8f);
+    }
+    for (const auto& s : shots_) {
+        const Vec3 warm = s.kind == 0 ? Vec3{1.0f, 0.5f, 0.15f} : Vec3{1.0f, 0.3f, 0.8f};
+        if (!s.boom) {
+            // Tumbles in flight and blinks faster as the fuse runs down.
+            const float blink = s.age > 3.0f ? 0.5f + 0.5f * std::sin(s.age * (6.0f + (s.age - 3.0f) * 8.0f)) : 1.0f;
+            drawItem(r, s.kind, Mat4::translate(s.p) * Mat4::rotateY(s.age * 6.0f) * Mat4::rotateX(s.age * 8.0f), 0.5f + 0.7f * blink);
+            continue;
+        }
+        const float t = std::min(1.0f, s.boomT / 1.2f), e = 1.0f - (1.0f - t) * (1.0f - t), fade = (1.0f - t);
+        const Vec3 cyan{0.3f, 0.9f, 1.0f};
+        for (int i = 0; i < 3; ++i) {
+            const float sz = (4.0f + 4.0f * i) * e + 0.3f;
+            renderBoxM(r, Mat4::translate(s.p) * Mat4::rotateY(t * (1.0f + i)) * Mat4::scale({sz, sz, sz}), (i == 1 ? cyan : warm) * (1.3f * fade));
+        }
+        renderBoxM(r, Mat4::translate(s.p) * Mat4::scale({1.5f * fade + 0.2f, 1.5f * fade + 0.2f, 1.5f * fade + 0.2f}), Vec3{1.6f, 1.6f, 1.6f} * fade);
+        for (int i = 0; i < 12; ++i) {
+            const float a = rnd01(uint32_t(i) * 77u + 1u) * 6.2832f, el = rnd01(uint32_t(i) * 131u + 5u) * 1.2f - 0.1f;
+            const float sp = 5.0f + 6.0f * rnd01(uint32_t(i) * 17u + 9u);
+            const Vec3 dir{std::cos(a) * std::cos(el), std::sin(el), std::sin(a) * std::cos(el)};
+            const Vec3 at = s.p + dir * (sp * s.boomT) + up * (-6.0f * s.boomT * s.boomT);
+            const float sz = 0.45f * fade + 0.05f;
+            renderBoxM(r, Mat4::translate(at) * Mat4::rotateY(s.boomT * 7.0f + i) * Mat4::rotateX(s.boomT * 5.0f) * Mat4::scale({sz, sz, sz}), warm * (1.4f * fade));
+        }
+    }
 }
 
 void City::drawLabel(Renderer& r, GpuLabel& l, Vec3 at, float h, Vec3 eye, Vec3 color, float) {
@@ -1111,6 +1354,24 @@ void City::drawBundle(Renderer& r, const Bundle& b, Vec3 col, float lf, float lb
     auto gantry = [&](float x, float z, float ax, float az, float y) {
         if (farFrom(x, z)) return;
         const float sx = std::fabs(az), sz = std::fabs(ax);  // the span runs across the lane direction
+        if (allBundles_ && y > 1.0f) {
+            // Skip a gantry whose crossbeam would cut through another bundle's lanes.
+            const float hx = sx * (width * 0.5f + 1.0f), hz = sz * (width * 0.5f + 1.0f);
+            for (const Bundle& o : *allBundles_) {
+                if (&o == &b || o.pts.size() < 2) continue;
+                const float ow = (o.lanes - 1) * o.gap + o.laneW + 2.0f;
+                for (size_t k = 0; k + 1 < o.pts.size(); ++k) {
+                    const Vec3 a = o.pts[k], c = o.pts[k + 1];
+                    const float ex = c.x - a.x, ez = c.z - a.z, l2 = std::max(1e-3f, ex * ex + ez * ez);
+                    for (int e = -1; e <= 1; ++e) {
+                        const float px = x + hx * e - a.x, pz = z + hz * e - a.z;
+                        const float t = clampf((px * ex + pz * ez) / l2, 0.0f, 1.0f);
+                        const float dx = px - ex * t, dz = pz - ez * t;
+                        if (dx * dx + dz * dz < ow * ow) return;
+                    }
+                }
+            }
+        }
         renderBox(r, {x, (y - 0.3f) * 0.5f, z}, {0.5f, y - 0.3f, 0.5f}, col * 0.5f, 0.3f, 6, 1, 0, 0);
         renderBox(r, {x, y - 0.3f, z}, {0.5f + sx * (width + 1.2f), 0.3f, 0.5f + sz * (width + 1.2f)}, col * 0.55f, 0.3f, 6, 1, 0, 0);
     };
@@ -1124,7 +1385,7 @@ void City::drawBundle(Renderer& r, const Bundle& b, Vec3 col, float lf, float lb
     }
     for (size_t k = 0; k + 1 < n; ++k) {
         const float dx = b.pts[k + 1].x - b.pts[k].x, dz = b.pts[k + 1].z - b.pts[k].z, L = std::sqrt(dx * dx + dz * dz);
-        const int cnt = int(L / 24.0f);
+        const int cnt = int(L / 56.0f);
         for (int i = 0; i < cnt; ++i) {
             const float u = (i + 0.5f) / std::max(1, cnt);
             gantry(b.pts[k].x + dx * u, b.pts[k].z + dz * u, ux[k], uz[k], level);
@@ -1184,6 +1445,8 @@ void City::renderBundles(Renderer& r, const Theme& th, Vec3 eye) {
     std::vector<Bundle> bs;
     bundles(bs);
     if (bs.empty()) return;
+    allBundles_ = &bs;
+    struct Reset { const std::vector<Bundle>*& p; ~Reset() { p = nullptr; } } reset{allBundles_};
     const bool anim = !r.mirror() && coreGrow_[0] > 0.99f;
     const float R = shownDiskR_, W = shownDiskW_, Rx = shownNetRx_, Tx = shownNetTx_;
     const Vec3 green{0.12f, 0.85f, 0.42f};
@@ -1254,6 +1517,7 @@ void City::renderBlockScenery(Renderer& r, const Platform& p, const Block& b, ui
     const Vec3 warm{1.0f, 0.55f, 0.2f}, pink{1.0f, 0.5f, 0.75f};
     // A hot dog cart: a body on two wheels with a striped awning. `dir` turns the serving side.
     auto hotdogCart = [&](float x, float z, bool alongX) {
+        if (standSink_) standSink_->push_back({x, z, 0});
         const Vec3 sz = alongX ? Vec3{2.0f, 1.0f, 1.0f} : Vec3{1.0f, 1.0f, 2.0f};
         renderBox(r, {x, y0 + 0.9f, z}, sz, warm * 0.7f, 0.5f, 5, 1, 0, 0);
         renderBox(r, {x, y0 + 1.6f, z}, alongX ? Vec3{2.4f, 0.12f, 1.4f} : Vec3{1.4f, 0.12f, 2.4f}, warm, 0.5f, 5, 1, 0, 0);
@@ -1262,11 +1526,36 @@ void City::renderBlockScenery(Renderer& r, const Platform& p, const Block& b, ui
     };
     // An ice cream stand: a small kiosk with a cone on the roof.
     auto iceCream = [&](float x, float z) {
+        if (standSink_) standSink_->push_back({x, z, 1});
         renderBox(r, {x, y0 + 0.9f, z}, {1.6f, 1.8f, 1.6f}, pink * 0.6f, 0.5f, 5, 1, 0, 0);
         renderBox(r, {x, y0 + 1.9f, z}, {2.0f, 0.12f, 2.0f}, pink, 0.5f, 5, 1, 0, 0);
         renderBox(r, {x, y0 + 2.45f, z}, {0.5f, 0.9f, 0.5f}, {0.95f, 0.9f, 0.8f}, 0.5f, 5, 1, 0, 0);
         renderBox(r, {x, y0 + 3.0f, z}, {0.8f, 0.5f, 0.8f}, pink, 0.5f, 5, 1, 0, 0);
         draws += 4;
+    };
+    // Wireframe ducks (one or two) that wander about a park on slow looping paths and never leave its bounds.
+    auto ducks = [&](float cx, float cz, float hx, float hz, uint32_t sd) {
+        const int n = rnd01(sd + 90) < 0.5f ? 1 : 2;
+        const float t = float(wall_);
+        for (int k = 0; k < n; ++k) {
+            const uint32_t s = sd + 100u * uint32_t(k + 1);
+            const float w1 = 0.12f + 0.12f * rnd01(s + 1), w2 = 0.2f + 0.15f * rnd01(s + 2), w3 = 0.12f + 0.12f * rnd01(s + 3), w4 = 0.2f + 0.15f * rnd01(s + 4);
+            const float p1 = rnd01(s + 5) * 6.28f, p2 = rnd01(s + 6) * 6.28f, p3 = rnd01(s + 7) * 6.28f, p4 = rnd01(s + 8) * 6.28f;
+            const float x = cx + hx * (0.6f * std::sin(w1 * t + p1) + 0.4f * std::sin(w2 * t + p2));
+            const float z = cz + hz * (0.6f * std::sin(w3 * t + p3) + 0.4f * std::sin(w4 * t + p4));
+            const float dx = hx * (0.6f * w1 * std::cos(w1 * t + p1) + 0.4f * w2 * std::cos(w2 * t + p2));
+            const float dz = hz * (0.6f * w3 * std::cos(w3 * t + p3) + 0.4f * w4 * std::cos(w4 * t + p4));
+            const Mat4 base = Mat4::translate({x, y0 + 0.2f + 0.03f * std::sin(t * 2.0f + p1), z}) * Mat4::rotateY(std::atan2(dx, dz));
+            auto dead = deadDucks_.find(s);
+            if (dead != deadDucks_.end() && wall_ - dead->second < 90.0) continue;
+            if (duckSink_) duckSink_->push_back({s, {x, y0 + 0.4f, z}});
+            const Vec3 body{1.0f, 0.95f, 0.5f}, beak{1.0f, 0.55f, 0.15f};
+            renderBoxM(r, base * Mat4::translate({0, 0, 0}) * Mat4::scale({0.5f, 0.4f, 0.8f}), body);
+            renderBoxM(r, base * Mat4::translate({0, 0.12f, -0.45f}) * Mat4::scale({0.2f, 0.2f, 0.25f}), body);
+            renderBoxM(r, base * Mat4::translate({0, 0.42f, 0.35f}) * Mat4::scale({0.28f, 0.3f, 0.28f}), body);
+            renderBoxM(r, base * Mat4::translate({0, 0.38f, 0.58f}) * Mat4::scale({0.16f, 0.07f, 0.2f}), beak);
+            draws += 4;
+        }
     };
     // Carts and stands among the towers: on the pad edge between street lights, so dense blocks get them too.
     if (detail) {
@@ -1289,16 +1578,30 @@ void City::renderBlockScenery(Renderer& r, const Platform& p, const Block& b, ui
             const uint32_t sd = seed + uint32_t(cz * b.g + cx) * 2654435u;
             renderBox(r, {x, y0 + 0.03f, z}, {20.0f, 0.06f, 20.0f}, green, 0.5f, 6, 1, 5.0f, 0);
             ++draws;
-            if (!detail) continue;
+            const float ex = lodEye_.x - x, ez = lodEye_.z - z;
+            if (!detail && ex * ex + ez * ez > 90.0f * 90.0f) {
+                // Far away a park is drawn as a few canopies (and the pond, if it has one) instead of a bare lawn.
+                const float lv = rnd01(sd);
+                if (lv < 0.2f || lv >= 0.85f) renderBox(r, {x, y0 + 0.07f, z}, lv < 0.2f ? Vec3{9.0f, 0.06f, 9.0f} : Vec3{14.0f, 0.06f, 5.0f}, water, 0.5f, 6, 1, 6.0f, 0);
+                const int nt = lv < 0.7f && lv >= 0.4f ? 5 : 3;
+                for (int q = 0; q < nt; ++q) {
+                    const float tx = x + (rnd01(sd + 50 + q) - 0.5f) * 15.0f, tz = z + (rnd01(sd + 60 + q) - 0.5f) * 15.0f;
+                    renderBox(r, {tx, y0 + 3.2f, tz}, {3.2f, 3.0f, 3.2f}, green, 0.5f, 6, 1, 0, 0);
+                }
+                draws += nt + 1;
+                continue;
+            }
             const float v = rnd01(sd);
             const Vec3 stone{0.75f, 0.85f, 0.9f};
             if (v < 0.2f) {
                 // Pond park: a pond ringed with benches and two trees.
+                if (pondSink_) pondSink_->push_back({x, y0, z});
                 renderBox(r, {x, y0 + 0.07f, z}, {9.0f, 0.06f, 9.0f}, water, 0.5f, 6, 1, 6.0f, 0);
                 bench(x, z - 6.4f, true);
                 bench(x, z + 6.4f, true);
                 tree(x - 7.0f, z - 7.0f, rnd01(sd + 1));
                 tree(x + 7.0f, z + 7.0f, rnd01(sd + 2));
+                ducks(x, z, 6.5f, 6.5f, sd);
                 draws += 1;
             } else if (v < 0.4f) {
                 // Cross-path garden with four trees.
@@ -1344,12 +1647,14 @@ void City::renderBlockScenery(Renderer& r, const Platform& p, const Block& b, ui
                 tree(x - 7.0f, z - 7.0f, rnd01(sd + 11));
                 tree(x + 7.0f, z - 7.0f, rnd01(sd + 12));
                 hotdogCart(x, z - 7.5f, true);
+                ducks(x, z, 8.0f, 5.0f, sd);
                 draws += 3;
             }
         }
 }
 
 void City::render(Renderer& r, Vec3 eye) {
+    lodEye_ = eye;
     labelBudget_ = 2;
     pendingLabels_.clear();
     {
@@ -1425,7 +1730,7 @@ void City::render(Renderer& r, Vec3 eye) {
                 const float sd = b.side - 2.0f - 2.0f * kPadSlope * st / 3.0f, hh = (kSlabH + kPlateH * (st + 1) / 3.0f) * pg;
                 renderBox(r, {b.cx, hh * 0.5f, b.cz}, {sd, hh, sd}, tint, 0.5f, 6, p.grow, 1.0f, 0);
             }
-            if (!mirror && bd2 < 150.0f * 150.0f && p.grow > 0.95f && draws < 3200) {
+            if (!mirror && bd2 < (240.0f + b.side * 0.5f) * (240.0f + b.side * 0.5f) && p.grow > 0.95f && draws < 3200) {
                 renderBlockScenery(r, p, b, uint32_t(i * 7919 + bi * 104729), tint, bd2 < 100.0f * 100.0f, draws);
             }
             std::vector<TPart> parts;
@@ -1527,6 +1832,9 @@ void City::render(Renderer& r, Vec3 eye) {
             }
         }
     }
+    if (!mirror) renderToys(r, eye);
+    renderCar(r);
+    renderTrack(r, eye);
     flushLabels(r);
 }
 
@@ -1884,6 +2192,13 @@ void City::monumentBoxes(std::vector<Box>& out) const {
 
 void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const {
     monumentBoxes(boxes);
+    if (car_.show && car_.solid && car_.spawn > 0.9f) {  // a parked car is a solid, climbable object
+        const float sx = -std::sin(car_.yaw), sz = -std::cos(car_.yaw);
+        for (int k = -2; k <= 2; ++k) {
+            const float cx = car_.pos.x + sx * k * 0.85f, cz = car_.pos.z + sz * k * 0.85f;
+            boxes.push_back({cx - 1.0f, cx + 1.0f, car_.pos.y + 1.15f, cz - 1.0f, cz + 1.0f});
+        }
+    }
     std::vector<TPart> tparts;
     std::vector<StepRect> steps;
     stepRects(steps);

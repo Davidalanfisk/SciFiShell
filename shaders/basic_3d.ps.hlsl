@@ -196,7 +196,7 @@ float3 buildingColor(PSInput In)
 
     float3 dark = float3(0.006, 0.010, 0.018) + neon * 0.018;
     float3 col = dark;
-    float grow = 1.0 - emerge;
+    float grow = kind == 10 ? 0.0 : 1.0 - emerge;
 
     if (kind == 3)
     {
@@ -344,6 +344,35 @@ float3 buildingColor(PSInput In)
         }
         col += rimCol * rim * rimMul;
     }
+    else if (kind == 10)
+    {
+        // Race track: a glass deck on a grid like the city floor. Works in the box's own axes so pieces can lie at any angle.
+        float3 c0 = float3(g_World[0][0], g_World[1][0], g_World[2][0]);
+        float3 c1 = float3(g_World[0][1], g_World[1][1], g_World[2][1]);
+        float3 c2 = float3(g_World[0][2], g_World[1][2], g_World[2][2]);
+        float3 dmn = max(float3(length(c0), length(c1), length(c2)), 1e-4);
+        float3 dd = In.WPos - ctr;
+        float3 q = float3(dot(dd, c0), dot(dd, c1), dot(dd, c2)) / (dmn * dmn);
+        float3 nl = float3(dot(n, c0), dot(n, c1), dot(n, c2)) / dmn;
+        float3 e3 = (0.5 - abs(q)) * dmn;
+        float edgeT = abs(nl.y) > 0.5 ? e3.x : (abs(nl.x) > 0.5 ? min(e3.y, e3.z) : min(e3.x, e3.y));
+        float rimT = 1.0 - smoothstep(rimW * 0.5, rimW * 1.2, edgeT);
+        float strut = fillF;
+        if (strut < 0.5 && abs(nl.y) > 0.5)
+        {
+            float2 uv = float2((q.x + 0.5) * dmn.x, (q.z + 0.5) * dmn.z + seed) / 1.2;
+            float2 gp = abs(frac(uv) - 0.5);
+            float2 fwT = max(fwidth(uv), 1e-4);
+            float gl = 1.0 - smoothstep(0.0, 1.5, min((0.5 - gp.x) / fwT.x, (0.5 - gp.y) / fwT.y));
+            gl *= saturate(1.0 - max(fwT.x, fwT.y) * 1.6);
+            float across = abs(q.x) * dmn.x;
+            float dash = step(0.5, frac(((q.z + 0.5) * dmn.z + seed) / 4.0)) * (1.0 - smoothstep(0.05, 0.12, across));
+            float face = nl.y > 0.0 ? 1.0 : 0.35;
+            col += neon * (0.05 + 0.34 * gl + 0.55 * dash) * face;
+            gSolid = (nl.y > 0.0 ? 0.55 : 0.25) * smoothstep(0.0, 1.0, emerge);
+        }
+        col += neon * rimT * (strut > 0.5 ? 0.5 : 1.25);
+    }
     else if (kind == 8)
     {
         // Hologram model: fresnel outline, slow scan bands, tinted by the neon colour.
@@ -381,13 +410,15 @@ float3 buildingColor(PSInput In)
     if (grow > 0.001 && kind != 7 && (top || rim > 0.0)) col += neon * grow * 1.2 * (top ? 1.0 : rim);
 
     float mist = smoothstep(650.0, 980.0, dist);  // dark ring that masks the edge of the map
-    if (kind == 6) return col * (1.0 - mist) * smoothstep(0.0, 1.0, emerge);  // glass: additive light only, no haze (premultiplied blend)
+    // Light ground-hugging fog: a pale bank that thickens with distance and thins out within a few metres of the street.
+    float gfog = saturate(dist / 70.0) * exp(-max(In.WPos.y, 0.0) * 0.04) * 0.56;
+    if (kind == 6 || kind == 10) return (col * (1.0 - gfog) + float3(0.35, 0.6, 0.7) * gfog * 0.7) * (1.0 - mist) * smoothstep(0.0, 1.0, emerge);  // glass: additive light only, no haze (premultiplied blend)
     // Dense low fog: barely there up close, building to a thick glowing bank with distance, deepest near the ground and
     // lit by the neon of whatever is inside it.
     float fogD = 1.0 - exp(-pow(dist * 0.0042, 1.2));
     float fog = saturate(fogD * (0.35 + 0.65 * exp(-max(In.WPos.y, 0.0) * 0.045)));
     float3 fogCol = float3(0.55, 0.70, 0.78) * 0.4 + neon * 0.08;  // pale atmospheric haze, kept thin so distant buildings stay readable
-    col = lerp(col, fogCol, fog * 0.62) + neon * 0.05 * fog * (1.0 - fog);
+    col = lerp(col, fogCol, saturate(fog * 0.62 + gfog * 1.1)) + neon * 0.05 * fog * (1.0 - fog);
     return col * (1.0 - mist) + mistColor(g_Accent.rgb) * mist;
 }
 
@@ -398,7 +429,7 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
     {
         gSolid = 0.0;
         const float3 bc = buildingColor(In);
-        const bool glass = (int)(g_Params.w + 0.5) == 6;
+        const bool glass = (int)(g_Params.w + 0.5) == 6 || (int)(g_Params.w + 0.5) == 10;
         Color = float4(bc, glass ? max(gSolid, saturate(0.06 + 0.9 * max(bc.r, max(bc.g, bc.b)))) : 1.0);
         return;
     }

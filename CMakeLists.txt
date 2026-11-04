@@ -74,6 +74,8 @@ set(SOURCES
     src/XInputController.cpp
     src/Utils.cpp
     src/City.cpp
+    src/Track.cpp
+    src/Sfx.cpp
     src/CityData.cpp
     src/TextRender.cpp
     src/Thumbnails.cpp

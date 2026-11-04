@@ -4,6 +4,7 @@
 // the floor and reacts to filesystem changes.
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "CityData.h"
@@ -44,7 +45,34 @@ public:
     // Remembers the hovered building as the one being entered; exitSpawn() is street level in front of its door.
     void markEntered();
     bool exitSpawn(Vec3& pos) const;
+    bool debugPond(Vec3& pos);  // nearest pond park to the hub, for scripted checks
     bool debugStreet(Vec3& pos) const;  // debugging aid: street in front of the first grown tower
+
+    // Street toys: hot dog carts and ice cream stands hand out a wireframe snack (0 = hot dog, 1 = ice cream) that is held,
+    // then thrown like a grenade and blows up after five seconds, shoving anyone nearby.
+    bool pickStand(Vec3 origin, Vec3 dir, int& kind);
+    void giveItem(int kind) { held_ = kind; }
+    bool holding() const { return held_ >= 0; }
+    // The drivable car: AppShell owns the physics and tells the city where to draw it.
+    struct CarView { bool show = false, hideBody = false, solid = false; Vec3 pos{0, 0, 0}; float yaw = 0, pitch = 0, steer = 0, speed = 0, spawn = 1, spin = 0;
+        bool rail = false;  // riding the race track: orientation comes from the track's own frame instead of yaw/pitch
+        Vec3 railT{0, 0, -1}, railU{0, 1, 0};
+    };
+    void setCar(const CarView& v) { car_ = v; }
+    // The race track: a ramp up from the hub's CPU region, a tour over the city with loops, and a ramp back down. Frames sit on the deck centre.
+    struct TrackFrame { Vec3 p, t, u, flat; float s; };
+    static constexpr float kTrackHalf = 3.7f;
+    void ensureTrack();  // (re)builds the layout when the city changed
+    bool trackReady() const { return !track_.empty(); }
+    float trackLength() const { return track_.empty() ? 0.0f : track_.back().s; }
+    bool trackSample(float s, TrackFrame& out) const;
+    void setTrackFade(float f) { trackFade_ = f; }
+    void throwHeld(Vec3 eye);
+    void setLook(Vec3 forward) { look_ = forward; }
+    bool takeScore(int& points, int& total);  // ducks popped since the last call
+    struct SfxEvent { int id; Vec3 p; };  // 1 throw, 2 explosion, 3 duck popped
+    bool takeSfx(SfxEvent& e) { if (sfxQ_.empty()) return false; e = sfxQ_.front(); sfxQ_.erase(sfxQ_.begin()); return true; }
+    bool takeBlast(Vec3& impulse);  // a blast that reached the player since the last call
 
     float extent() const { return extent_; }
     bool built() const { return built_; }
@@ -120,11 +148,44 @@ private:
     struct Bundle { int kind; int plat; int lanes; float gap, laneW; float grow; std::vector<Vec3> pts; };
     void bundles(std::vector<Bundle>& out) const;
     void drawBundle(Renderer& r, const Bundle& b, Vec3 col, float lf, float lb, bool anim, Vec3 eye);
+    std::vector<SfxEvent> sfxQ_;
+    const std::vector<Bundle>* allBundles_ = nullptr;  // set while drawing, so gantries can avoid other bundles' lanes
     void renderBundles(Renderer& r, const struct Theme& th, Vec3 eye);
     struct NetRoute { int plat; std::vector<Vec3> pts; };  // pts: x, height above road, z
     void buildNetwork() const;
     void drawSlope(Renderer& r, Vec3 a, Vec3 b, float width, float th, Vec3 neon, float seed, int kind, float emerge);
     void renderBlockScenery(Renderer& r, const Platform& p, const Block& b, uint32_t seed, Vec3 tint, bool detail, int& draws);
+    struct Stand { float x, z; int kind; };
+    struct Shot { Vec3 p, v; int kind = 0; float age = 0, boomT = 0; bool boom = false; };
+    struct DuckPos { uint32_t key; Vec3 p; };
+    std::vector<DuckPos>* duckSink_ = nullptr;
+    std::unordered_map<uint32_t, double> deadDucks_;  // duck key -> wall_ time it was popped; they return after a while
+    int scorePending_ = 0, scoreTotal_ = 0;
+    void popDucks(Vec3 at);
+    std::vector<Vec3>* pondSink_ = nullptr;
+    Vec3 lodEye_{0,0,0};
+    CarView car_;
+    int carModel_ = -2;
+    void renderCar(Renderer& r);
+    void renderTrack(Renderer& r, Vec3 eye);
+    void buildTrack();
+    std::vector<TrackFrame> track_;
+    struct TrackStrut { Vec3 p; float top; };
+    std::vector<TrackStrut> struts_;
+    std::vector<std::pair<float, float>> loops_;  // arc-length ranges of the loops
+    bool trackDirty_ = true;
+    float trackFade_ = 0;
+    bool dry_ = false;                    // scenery pass that only collects stands (for picking) and draws nothing
+    std::vector<Stand>* standSink_ = nullptr;
+    std::vector<Shot> shots_;
+    int held_ = -1;
+    Vec3 look_{0, 0, -1};
+    Vec3 blast_{};
+    bool blastPending_ = false;
+    void stepShots(double dt, Vec3 eye);
+    void renderToys(Renderer& r, Vec3 eye);
+    void drawItem(Renderer& r, int kind, const Mat4& base, float glow);
+    void renderBoxM(Renderer& r, const Mat4& m, Vec3 neon);
     mutable bool netBuilt_ = false;
     mutable std::vector<NetRoute> net_;
     mutable std::vector<Piece> pieces_;

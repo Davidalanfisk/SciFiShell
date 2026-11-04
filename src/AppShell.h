@@ -3,12 +3,14 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 #include "FileRoom.h"
 #include "City.h"
 #include "InputSystem.h"
 #include "LCARSUI.h"
 #include "Renderer.h"
+#include "Sfx.h"
 #include "Settings.h"
 #include "MediaLibrary.h"
 #include "MediaPlayer.h"
@@ -77,6 +79,7 @@ private:
 
     SDL_Window* window_ = nullptr;
     Renderer renderer_;
+    Sfx sfx_;
     InputSystem input_;
     XInputController pad_;
     VRSystem vr_;
@@ -294,6 +297,21 @@ private:
     bool winFocus_ = false;  // view pinned to a window: the camera is frozen and the mouse drives a cursor (right click toggles)
     bool flying_ = false;                        // in a building: flying until a floor is touched, then walking with gravity
     float vy_ = 0.0f;
+    std::shared_ptr<GpuLabel> scoreLabel_;
+    float scoreT_ = 0.0f;  // seconds the score pop-up stays on the HUD
+    Vec3 knock_{};  // horizontal shove from a blast, decays away
+    // The drivable car (F10 summons / leaves it, C swaps first and third person).
+    bool driving_ = false, carOn_ = false, carFirst_ = false;
+    Vec3 carPos_{}, carVel_{};
+    float carYaw_ = 0, carPitch_ = 0, carVy_ = 0, carSpawn_ = 0, carSteer_ = 0, carSpeed_ = 0, carSpin_ = 0, chaseYaw_ = 0, lookOffX_ = 0, lookOffY_ = 0, scriptThrottle_ = 0, scriptSteer_ = 0;
+    bool onTrack_ = false, carBoostOn_ = false;  // car is riding the race track
+    float trackS_ = 0, trackD_ = 0, trackV_ = 0, trackFade_ = 0, trackCool_ = 0, railYaw_ = 0;
+    Vec3 railT_{0, 0, -1}, railU_{0, 1, 0};
+    void updateRail(float dt, float throttle, float steer, bool boost, float lookX, float lookY);
+    std::unordered_map<int, std::shared_ptr<GpuLabel>> speedLabels_;
+    std::shared_ptr<GpuLabel> kmhLabel_;
+    void toggleCar();
+    void updateCar(double dt, float throttle, float steer, bool handbrake, bool boost, float lookX, float lookY);
     float recT_ = -1;                            // recT_ >= 0 while the view eases onto a pinned window
     Vec3 recFromPos_{}, recToPos_{};
     float recFromYaw_ = 0, recToYaw_ = 0, recFromPitch_ = 0, recToPitch_ = 0;
