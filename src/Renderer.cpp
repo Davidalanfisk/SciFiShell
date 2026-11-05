@@ -32,7 +32,7 @@ struct Constants {
     float accent[4];  // theme accent rgb + time
     float alt[4];     // theme alert colour
     float lights[96]; // interior light points: xyz + intensity, read by basic_3d.ps only
-    float tune[8];    // lighting sliders, read by basic_3d.ps only
+    float tune[16];   // lighting sliders, read by basic_3d.ps only
 };
 constexpr TEXTURE_FORMAT kColorFormat = TEX_FORMAT_RGBA8_UNORM_SRGB;
 constexpr TEXTURE_FORMAT kDepthFormat = TEX_FORMAT_D32_FLOAT;
@@ -719,6 +719,14 @@ void Renderer::drawBuilding(const GpuLabel& any, const Mat4& world, Vec3 neon, f
     const float eyeL[4] = {eye.x, eye.y, eye.z, 0};
     if (kind == 6 || kind == 10) draw(floorPipeline_, any.floorSRB, cube_, world, color, params, eyeL);  // glass pane: blended, no depth write
     else draw(solidPipeline_, any.solidSRB, cube_, world, color, params, eyeL);
+}
+
+void Renderer::drawHolo(const GpuLabel& any, bool pyramid, const Mat4& world, Vec3 color, float emerge, float alpha, float glow) {
+    const float c[4] = {color.x, color.y, color.z, 1.0f};
+    const float params[4] = {emerge, alpha, glow, 12.0f};
+    Vec3 eye = view_.rigidInverse().transformPoint({0, 0, 0});
+    const float eyeL[4] = {eye.x, eye.y, eye.z, 0};
+    draw(floorPipeline_, any.floorSRB, pyramid ? pyramid_ : cube_, world, c, params, eyeL);
 }
 
 int Renderer::model(const std::string& name) {

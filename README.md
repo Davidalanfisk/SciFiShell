@@ -40,6 +40,7 @@ and just *fly around inside your own machine*.
 | Show / hide the city | `F9` (also Settings → Graphics → City) |
 | Screenshot | `F12` (saved to `Pictures\SciFiShell`) |
 | Summon / exit the car | `F10` |
+| H.A.R.V.I assistant (summon / dismiss) | `F1` (or `Esc`) |
 | Car: drive / drift / boost / camera | `W` `A` `S` `D` / `Space` / `Shift` / `C` |
 | Hot dog / ice cream stand: take one, then throw it | Click the stand, click again |
 
@@ -106,7 +107,7 @@ Districts sit on glass-pane floors with a neon outline, and the whole city has a
 ![Settings](docs/settings.jpg)
 
 ### Play in the city
-Ground-level fog drifts between the towers, and the parks have wireframe neon ducks paddling around their ponds.
+Ground-level fog drifts between the towers (tune it with the fog sliders in Settings > Graphics), and the parks have wireframe neon ducks paddling around their ponds.
 
 ![Ducks in a park pond](docs/ducks.jpg)
 
@@ -120,6 +121,12 @@ Ground-level fog drifts between the towers, and the parks have wireframe neon du
 **The car.** Press `F10` anywhere in the city to summon a neon hologram sports car, and `F10` again to leave it. `C` swaps first and third person; `Space` drifts and `Shift` boosts. A speedo appears on the HUD. The wheels steer and spin, and a quiet electric hum rises with speed. Parked, it is solid: you can stand on it. Ramps on every region let you drive up onto the platforms.
 
 ![The car](docs/car.jpg)
+
+**H.A.R.V.I.** Press `F1` and a holographic fish materialises beside a dialogue panel: quick tour, controls, troubleshooting, "Did you know?" tips, and shortcuts that open tools and settings pages. He gives contextual help when summoned over Settings or while driving. His lips, eyes, gills, fins and tail are individually articulated: the jaw lip-syncs to the text as it types out, and he blinks, looks around, and emotes (happy, confused, thinking, surprised, sad) and gestures (nod, shake, spin, hop, wave).
+
+Dialogue lives in `assets/harvi/dialogue.json` (`start`, `nodes{id:{say, emote, buttons[{label, action, goto}]}}`, `tips[]`), so it is easy to extend. Button actions include `tool:settings`, `tool:media`, `page:FOG`, `key:arrange`, `tip` and `dismiss`. The "brain" is an interface (`HarviBrain`); the scripted brain is the default and an LLM brain can be slotted in later. Scripts can drive him with `tool harvi on|off|say TEXT|emote NAME|gesture NAME|node ID|ctx NAME`.
+
+![H.A.R.V.I](docs/harvi.jpg)
 
 **The race track.** While you're driving, a roughly 3 km neon track fades in. Drive up the ramp beside the CPU region, then ride it through the city with loops, and the driver assist keeps you on it. It fades out when you leave the car.
 
@@ -172,9 +179,36 @@ gently turns to face them and stays put until you move.
 One window for your **music**, **videos** and **live radio**, with tabs along the top and a now-playing bar (transport,
 seek, volume and a live spectrum) that stays put whatever you browse.
 
-**Music** - an album grid with cover art, artist and search. Open an album for its track list, then play or shuffle it.
+**Music** - opens on your **artists**, A-Z. Each card shows a picture fetched from the web, or a collage of the
+album covers in your folders until one is found. Open an artist for their albums, open an album for the track list
+with year, genre and label, and press `LYRICS` on any track to read them. `VIEW` switches to a plain album grid,
+`SORT` orders by name, album count or track count.
 ![Music library](docs/media-music.jpg)
+![Artist page](docs/media-artist.jpg)
 ![Album view](docs/media-album.jpg)
+![Lyrics](docs/media-lyrics.jpg)
+
+**TV** - shows are found from file names (`Show.S01E02.mkv`, `1x02`, or `Show\Season 1` folders) and shown as poster
+cards with a progress strip. Open one for its season view, which starts on the season you were last watching, with a
+thumbnail, runtime, air date and summary for each episode. `CONTINUE` / `RESUME` picks up where you left off, and each
+episode can be marked watched or unwatched.
+![TV shows](docs/media-tv.jpg)
+![Season view](docs/media-show.jpg)
+
+**Movies** - poster cards from files named like `Movie Name (1999).mp4` or kept in a `Movies` folder. The movie page
+shows the poster, year, genre, runtime, director, writers, cast, a full intro and the storyline (combined from IMDb,
+iTunes and Wikipedia), and resumes where you stopped. Scraped info is cached in the library database, and a progress
+bar shows while new items are still being fetched.
+![Movies](docs/media-movies.jpg)
+![Movie page](docs/media-movie.jpg)
+
+**Search and filter** - the search box matches titles, artists, albums and genres. TV and movies also have `SORT` (A-Z,
+recently watched, year, rating) and `SHOW` (all, in progress, unwatched, watched).
+
+**Library database** - everything the player works out is kept in `%LOCALAPPDATA%\SciFiShell\media\media.db`
+(SQLite): scraped info, episode lists, posters (cached in `media\img`), durations, and your watch progress. Info is
+fetched in the background from free public sources (TVmaze, iTunes, Deezer, Wikipedia and lrclib) and never blocks
+the window. If you are offline the saved info is used and anything missing is fetched later.
 
 **Video** - play a video right inside the window. `FULLSCREEN` takes the picture to the full size of your display: only
 the video is shown, and the title, seek bar, transport and volume fade in when you move the pointer and fade away again
@@ -222,6 +256,9 @@ Every tool opens as a free-floating window, and they all share one set of window
 
 This is only the first lap. The grid is about to get **gnarly**:
 
+- **A better music visualizer:** a hardware-accelerated, projectM-based visualizer for the media player. See the
+  [plan](docs/visualizer-plan.md). Meanwhile, click the spectrum in the now-playing bar to cycle four built-in styles
+  (bars, mirrored, radial, dot matrix).
 - **Networking:** link up cities across the wire. Your machine, your friends' machines, one shared grid.
 - **Shared spaces:** VR-chat-style hangouts where you and your crew drift through each other's data, together.
 - **Customisable apartments:** GTA-style personal pads inside the city. Decorate, hoard, show off.
@@ -249,7 +286,7 @@ This is only the first lap. The grid is about to get **gnarly**:
 | VR | OpenXR (SteamVR compatible): head pose, controller rays, swapchains, gaze reticle |
 | 2D and in-world UI | A custom UI kit (`UiKit`, `LCARSUI`) on top of `stb_truetype` text, with Inter, Space Grotesk and JetBrains Mono fonts |
 | Web browser | Chromium Embedded Framework (CEF) rendering into a texture, with a depth compositor that lifts images and video off the page |
-| Media | Windows Media Foundation for video and audio. Metadata is read in-house, plus a background library scan |
+| Media | Windows Media Foundation for video and audio. Metadata is read in-house, plus a background library scan. A SQLite database (`media.db`) stores scraped info and watch progress; WinINet fetches posters, plots, episode lists, artist and album info and lyrics from TVmaze, iTunes, Deezer, Wikipedia and lrclib on a background thread |
 | Images and models | `stb_image` and `stb_image_write` for images, `cgltf` for glTF/GLB models such as the car |
 | Audio | SDL audio. The sound effects and the electric car hum are synthesised in code (`Sfx`), with no audio files |
 | Hosted Windows apps | Window capture plus a UI Automation helper (`SciFiUia.exe`) that mirrors real programs onto panels |
@@ -325,7 +362,7 @@ folder is missing the shell builds without a browser. The project now builds as 
 - **Start menu**: a normal glass window (so it follows you between city, lobby and rooms, and can be moved, resized, arranged and minimised like any other). Open or close it with **middle click**, **F2**, **pad Y** or **left Y/B/menu button in VR**. The centre holds the built-in tools (Web, Media, System Monitor, File Browser, Editor, Terminal) and your pinned Windows taskbar apps with their icons; the left rail has Settings, Theme and Power (Exit shell, Restart, Shut down, Lock, Sleep - restart and shut down ask for a second click); the **Now** column lists every open or minimised window (click to bring it to you) with **Arc**, **Tile** and **Minimise all** buttons. Search filters tools and apps as you type (opened from the keyboard it is focused already; otherwise click the box), Enter launches the first match and Esc clears the search, then closes the menu. It closes itself when you launch something.
 - **Themes**: Cyan, Amber, Magenta. Cycle with **F6** or in Settings; the choice is saved in `%LOCALAPPDATA%\SciFiShell\theme.ini`.
 - **Screenshots**: press **F12** to save the shell window as a PNG in `Pictures\SciFiShell` (you'll hear a beep; nothing is drawn on screen).
-- **Settings**: the Start menu's Settings button opens a card based hub (aim + click / A / trigger to open a card, arrow keys / d-pad / wheel to move, Esc / B goes back, then closes). The **SHELL** card holds the app options (VR mode, theme, look sensitivity, move speed, invert look Y, crosshair, FPS counter, browser resolution, exit), saved to `%LOCALAPPDATA%\SciFiShell\settings.ini`. The **GRAPHICS** card holds performance options: anti-aliasing (off/2x/4x, applies on restart), draw distance, reflections, post effects (bloom and light streaks), vsync, and live lighting sliders (spot light, wall cap, base level, ambient, falloff) with a reset button. On Windows the other cards are native replacements for the Control Panel (no hosted Windows pages): Display (resolution/scaling info), Sound (volume up/down, mute), Network (active adapters and IPs), Mouse (pointer speed, swap buttons), Personalisation (Windows dark mode, shell theme), Power (battery, lock, sleep) and System (PC name, Windows, CPU, memory, uptime, clock, drives). System and Display cards are read-only. Not covered yet: changing resolution, brightness, Bluetooth, Wi-Fi networks, night light, app management.
+- **Settings**: the Start menu's Settings button opens a card based hub (aim + click / A / trigger to open a card, arrow keys / d-pad / wheel to move, Esc / B goes back, then closes). The **SHELL** card holds the app options (VR mode, theme, look sensitivity, move speed, invert look Y, crosshair, FPS counter, browser resolution, exit), saved to `%LOCALAPPDATA%\SciFiShell\settings.ini`. The **GRAPHICS** card holds performance options: anti-aliasing (off/2x/4x, applies on restart), draw distance, reflections, post effects (bloom and light streaks), vsync, and live lighting sliders (spot light, wall cap, base level, ambient, falloff), and a reset button. A separate **FOG** card has eight fog sliders (density, height, brightness, colour, start distance, ground mist, floor clarity, neon glow) plus a reset. On Windows the other cards are native replacements for the Control Panel (no hosted Windows pages): Display (resolution/scaling info), Sound (volume up/down, mute), Network (active adapters and IPs), Mouse (pointer speed, swap buttons), Personalisation (Windows dark mode, shell theme), Power (battery, lock, sleep) and System (PC name, Windows, CPU, memory, uptime, clock, drives). System and Display cards are read-only. Not covered yet: changing resolution, brightness, Bluetooth, Wi-Fi networks, night light, app management.
 - **Windows (desktop)**: the browser, apps, built-in tools (monitor, terminal, files, editor), settings and the media viewer are all glass windows that behave the same way and stay open until you close them, so you can arrange as many as you like. New windows fan out in front of you. Click a window to raise it and give it the keyboard (the frontmost one under the aim takes the mouse; the world, doors and bus lanes still work around windows). **Drag** any window by its header (or the empty parts of the browser toolbar) to reposition it. Header buttons: minimise (hides it, restore from Alt+Tab or the Start menu), fullscreen, close. **Right click** a window to pin the view to it (the camera glides to centre it and the mouse moves a cursor); right click again, press Esc or click empty space to look around freely. Esc / pad B steps back inside the focused window (leaves the address bar or fullscreen, goes up a page) and never closes it. The middle mouse button / F2 only toggles the Start menu. Alt+Tab lists every window and glides you to a point in front of the one you choose (switching also turns flying on). VR keeps pointing with the controller.
 - **Applications (Windows)**: the Start menu's Windows apps section shows icons for Notepad plus every program pinned to your Windows taskbar (the pin list is read from (read from `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar`). Several programs can be open as panels at once; the panel under the pointer takes the keyboard. Caveats: single-instance apps that hand off to an already-running process, apps with splash windows, and elevated apps (e.g. Task Manager) may fail to attach or pick the wrong window. The program runs normally but its window is parked off-screen and mirrored onto a floating panel. Aim + click to use it; once clicked, the keyboard (typing, Ctrl+C/X/V/A/Z) goes to it (hold Alt to walk). Esc / B hides the panel (program keeps running); the X on the panel's bar closes the program, â€“ hides it. Input to the program's text area is injected as window messages; tabs, buttons and menus are clicked through UI Automation by the `SciFiUia.exe` helper (built next to `SciFiShell.exe`, must stay beside it). Menus/flyouts are mirrored into the panel. The hosted window is marked non-activating so clicking it never steals the foreground (and mouse capture) from the shell. There are no hover highlights. **Moving**: press and hold the panel's title bar (the dark strip, not the buttons) and aim around: the panel follows the pointer at the same distance and turns to face you; release to drop it (mouse only; pad/VR taps don't drag yet). **Fullscreen**: F11 or the square button on the panel's bar makes the program fill the screen (the window is resized to the screen's shape; the mouse / right stick move a pointer over it, the room is frozen); Esc / B / F11 returns. **Task switcher**: Alt+Tab (or Ctrl+Tab, which always works) opens a strip of cards (Room, each running program, Browser, Desktop); keep Alt/Ctrl held and press Tab (Shift+Tab goes back) or â†/â†’ to choose, release to switch; Esc cancels; Desktop minimises the shell. The shell grabs the keyboard so Alt+Tab (and the Win key) reach it instead of Windows; Ctrl+Tab therefore no longer reaches Notepad's tabs.
 - **City** (the home view - the app starts here): a neon-grid city generated from this PC (fly with the usual controls at 8x speed; buildings and the CPU/RAM/GPU monuments are solid. Aim at a tower and click to enter it (opens that folder as a file room; Esc returns to the city). Windows open on top of the city. CPU (spire + per-core pillars), RAM (slab bank) and GPU (ziggurat + VRAM pylon) sit in the middle and show live load; each fixed/removable drive is a platform sized by its capacity, with a lit pad for used space and one tower per top-level folder (height ~ file count, width ~ bytes), joined to the core by roads. A background scan starts ~1.5 s after launch (so it has usually finished listing by the time you open the city) and the city rises out of the grid the first time you view it. A `ReadDirectoryChangesW` watcher per fixed drive flashes towers (green = added, red = removed) with a beam and resizes them. GPU load/VRAM come from Windows performance counters; if unavailable they fall back to a gentle animation. `SCIFI_OPEN_CITY=1` opens it at start (debug). Click a bus lane (or run the `ride N` script command) to ride along it with a chase camera and a glowing trail; any movement input, click or Esc gets you off.

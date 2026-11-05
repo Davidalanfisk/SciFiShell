@@ -8,7 +8,7 @@ cbuffer Constants
     float4   g_Accent;
     float4   g_Alt;
     float4   g_Lights[24];  // interior light points: xyz position, w intensity
-    float4   g_Tune[2];     // lighting sliders: [0] spot gain, wall cap, wall base, ambient; [1].x falloff
+    float4   g_Tune[4];     // lighting sliders: [0] spot gain, wall cap, wall base, ambient; [1].x falloff, .y fog density, .z fog height, .w fog brightness
 };
 
 Texture2D g_Tex;
@@ -322,7 +322,7 @@ float3 buildingColor(PSInput In)
                 float2 gp = abs(frac(pp) - 0.5);
                 float fwp = max(fwidth(pp.x) + fwidth(pp.y), 1e-4);
                 float pl = saturate(1.0 - (0.5 - max(gp.x, gp.y)) / (fwp * 1.2)) * saturate(1.0 - fwp * 3.0);
-                col += float3(0.62, 0.65, 0.68) * (0.15 + 0.10 * pl);
+                col += float3(0.62, 0.65, 0.68) * (0.09 + 0.08 * pl);
                 rimCol = float3(0.62, 0.65, 0.68);
                 rimMul = 0.12;
             }
@@ -411,13 +411,18 @@ float3 buildingColor(PSInput In)
 
     float mist = smoothstep(650.0, 980.0, dist);  // dark ring that masks the edge of the map
     // Light ground-hugging fog: a pale bank that thickens with distance and thins out within a few metres of the street.
-    float gfog = saturate(dist / 70.0) * exp(-max(In.WPos.y, 0.0) * 0.04) * 0.56;
-    if (kind == 6 || kind == 10) return (col * (1.0 - gfog) + float3(0.35, 0.6, 0.7) * gfog * 0.7) * (1.0 - mist) * smoothstep(0.0, 1.0, emerge);  // glass: additive light only, no haze (premultiplied blend)
+    // Seen from above, the ground bank is a thin layer: fade it out with height and view steepness so floors stay dark.
+    float steep = saturate(abs(In.WPos.y - g_Light.y) / max(dist, 1.0) * 1.6) * saturate((g_Light.y - In.WPos.y) / 35.0);
+    float viewFog = lerp(1.0, g_Tune[2].w, steep);
+    float gfog = saturate((dist - g_Tune[2].y) / 70.0) * exp(-max(In.WPos.y, 0.0) * 0.04 / g_Tune[1].z) * 0.6 * g_Tune[2].z * g_Tune[1].y * viewFog;
+    if (kind == 6 || kind == 10) return (col * (1.0 - gfog) + float3(0.12, 0.24, 0.3) * gfog * 0.5 * lerp(1.0, 0.15, steep)) * (1.0 - mist) * smoothstep(0.0, 1.0, emerge);  // glass: additive light only, no haze (premultiplied blend)
     // Dense low fog: barely there up close, building to a thick glowing bank with distance, deepest near the ground and
     // lit by the neon of whatever is inside it.
-    float fogD = 1.0 - exp(-pow(dist * 0.0042, 1.2));
-    float fog = saturate(fogD * (0.35 + 0.65 * exp(-max(In.WPos.y, 0.0) * 0.045)));
-    float3 fogCol = float3(0.55, 0.70, 0.78) * 0.4 + neon * 0.08;  // pale atmospheric haze, kept thin so distant buildings stay readable
+    float fogD = 1.0 - exp(-pow(max(dist - g_Tune[2].y, 0.0) * 0.0042 * g_Tune[1].y, 1.2));
+    float fog = saturate(fogD * (0.35 + 0.65 * exp(-max(In.WPos.y, 0.0) * 0.045 / g_Tune[1].z)))  * lerp(1.0, 0.7, steep);
+    float ft = g_Tune[2].x;  // fog tint: 0 violet, 0.33 blue, 0.66 teal, 1 grey
+    float3 fogHue = ft < 0.33 ? lerp(float3(0.4, 0.25, 0.55), float3(0.2, 0.3, 0.55), ft / 0.33) : (ft < 0.66 ? lerp(float3(0.2, 0.3, 0.55), float3(0.22, 0.4, 0.5), (ft - 0.33) / 0.33) : lerp(float3(0.22, 0.4, 0.5), float3(0.4, 0.42, 0.44), (ft - 0.66) / 0.34));
+    float3 fogCol = (fogHue * 0.3 + neon * g_Tune[3].x) * g_Tune[1].w;  // dark teal haze: keeps the glow and depth of the fog without lightening dark floors
     col = lerp(col, fogCol, saturate(fog * 0.62 + gfog * 1.1)) + neon * 0.05 * fog * (1.0 - fog);
     return col * (1.0 - mist) + mistColor(g_Accent.rgb) * mist;
 }
@@ -425,6 +430,25 @@ float3 buildingColor(PSInput In)
 void main(in PSInput In, out float4 Color : SV_TARGET)
 {
     float tm = g_Accent.w;
+    if (g_Params.w > 11.5 && g_Params.w < 12.5)
+    {
+        // Hologram: fresnel rim, scanlines, flicker, and a pixel dissolve driven by emergence (params.x).
+        float3 V = normalize(g_Light.xyz - In.WPos);
+        float3 hn = normalize(In.Nrm);
+        float fres = pow(1.0 - abs(dot(hn, V)), 2.0);
+        float scan = 0.65 + 0.35 * sin(In.WPos.y * 90.0 - tm * 6.0);
+        float flick = 0.9 + 0.1 * sin(tm * 37.0 + In.WPos.y * 3.0);
+        float n = hash22(floor(In.WPos.xz * 60.0) + floor(In.WPos.y * 60.0)).x;
+        float emg = g_Params.x;
+        if (n > emg * 1.15 - 0.1 + 0.0) discard;
+        float edge = smoothstep(emg * 1.15 - 0.25, emg * 1.15 - 0.1, n);
+        float shade = 0.35 + 0.65 * saturate(dot(hn, normalize(float3(0.3, 0.8, 0.5))) * 0.5 + 0.5);
+        float3 c = g_Color.rgb * (shade * 0.55 + fres * 1.6) * scan * flick + float3(0.7, 1.0, 1.0) * edge * 0.8;
+        c += g_Color.rgb * g_Params.z;
+        float a = saturate((0.28 + fres * 0.6) * g_Params.y * scan + edge * 0.5);
+        Color = float4(c * a, a);
+        return;
+    }
     if (g_Params.w > 2.5)
     {
         gSolid = 0.0;

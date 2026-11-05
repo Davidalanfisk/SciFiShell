@@ -42,6 +42,17 @@ FetchContent_Declare(OpenXR
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(OpenXR)
 
+# ---- SQLite (media library database) ----------------------------------------------------------
+FetchContent_Declare(sqlite3src
+    URL https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip)
+FetchContent_GetProperties(sqlite3src)
+if(NOT sqlite3src_POPULATED)
+    FetchContent_Populate(sqlite3src)
+endif()
+add_library(sqlite3_static STATIC ${sqlite3src_SOURCE_DIR}/sqlite3.c)
+target_include_directories(sqlite3_static PUBLIC ${sqlite3src_SOURCE_DIR})
+target_compile_definitions(sqlite3_static PRIVATE SQLITE_THREADSAFE=1 SQLITE_OMIT_LOAD_EXTENSION)
+
 # ---- SDL2 -------------------------------------------------------------------------------------
 find_package(SDL2 REQUIRED CONFIG)
 
@@ -50,6 +61,7 @@ set(SOURCES
     src/main.cpp
     src/AppShell.cpp
     src/TaskSwitcher.cpp
+    src/Harvi.cpp
     src/Renderer.cpp
     src/SceneGraph.cpp
     src/LCARSUI.cpp
@@ -82,6 +94,9 @@ set(SOURCES
     src/MediaPlayer.cpp
     src/MediaLibrary.cpp
     src/MediaMeta.cpp
+    src/Net.cpp
+    src/MediaDb.cpp
+    src/MediaScrape.cpp
     src/MediaApp.cpp
     src/AppShellMedia.cpp
     src/AppShellWindows.cpp
@@ -132,6 +147,7 @@ else()
 endif()
 
 target_link_libraries(SciFiShell PRIVATE
+    sqlite3_static
     OpenXR::openxr_loader
     Diligent-Common
     Diligent-GraphicsTools

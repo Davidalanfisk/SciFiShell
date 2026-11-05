@@ -12,6 +12,8 @@
 #include <fstream>
 #include <random>
 
+#include "stb_image.h"
+
 namespace sf {
 
 using ui::Rect;
@@ -234,6 +236,37 @@ std::string mediaDir() {
 }
 
 }  // namespace
+namespace {
+
+std::string durText(double s) {
+    const int m = static_cast<int>(s / 60.0 + 0.5);
+    if (m >= 60) return std::to_string(m / 60) + "H " + std::to_string(m % 60) + "M";
+    return std::to_string(m) + " MIN";
+}
+
+std::string joinDot(const std::vector<std::string>& parts) {
+    std::string o;
+    for (const std::string& p : parts) {
+        if (p.empty()) continue;
+        if (!o.empty()) o += "  /  ";
+        o += p;
+    }
+    return o;
+}
+
+}  // namespace
+
+struct MediaApp::PCtx {
+    Bitmap& L;
+    ui::Rect view;
+    float k, pad, gap;
+    ui::Tokens t;
+    std::function<void(const ui::Rect&, int, int)> hit;
+    std::function<bool(int, int)> hot;
+    std::function<void(const std::string&, const std::string&)> empty;
+    bool onScreen(float y0, float y1) const { return y1 > view.y0 && y0 < view.y1; }
+};
+
 
 MediaApp::MediaApp(Renderer& renderer, MediaHost host) : PanelApp(renderer, 1600, 900, 2.2f), host_(std::move(host)) {
     title_ = "MEDIA";
@@ -279,10 +312,12 @@ void MediaApp::onOpen() {
 }
 
 void MediaApp::setTab(int t) {
-    tab_ = std::clamp(t, 0, 2);
+    tab_ = std::clamp(t, 0, 4);
     theatre_ = false;
     manage_ = false;
     albumOpen_ = -1;
+    showOpen_ = movieOpen_ = artistOpen_ = lyricsItem_ = -1;
+    sortMode_ = filterMode_ = 0;
     scroll_ = scrollTarget_ = 0;
     invalidate();
 }
@@ -323,8 +358,16 @@ bool MediaApp::back() {
         invalidate();
         return true;
     }
-    if (albumOpen_ >= 0) {
-        albumOpen_ = -1;
+    if (lyricsItem_ >= 0) {
+        lyricsItem_ = -1;
+        invalidate();
+        return true;
+    }
+    if (showOpen_ >= 0 || movieOpen_ >= 0 || albumOpen_ >= 0 || artistOpen_ >= 0) {
+        if (showOpen_ >= 0) showOpen_ = -1;
+        else if (movieOpen_ >= 0) movieOpen_ = -1;
+        else if (albumOpen_ >= 0) albumOpen_ = -1;
+        else artistOpen_ = -1;
         scroll_ = scrollTarget_ = 0;
         invalidate();
         return true;
@@ -346,6 +389,9 @@ void MediaApp::reload() {
             Vid v;
             v.t = t;
             v.dir = dirOf(t.path);
+            auto vc = vcCache_.find(t.path);
+            if (vc == vcCache_.end()) vc = vcCache_.emplace(t.path, classifyVideo(t.path)).first;
+            v.vc = vc->second;
             vids_.push_back(std::move(v));
         } else {
             Item it;
@@ -362,6 +408,7 @@ void MediaApp::reload() {
         if (d != 0) return d < 0;
         return natCmp(a.t.title, b.t.title) < 0;
     });
+    groupLibrary();
     libCount_ = host_.count ? host_.count() : 0;
     libScanning_ = host_.scanning ? host_.scanning() : false;
     albumsDirty_ = true;
@@ -410,6 +457,30 @@ void MediaApp::rebuildAlbums() {
         if (d != 0) return d < 0;
         return natCmp(a.title, b.title) < 0;
     });
+    std::string artistKeyOpen;
+    if (artistOpen_ >= 0 && artistOpen_ < static_cast<int>(artists_.size())) artistKeyOpen = artists_[artistOpen_].key;
+    artists_.clear();
+    {
+        std::map<std::string, int> ai;
+        for (size_t i = 0; i < albums_.size(); ++i) {
+            const std::string nm = albums_[i].artist.empty() ? "Unknown Artist" : albums_[i].artist;
+            const std::string key = keyOf(nm);
+            auto f = ai.find(key);
+            if (f == ai.end()) {
+                Artist a;
+                a.name = nm;
+                a.key = key;
+                f = ai.emplace(key, static_cast<int>(artists_.size())).first;
+                artists_.push_back(std::move(a));
+            }
+            artists_[f->second].albums.push_back(static_cast<int>(i));
+            artists_[f->second].tracks += static_cast<int>(albums_[i].items.size());
+        }
+        std::sort(artists_.begin(), artists_.end(), [](const Artist& a, const Artist& b) { return natCmp(a.name, b.name) < 0; });
+    }
+    artistOpen_ = -1;
+    for (size_t i = 0; i < artists_.size(); ++i)
+        if (!artistKeyOpen.empty() && artists_[i].key == artistKeyOpen) artistOpen_ = static_cast<int>(i);
     albumOpen_ = -1;
     if (!openKey.empty())
         for (size_t i = 0; i < albums_.size(); ++i)
@@ -421,6 +492,20 @@ void MediaApp::rebuildAlbums() {
 }
 
 void MediaApp::pump() {
+    {
+        std::string done;
+        int d = 0;
+        while (d < 20 && scrape_.poll(done)) {
+            ++d;
+            if (done.rfind("img:", 0) == 0) {
+                for (auto it = imgPath_.begin(); it != imgPath_.end();) it = it->second.empty() ? imgPath_.erase(it) : std::next(it);
+            } else {
+                infoCache_.erase(done);
+                epCache_.erase(done);
+            }
+            if (!theatre_) invalidate();
+        }
+    }
     MetaResult r;
     int n = 0;
     while (n < 40 && meta_.poll(r)) {
@@ -450,6 +535,11 @@ bool MediaApp::albumMatches(const Album& a) const {
 const Bitmap* MediaApp::artFor(const Album& a) {
     auto f = artCache_.find(a.key);
     if (f != artCache_.end()) return &f->second;
+    if (artMissing_.count(a.key) && !a.artist.empty()) {  // no embedded or folder art: fall back to the scraped cover
+        const Info* ai = info(MediaScrape::albumKey(a.artist, a.title));
+        if (!ai) { scrape_.requestAlbum(a.artist, a.title); return nullptr; }
+        return ai->found && !ai->img.empty() ? webBitmap(ai->img, 400, 400) : nullptr;
+    }
     if (a.items.empty() || artMissing_.count(a.key) || artAsked_.count(a.key)) return nullptr;
     const Item& first = items_[a.items[0]];
     if (!tagCache_.count(first.t.path)) {  // wait for the tags: the album key may still change
@@ -510,6 +600,7 @@ void MediaApp::tick(double dt) {
     const size_t cnt = host_.count ? host_.count() : 0;
     if ((cnt != libCount_ || scanning != libScanning_) && (!scanning || reloadT_ > 1.5)) reload();
     pump();
+    recordProgress();
     if (albumsDirty_ && (albumT_ > 0.8 || tagsOutstanding_ == 0)) rebuildAlbums();
 
     // The spectrum is only analysed while the window is visible, and at the same ~25 Hz the window repaints at.
@@ -651,6 +742,54 @@ void MediaApp::click(int id, int arg, float x, float) {
     };
     switch (id) {
         case 1: case 2: case 3: setTab(id - 1); break;
+        case 5: case 6: setTab(id - 2); break;
+        case 7: musicByAlbum_ = !musicByAlbum_; scroll_ = scrollTarget_ = 0; break;
+        case 8: sortMode_ = (sortMode_ + 1) % 4; scroll_ = scrollTarget_ = 0; break;
+        case 9: filterMode_ = (filterMode_ + 1) % 4; scroll_ = scrollTarget_ = 0; break;
+        case 70: showOpen_ = arg; scroll_ = scrollTarget_ = 0; seasonSel_ = -1; break;
+        case 71: showOpen_ = -1; scroll_ = scrollTarget_ = 0; break;
+        case 72: seasonSel_ = arg; scroll_ = scrollTarget_ = 0; break;
+        case 73: case 74: {  // an episode, or the show's CONTINUE / PLAY button
+            if (showOpen_ < 0 || showOpen_ >= static_cast<int>(shows_.size())) break;
+            const Show& s = shows_[showOpen_];
+            int start = id == 73 ? arg : resumeIndex(s);
+            std::vector<int> list = s.eps;
+            const auto f = std::find(list.begin(), list.end(), start);
+            playVids(list, f == list.end() ? 0 : static_cast<int>(f - list.begin()));
+            break;
+        }
+        case 75: {
+            const std::string pth = vids_[arg].t.path;
+            const Progress p = prog(pth);
+            db_.setProgress(pth, 0, p.dur, !p.watched);
+            progress_[pth] = db_.progress(pth);
+            break;
+        }
+        case 80: movieOpen_ = arg; scroll_ = scrollTarget_ = 0; break;
+        case 81: movieOpen_ = -1; scroll_ = scrollTarget_ = 0; break;
+        case 82: if (arg >= 0 && arg < static_cast<int>(vids_.size())) playVids({arg}, 0); break;
+        case 90: artistOpen_ = arg; scroll_ = scrollTarget_ = 0; break;
+        case 91: artistOpen_ = -1; scroll_ = scrollTarget_ = 0; break;
+        case 92:
+            if (artistOpen_ >= 0 && artistOpen_ < static_cast<int>(artists_.size()) && host_.play) {
+                std::vector<std::string> paths;
+                for (int ai : artists_[artistOpen_].albums)
+                    for (int i : albums_[ai].items) paths.push_back(items_[i].t.path);
+                std::mt19937 rng(static_cast<unsigned>(SDL_GetTicks()));
+                std::shuffle(paths.begin(), paths.end(), rng);
+                if (!paths.empty()) host_.play(paths, 0);
+            }
+            break;
+        case 93: {
+            lyricsItem_ = arg;
+            if (arg >= 0 && arg < static_cast<int>(items_.size()) && albumOpen_ >= 0) {
+                const Item& it = items_[arg];
+                const std::string ar = it.m.artist.empty() ? albums_[albumOpen_].artist : it.m.artist;
+                scrape_.requestLyrics(ar, it.title, it.m.seconds);
+            }
+            break;
+        }
+        case 94: lyricsItem_ = -1; break;
         case 4: searchFocus_ = true; break;
         case 10: if (host_.toggle) host_.toggle(); break;
         case 11: if (host_.prev) host_.prev(); break;
@@ -659,9 +798,10 @@ void MediaApp::click(int id, int arg, float x, float) {
         case 14: if (host_.cycleRepeat) host_.cycleRepeat(); break;
         case 15: if (host_.seek && now_.dur > 0) host_.seek(frac(15) * now_.dur); break;
         case 16: if (host_.setVolume) host_.setVolume(frac(16)); break;
+        case 17: vizMode_ = (vizMode_ + 1) % 4; break;
         case 20: albumOpen_ = arg; scroll_ = scrollTarget_ = 0; break;
         case 21: playAlbum(arg, 0, false); break;
-        case 22: albumOpen_ = -1; scroll_ = scrollTarget_ = 0; break;
+        case 22: albumOpen_ = -1; lyricsItem_ = -1; scroll_ = scrollTarget_ = 0; break;
         case 23: playAlbum(albumOpen_, 0, false); break;
         case 24: playAlbum(albumOpen_, 0, true); break;
         case 25: playAlbum(albumOpen_, arg, false); break;
@@ -815,6 +955,47 @@ void MediaApp::drawBars(Bitmap& bm, const ui::Rect& sp) {
     const float k = spK_;
     const int nb = 32;
     const float bwid = sp.w() / nb;
+    if (vizMode_ == 1) {  // mirrored: bars grow from the centre line, with the peaks as thin caps
+        const float mid = (sp.y0 + sp.y1) * 0.5f;
+        for (int i = 0; i < nb; ++i) {
+            const float v = std::clamp(bands_[i], 0.0f, 1.0f), pk = std::clamp(peaks_[i], 0.0f, 1.0f);
+            const float h = std::max(1.5f * k, v * sp.h() * 0.5f);
+            const Color8 col = mix(spA_, spB_, static_cast<float>(i) / nb);
+            const float bx = sp.x0 + i * bwid;
+            fillRect(bm, bx + 1.5f * k, mid - h, bx + bwid - 1.5f * k, mid + h, withAlpha(col, v > 0.02f ? 225 : 70));
+            if (pk > 0.04f) {
+                fillRect(bm, bx + 1.5f * k, mid - pk * sp.h() * 0.5f - 2 * k, bx + bwid - 1.5f * k, mid - pk * sp.h() * 0.5f, spT_);
+                fillRect(bm, bx + 1.5f * k, mid + pk * sp.h() * 0.5f, bx + bwid - 1.5f * k, mid + pk * sp.h() * 0.5f + 2 * k, spT_);
+            }
+        }
+        return;
+    }
+    if (vizMode_ == 2) {  // radial burst: spokes around a centre, the bass at the top going clockwise
+        const float cx = (sp.x0 + sp.x1) * 0.5f, cy = (sp.y0 + sp.y1) * 0.5f;
+        const float r0 = std::min(sp.w(), sp.h()) * 0.16f, rmax = std::min(sp.w(), sp.h()) * 0.5f;
+        for (int i = 0; i < 64; ++i) {
+            const int b = i < 32 ? i : 63 - i;  // mirror so the left and right halves match
+            const float v = std::clamp(bands_[b], 0.0f, 1.0f);
+            const float a = static_cast<float>(i) / 64 * 6.2831853f - 1.5707963f;
+            const float r1 = r0 + std::max(1.0f * k, v * (rmax - r0));
+            const Color8 col = mix(spA_, spB_, static_cast<float>(b) / nb);
+            for (float r = r0; r < r1; r += 1.0f * k)
+                fillRect(bm, cx + std::cos(a) * r - 1.0f * k, cy + std::sin(a) * r - 1.0f * k, cx + std::cos(a) * r + 1.0f * k, cy + std::sin(a) * r + 1.0f * k, withAlpha(col, 230));
+        }
+        return;
+    }
+    if (vizMode_ == 3) {  // dot matrix: a stack of small squares per band
+        const int rows = 10;
+        const float ch = sp.h() / rows;
+        for (int i = 0; i < nb; ++i) {
+            const int lit = static_cast<int>(std::clamp(bands_[i], 0.0f, 1.0f) * rows + 0.5f);
+            const Color8 col = mix(spA_, spB_, static_cast<float>(i) / nb);
+            const float bx = sp.x0 + i * bwid;
+            for (int r = 0; r < rows; ++r)
+                fillRect(bm, bx + 2 * k, sp.y1 - (r + 1) * ch + 1.5f * k, bx + bwid - 2 * k, sp.y1 - r * ch - 1.5f * k, withAlpha(col, r < lit ? 235 : 40));
+        }
+        return;
+    }
     for (int i = 0; i < nb; ++i) {
         const float v = std::clamp(bands_[i], 0.0f, 1.0f), pk = std::clamp(peaks_[i], 0.0f, 1.0f);
         const float h = std::max(2.0f * k, v * sp.h());
@@ -914,7 +1095,9 @@ void MediaApp::paint(Bitmap& bm) {
     // header text
     size_t nAlb = albums_.size();
     std::string sub;
-    if (tab_ == 0) sub = std::to_string(nAlb) + " ALBUMS  /  " + std::to_string(items_.size()) + " TRACKS";
+    if (tab_ == 0) sub = std::to_string(artists_.size()) + " ARTISTS  /  " + std::to_string(nAlb) + " ALBUMS  /  " + std::to_string(items_.size()) + " TRACKS";
+    else if (tab_ == 3) sub = std::to_string(shows_.size()) + " SHOWS";
+    else if (tab_ == 4) sub = std::to_string(movies_.size()) + " MOVIES";
     else if (tab_ == 1) sub = std::to_string(vids_.size()) + " VIDEOS";
     else sub = std::to_string(stations_.size()) + " STATIONS";
     if (libScanning_) sub = "SCANNING  " + std::to_string(host_.scanned ? host_.scanned() : 0) + " FILES  /  " + sub;
@@ -923,26 +1106,30 @@ void MediaApp::paint(Bitmap& bm) {
     // toolbar
     const float ty = c.y0 + 6 * k, th = 44 * k;
     float x = c.x0 + 14 * k;
-    const char* tabs[3] = {"MUSIC", "VIDEO", "RADIO"};
-    for (int i = 0; i < 3; ++i) {
-        Rect r{x, ty, x + 150 * k, ty + th};
-        State s = tab_ == i ? State::Selected : (hot(1 + i, 0) ? State::Hover : State::Normal);
-        button(bm, r, tabs[i], s, tab_ == i, 24 * k);
-        addHit(r, 1 + i);
-        x += 158 * k;
+    const char* tabs[5] = {"MUSIC", "TV", "MOVIES", "VIDEO", "RADIO"};
+    const int tabIdx[5] = {0, 3, 4, 1, 2};
+    for (int n = 0; n < 5; ++n) {
+        const int i = tabIdx[n];
+        const int hid = i < 3 ? 1 + i : 2 + i;
+        Rect r{x, ty, x + 128 * k, ty + th};
+        State s = tab_ == i ? State::Selected : (hot(hid, 0) ? State::Hover : State::Normal);
+        button(bm, r, tabs[n], s, tab_ == i, 21 * k);
+        addHit(r, hid);
+        x += 134 * k;
     }
     if (!theatre_) {
         const bool busy = host_.pickBusy && host_.pickBusy();
-        Rect r{x + 8 * k, ty, x + 8 * k + 210 * k, ty + th};
+        Rect r{x + 8 * k, ty, x + 8 * k + 190 * k, ty + th};
         button(bm, r, busy ? "CHOOSING..." : "ADD FOLDERS", hot(52, 0) ? State::Hover : State::Normal, false, 20 * k);
         addHit(r, 52);
-        Rect m{r.x1 + 8 * k, ty, r.x1 + 8 * k + 140 * k, ty + th};
+        Rect m{r.x1 + 8 * k, ty, r.x1 + 8 * k + 130 * k, ty + th};
         button(bm, m, manage_ ? "DONE" : "MANAGE", manage_ ? State::Selected : (hot(51, 0) ? State::Hover : State::Normal), manage_, 20 * k);
         addHit(m, 51);
     }
     const bool searchable = tab_ != 2;
+    webLoads_ = 0;
     if (searchable && !theatre_) {
-        const Rect sr{c.x1 - 14 * k - 400 * k, ty, c.x1 - 14 * k, ty + th};
+        const Rect sr{c.x1 - 14 * k - 340 * k, ty, c.x1 - 14 * k, ty + th};
         card(bm, sr, searchFocus_ ? State::Selected : (hot(4, 0) ? State::Hover : State::Normal));
         addHit(sr, 4);
         const bool caret = searchFocus_ && (SDL_GetTicks() / 500) % 2 == 0;
@@ -953,7 +1140,41 @@ void MediaApp::paint(Bitmap& bm) {
     // bar geometry first, so the scrolling region can end above it
     const float barH = 140 * k;
     const Rect barR{c.x0, c.y1 - barH, c.x1, c.y1};
-    const Rect view{c.x0, ty + th + 12 * k, c.x1, barR.y0 - 12 * k};
+    Rect view{c.x0, ty + th + 12 * k, c.x1, barR.y0 - 12 * k};
+    const bool gridView = !theatre_ && !manage_ &&
+                          ((tab_ == 0 && albumOpen_ < 0 && artistOpen_ < 0) || (tab_ == 3 && showOpen_ < 0) || (tab_ == 4 && movieOpen_ < 0));
+    if (gridView) {
+        // sort / filter strip above the scrolling grid
+        const float sy = view.y0, sh = 42 * k;
+        float sx = view.x0 + 14 * k;
+        auto chip = [&](const std::string& txt, int id, bool on) {
+            const float w = measureText(txt, 19 * k, FontFace::UIBold) + 36 * k;
+            const Rect r{sx, sy, sx + w, sy + sh};
+            button(bm, r, txt, on ? State::Selected : (hot(id, 0) ? State::Hover : State::Normal), on, 19 * k);
+            addHit(r, id);
+            sx += w + 10 * k;
+        };
+        if (tab_ == 0) {
+            chip(musicByAlbum_ ? "VIEW: ALBUMS" : "VIEW: ARTISTS", 7, false);
+            static const char* sm[2][4] = {{"SORT: A-Z", "SORT: Z-A", "SORT: MOST ALBUMS", "SORT: MOST TRACKS"}, {"SORT: A-Z", "SORT: YEAR", "SORT: ARTIST", "SORT: Z-A"}};
+            chip(sm[musicByAlbum_ ? 1 : 0][sortMode_], 8, false);
+        } else {
+            static const char* sm[4] = {"SORT: A-Z", "SORT: RECENT", "SORT: YEAR", "SORT: RATING"};
+            static const char* fm[4] = {"SHOW: ALL", "SHOW: IN PROGRESS", "SHOW: UNWATCHED", "SHOW: WATCHED"};
+            chip(sm[sortMode_], 8, false);
+            chip(fm[filterMode_], 9, filterMode_ != 0);
+        }
+        if (scrape_.offline()) label(bm, c.x1 - 14 * k - measureText("OFFLINE - USING SAVED INFO", 18 * k, FontFace::UI), sy + 28 * k, "OFFLINE - USING SAVED INFO", 18 * k, FontFace::UI, t.muted);
+        else if (scrape_.pending() > 0) {
+            size_t sd = 0, st2 = 0;
+            scrape_.progress(sd, st2);
+            const std::string msg = "FETCHING INFO  " + std::to_string(sd) + " / " + std::to_string(st2);
+            const float mw = measureText(msg, 18 * k, FontFace::UI);
+            label(bm, c.x1 - 14 * k - mw, sy + 20 * k, msg, 18 * k, FontFace::UI, t.accent);
+            bar(bm, Rect{c.x1 - 14 * k - mw, sy + 28 * k, c.x1 - 14 * k, sy + 34 * k}, st2 ? static_cast<float>(sd) / st2 : 0.0f, t.accent);
+        }
+        view.y0 += sh + 10 * k;
+    }
 
     // scrolling content is painted on a transparent layer and clipped to the view
     if (layer_.w != bm.w || layer_.h != bm.h) {
@@ -1039,7 +1260,20 @@ void MediaApp::paint(Bitmap& bm) {
         label(L, cover.x0, ly, ellipsize(al.artist.empty() ? "UNKNOWN ARTIST" : al.artist, 24 * k, FontFace::UI, lw), 24 * k, FontFace::UI, t.accent);
         ly += 30 * k;
         std::string meta = (al.year ? std::to_string(al.year) + "  /  " : std::string()) + std::to_string(al.items.size()) + " TRACKS";
-        label(L, cover.x0, ly, meta, 20 * k, FontFace::UI, t.dim);
+        const Info* ai = al.artist.empty() ? nullptr : info(MediaScrape::albumKey(al.artist, al.title));
+        if (!ai && !al.artist.empty()) scrape_.requestAlbum(al.artist, al.title);
+        if (ai && ai->found) {
+            if (!ai->year.empty() && !al.year) meta = ai->year + "  /  " + std::to_string(al.items.size()) + " TRACKS";
+            label(L, cover.x0, ly, meta, 20 * k, FontFace::UI, t.dim);
+            ly += 26 * k;
+            const std::string extra = joinDot({ai->genres, ai->extra});
+            if (!extra.empty()) {
+                label(L, cover.x0, ly, ellipsize(extra, 18 * k, FontFace::UI, lw), 18 * k, FontFace::UI, t.accent);
+                ly += 6 * k;
+            }
+        } else {
+            label(L, cover.x0, ly, meta, 20 * k, FontFace::UI, t.dim);
+        }
         ly += 22 * k;
         const float bw = (lw - 2 * 10 * k) / 3;
         const char* bl[3] = {"PLAY", "SHUFFLE", "BACK"};
@@ -1052,7 +1286,16 @@ void MediaApp::paint(Bitmap& bm) {
 
         const float rowH = 50 * k, lx0 = view.x0 + lw + 50 * k, lx1 = view.x1 - pad;
         float y = view.y0 + pad - scroll_;
-        for (size_t i = 0; i < al.items.size(); ++i) {
+        PCtx lc{L, view, k, pad, gap, t,
+                [&](const Rect& r, int id, int arg) { addHit(r, id, arg, &view); },
+                [&](int id, int arg) { return hot(id, arg); },
+                [&](const std::string&, const std::string&) {}};
+        const bool showLyr = lyricsItem_ >= 0 && lyricsItem_ < static_cast<int>(items_.size());
+        if (showLyr) {
+            contentH = drawLyrics(lc, lx0, lx1);
+            y = view.y0;
+        }
+        for (size_t i = 0; i < al.items.size() && !showLyr; ++i) {
             const Item& it = items_[al.items[i]];
             const Rect r{lx0, y, lx1, y + rowH - 4 * k};
             if (onScreen(r.y0, r.y1)) {
@@ -1072,13 +1315,27 @@ void MediaApp::paint(Bitmap& bm) {
                 } else labelRight(L, r.x0 + 46 * k, base, num, 22 * k, FontFace::UI, playing ? t.accent : t.muted);
                 const std::string dur = it.m.seconds > 0 ? clock(it.m.seconds) : std::string();
                 const float dw = measureText(dur, 20 * k, FontFace::UI);
-                label(L, r.x0 + 70 * k, base, ellipsize(it.title, 24 * k, FontFace::UI, r.w() - 70 * k - dw - 40 * k), 24 * k, FontFace::UI, playing ? t.accent : t.text);
+                label(L, r.x0 + 70 * k, base, ellipsize(it.title, 24 * k, FontFace::UI, r.w() - 70 * k - dw - 150 * k), 24 * k, FontFace::UI, playing ? t.accent : t.text);
                 labelRight(L, r.x1 - 16 * k, base, dur, 20 * k, FontFace::UI, t.dim);
                 addHit(r, 25, static_cast<int>(i), &view);
+                {
+                    const Rect lr{r.x1 - 16 * k - dw - 108 * k, r.y0 + 8 * k, r.x1 - 16 * k - dw - 16 * k, r.y1 - 12 * k};
+                    const bool lh = hot(93, static_cast<int>(al.items[i]));
+                    button(L, lr, "LYRICS", lh ? State::Hover : State::Normal, false, 15 * k);
+                    addHit(lr, 93, static_cast<int>(al.items[i]), &view);
+                }
             }
             y += rowH;
         }
-        contentH = y + scroll_ - view.y0 + pad;
+        if (!showLyr) contentH = y + scroll_ - view.y0 + pad;
+    } else if (tab_ == 3 || tab_ == 4 || (tab_ == 0 && !musicByAlbum_)) {
+        PCtx pc{L, view, k, pad, gap, t,
+                [&](const Rect& r, int id, int arg) { addHit(r, id, arg, &view); },
+                [&](int id, int arg) { return hot(id, arg); },
+                [&](const std::string& ti, const std::string& body) { emptyState(ti, body, ti.rfind("NO ", 0) == 0 && ti != "NO MATCHES"); }};
+        if (tab_ == 3) contentH = showOpen_ >= 0 && showOpen_ < static_cast<int>(shows_.size()) ? paintShowPage(pc) : paintShowGrid(pc);
+        else if (tab_ == 4) contentH = movieOpen_ >= 0 && movieOpen_ < static_cast<int>(movies_.size()) ? paintMoviePage(pc) : paintMovieGrid(pc);
+        else contentH = artistOpen_ >= 0 && artistOpen_ < static_cast<int>(artists_.size()) ? paintArtistPage(pc) : paintArtistGrid(pc);
     } else if (tab_ == 0) {
         // ---- album grid
         std::vector<int> vis;
@@ -1124,7 +1381,7 @@ void MediaApp::paint(Bitmap& bm) {
         // ---- video: a section per folder
         std::vector<int> vis;
         for (size_t i = 0; i < vids_.size(); ++i)
-            if (q.empty() || lower(vids_[i].t.title).find(q) != std::string::npos || lower(vids_[i].t.folder).find(q) != std::string::npos)
+            if (vids_[i].vc.kind == VidClass::Other && (q.empty() || lower(vids_[i].t.title).find(q) != std::string::npos || lower(vids_[i].t.folder).find(q) != std::string::npos))
                 vis.push_back(static_cast<int>(i));
         if (vis.empty()) {
             if (!q.empty()) emptyState("NO MATCHES", "NO VIDEO MATCHES THE SEARCH", false);
@@ -1356,6 +1613,7 @@ void MediaApp::paint(Bitmap& bm) {
         spT_ = t.text;
         snapshotBackdrop(bm);
         drawBars(bm, sp);
+        addHit(sp, 17);
         label(bm, rx0, barR.y1 - bp - 8 * k, "VOL", 18 * k, FontFace::UIBold, t.dim);
         const Rect vr{rx0 + 60 * k, barR.y1 - bp - 26 * k, rx1, barR.y1 - bp - 4 * k};
         slider(bm, vr, std::clamp(now_.vol, 0.0f, 1.0f), hot(16, 0) ? State::Hover : State::Normal);
@@ -1370,6 +1628,660 @@ void MediaApp::paint(Bitmap& bm) {
             invalidate();
         }
     }
+}
+
+// ===== Library views: TV shows, movies, artists, with web-scraped posters, info and watch progress =====
+
+void MediaApp::groupLibrary() {
+    std::string showKeyOpen, moviePathOpen;
+    if (showOpen_ >= 0 && showOpen_ < static_cast<int>(shows_.size())) showKeyOpen = shows_[showOpen_].key;
+    if (movieOpen_ >= 0 && movieOpen_ < static_cast<int>(movies_.size()) && movies_[movieOpen_] < static_cast<int>(vids_.size())) moviePathOpen = vids_[movies_[movieOpen_]].t.path;
+    shows_.clear();
+    movies_.clear();
+    std::map<std::string, int> idx;
+    for (size_t i = 0; i < vids_.size(); ++i) {
+        const VidClass& vc = vids_[i].vc;
+        if (vc.kind == VidClass::Show) {
+            const std::string key = MediaScrape::showKey(vc.name);
+            auto f = idx.find(key);
+            if (f == idx.end()) {
+                Show s;
+                s.name = vc.name;
+                s.key = key;
+                f = idx.emplace(key, static_cast<int>(shows_.size())).first;
+                shows_.push_back(std::move(s));
+            }
+            shows_[f->second].eps.push_back(static_cast<int>(i));
+        } else if (vc.kind == VidClass::Movie) {
+            movies_.push_back(static_cast<int>(i));
+        }
+    }
+    for (Show& s : shows_)
+        std::sort(s.eps.begin(), s.eps.end(), [&](int a, int b) {
+            const VidClass &x = vids_[a].vc, &y = vids_[b].vc;
+            if (x.season != y.season) return x.season < y.season;
+            if (x.episode != y.episode) return x.episode < y.episode;
+            return natCmp(vids_[a].t.title, vids_[b].t.title) < 0;
+        });
+    std::sort(shows_.begin(), shows_.end(), [](const Show& a, const Show& b) { return natCmp(a.name, b.name) < 0; });
+    std::sort(movies_.begin(), movies_.end(), [&](int a, int b) { return natCmp(vids_[a].vc.name, vids_[b].vc.name) < 0; });
+    showOpen_ = movieOpen_ = -1;
+    for (size_t i = 0; i < shows_.size(); ++i)
+        if (!showKeyOpen.empty() && shows_[i].key == showKeyOpen) showOpen_ = static_cast<int>(i);
+    for (size_t i = 0; i < movies_.size(); ++i)
+        if (!moviePathOpen.empty() && vids_[movies_[i]].t.path == moviePathOpen) movieOpen_ = static_cast<int>(i);
+    progress_ = db_.allProgress();
+}
+
+Progress MediaApp::prog(const std::string& path) const {
+    auto f = progress_.find(path);
+    return f == progress_.end() ? Progress() : f->second;
+}
+
+long long MediaApp::lastPlayed(const Show& s) const {
+    long long l = 0;
+    for (int v : s.eps) l = std::max(l, prog(vids_[v].t.path).last);
+    return l;
+}
+
+// The episode a CONTINUE button should start: the one in progress, else the one after the last finished, else the first.
+int MediaApp::resumeIndex(const Show& s) const {
+    int best = -1;
+    long long bl = 0;
+    for (size_t i = 0; i < s.eps.size(); ++i) {
+        const Progress p = prog(vids_[s.eps[i]].t.path);
+        if (p.any && p.last >= bl) { bl = p.last; best = static_cast<int>(i); }
+    }
+    if (best < 0) return s.eps.empty() ? -1 : s.eps[0];
+    const Progress p = prog(vids_[s.eps[best]].t.path);
+    if (!p.watched) return s.eps[best];
+    if (best + 1 < static_cast<int>(s.eps.size())) return s.eps[best + 1];
+    return s.eps[0];
+}
+
+const Info* MediaApp::info(const std::string& key) {
+    auto f = infoCache_.find(key);
+    if (f == infoCache_.end()) {
+        InfoEntry e;
+        e.have = db_.getInfo(key, e.i);
+        f = infoCache_.emplace(key, e).first;
+    }
+    return f->second.have ? &f->second.i : nullptr;
+}
+
+const Bitmap* MediaApp::webBitmap(const std::string& url, int w, int h) {
+    if (url.empty()) return nullptr;
+    const std::string key = url + "|" + std::to_string(w) + "x" + std::to_string(h);
+    auto f = webCache_.find(key);
+    if (f != webCache_.end()) return f->second.w > 0 ? &f->second : nullptr;
+    auto p = imgPath_.find(key);
+    if (p == imgPath_.end()) p = imgPath_.emplace(key, scrape_.image(url, w, h)).first;
+    if (p->second.empty()) return nullptr;
+    if (webLoads_ >= 3) {  // decode a few per frame so scrolling stays smooth
+        invalidate();
+        return nullptr;
+    }
+    ++webLoads_;
+    Bitmap bmp;
+    std::ifstream in(std::filesystem::u8path(p->second), std::ios::binary);
+    std::vector<unsigned char> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    int iw = 0, ih = 0, n = 0;
+    unsigned char* px = data.empty() ? nullptr : stbi_load_from_memory(data.data(), static_cast<int>(data.size()), &iw, &ih, &n, 4);
+    if (px) {
+        bmp.w = iw;
+        bmp.h = ih;
+        bmp.rgba.assign(px, px + static_cast<size_t>(iw) * ih * 4);
+        stbi_image_free(px);
+    }
+    auto ins = webCache_.emplace(key, std::move(bmp)).first;
+    return ins->second.w > 0 ? &ins->second : nullptr;
+}
+
+// Resume points are written every few seconds while a video plays; finishing 92% of it marks it watched.
+void MediaApp::recordProgress() {
+    if (!seekPath_.empty()) {
+        if (now_.active && now_.path == seekPath_ && now_.dur > 0 && host_.seek) {
+            host_.seek(seekTo_);
+            seekPath_.clear();
+        } else if (clockT_ - seekWait_ > 20) {
+            seekPath_.clear();
+        }
+    }
+    if (!(now_.active && now_.video && !now_.live && now_.dur > 1)) return;
+    if (now_.path != recPath_) {
+        recPath_ = now_.path;
+        recT_ = clockT_;
+        return;
+    }
+    if (clockT_ - recT_ < 3.0) return;
+    recT_ = clockT_;
+    const Progress old = prog(now_.path);
+    const bool finished = now_.pos > now_.dur * 0.92;
+    if (!now_.playing && old.any && std::fabs(old.pos - now_.pos) < 1.0) return;
+    db_.setProgress(now_.path, finished ? 0.0 : now_.pos, now_.dur, old.watched || finished);
+    progress_[now_.path] = db_.progress(now_.path);
+}
+
+void MediaApp::playVids(const std::vector<int>& list, int start) {
+    if (list.empty() || !host_.play) return;
+    std::vector<std::string> paths;
+    for (int i : list) paths.push_back(vids_[i].t.path);
+    start = std::clamp(start, 0, static_cast<int>(paths.size()) - 1);
+    const Progress p = prog(paths[start]);
+    seekPath_.clear();
+    if (p.any && !p.watched && p.pos > 20 && p.dur > 0 && p.pos < p.dur * 0.95) {
+        seekPath_ = paths[start];
+        seekTo_ = p.pos;
+        seekWait_ = clockT_;
+    }
+    host_.play(paths, start);
+    theatre_ = true;
+    videoSeen_ = false;
+    frame_ = Bitmap();
+}
+
+bool MediaApp::filterOk(const Progress& p) const {
+    switch (filterMode_) {
+        case 1: return p.any && !p.watched && p.pos > 0;
+        case 2: return !p.watched && p.pos <= 0;
+        case 3: return p.watched;
+        default: return true;
+    }
+}
+
+namespace {
+// Poster tile: image or placeholder, hover glow, optional progress strip along the bottom.
+void posterTile(Bitmap& L, const ui::Rect& pr, float k, const ui::Tokens& t, const Bitmap* img, const std::string& seed, const std::string& name, bool hv, float frac, bool done) {
+    using namespace ui;
+    if (img) drawImage(L, *img, pr, 8 * k);
+    else drawPlaceholder(L, pr, 8 * k, seed, name);
+    if (hv) fillRound(L, pr.x0, pr.y0, pr.x1, pr.y1, 8 * k, Color8{0, 0, 0, 80});
+    if (frac > 0.0f && !done) {
+        fillRect(L, pr.x0 + 8 * k, pr.y1 - 14 * k, pr.x1 - 8 * k, pr.y1 - 8 * k, Color8{0, 0, 0, 170});
+        fillRect(L, pr.x0 + 8 * k, pr.y1 - 14 * k, pr.x0 + 8 * k + (pr.w() - 16 * k) * std::clamp(frac, 0.0f, 1.0f), pr.y1 - 8 * k, t.accent);
+    }
+    if (done) {
+        const std::string s = "WATCHED";
+        const float tw = measureText(s, 15 * k, FontFace::UIBold);
+        fillRound(L, pr.x1 - tw - 24 * k, pr.y0 + 8 * k, pr.x1 - 8 * k, pr.y0 + 34 * k, 6 * k, Color8{0, 0, 0, 190});
+        label(L, pr.x1 - tw - 16 * k, pr.y0 + 27 * k, s, 15 * k, FontFace::UIBold, t.accent);
+    }
+    if (hv) strokeRect(L, pr.x0, pr.y0, pr.x1, pr.y1, 2 * k, withAlpha(t.accent, 230));
+}
+}  // namespace
+
+float MediaApp::paintShowGrid(PCtx& c) {
+    using namespace ui;
+    const float k = c.k, pad = c.pad, gap = c.gap;
+    const std::string q = lower(q_);
+    struct Row {
+        int idx = 0, done = 0, total = 0;
+        const Info* in = nullptr;
+        bool part = false, any = false;
+        long long last = 0;
+    };
+    std::vector<Row> rows;
+    for (size_t i = 0; i < shows_.size(); ++i) {
+        const Show& s = shows_[i];
+        Row r;
+        r.idx = static_cast<int>(i);
+        r.in = info(s.key);
+        r.total = static_cast<int>(s.eps.size());
+        for (int v : s.eps) {
+            const Progress p = prog(vids_[v].t.path);
+            if (p.watched) ++r.done;
+            if (p.any && (p.watched || p.pos > 0)) r.any = true;
+            r.last = std::max(r.last, p.last);
+        }
+        r.part = r.any && r.done < r.total;
+        if (filterMode_ == 1 && !r.part) continue;
+        if (filterMode_ == 2 && r.any) continue;
+        if (filterMode_ == 3 && (r.done < r.total || r.total == 0)) continue;
+        if (!q.empty() && (lower(s.name) + " " + (r.in ? lower(r.in->genres + " " + r.in->title) : std::string())).find(q) == std::string::npos) continue;
+        rows.push_back(r);
+    }
+    auto year = [](const Row& r) { return r.in ? std::atoi(r.in->year.c_str()) : 0; };
+    auto rating = [](const Row& r) { return r.in ? std::atof(r.in->rating.c_str()) : 0.0; };
+    if (sortMode_ == 1) std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.last > b.last; });
+    else if (sortMode_ == 2) std::stable_sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) { return year(a) > year(b); });
+    else if (sortMode_ == 3) std::stable_sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) { return rating(a) > rating(b); });
+    if (rows.empty()) {
+        if (!q.empty() || filterMode_ != 0) c.empty("NO MATCHES", "NO SHOW MATCHES THE SEARCH OR FILTER");
+        else if (libScanning_) c.empty("SCANNING", "SHOWS APPEAR HERE AS THEY ARE FOUND");
+        else c.empty("NO TV SHOWS YET", "NAME FILES LIKE  SHOW NAME S01E02.MP4  OR PUT THEM IN SHOW\\SEASON 1 FOLDERS");
+        return 0;
+    }
+    const int cols = std::max(2, static_cast<int>((c.view.w() - 2 * pad + gap) / (210 * k + gap)));
+    const float tw = (c.view.w() - 2 * pad - gap * (cols - 1)) / cols, ph2 = tw * 1.5f, cellH = ph2 + 76 * k + gap;
+    for (size_t n = 0; n < rows.size(); ++n) {
+        const Row& r = rows[n];
+        const Show& s = shows_[r.idx];
+        const int col = static_cast<int>(n) % cols, rw = static_cast<int>(n) / cols;
+        const float x0 = c.view.x0 + pad + col * (tw + gap), y0 = c.view.y0 + pad + rw * cellH - scroll_;
+        if (!c.onScreen(y0, y0 + cellH)) continue;
+        if (!r.in) scrape_.requestShow(s.name);
+        const Rect pr{x0, y0, x0 + tw, y0 + ph2};
+        const bool hv = c.hot(70, r.idx);
+        const float frac = r.total ? static_cast<float>(r.done) / r.total : 0.0f;
+        posterTile(c.L, pr, k, c.t, r.in ? webBitmap(r.in->img, 300, 450) : nullptr, s.key, s.name, hv, r.part ? std::max(frac, 0.04f) : 0.0f, r.done == r.total && r.total > 0);
+        std::set<int> seasons;
+        for (int v : s.eps) seasons.insert(vids_[v].vc.season);
+        label(c.L, x0, y0 + ph2 + 28 * k, ellipsize(r.in ? r.in->title : s.name, 22 * k, FontFace::UIBold, tw), 22 * k, FontFace::UIBold, hv ? c.t.accent : c.t.text);
+        const std::string sub = std::to_string(seasons.size()) + (seasons.size() == 1 ? " SEASON  /  " : " SEASONS  /  ") + std::to_string(r.total) + " EP";
+        label(c.L, x0, y0 + ph2 + 54 * k, ellipsize(sub + (r.in && !r.in->year.empty() ? "  /  " + r.in->year : ""), 18 * k, FontFace::UI, tw), 18 * k, FontFace::UI, c.t.dim);
+        c.hit(Rect{x0, y0, x0 + tw, y0 + ph2 + 66 * k}, 70, r.idx);
+    }
+    return pad * 2 + ((static_cast<int>(rows.size()) + cols - 1) / cols) * cellH;
+}
+
+float MediaApp::paintShowPage(PCtx& c) {
+    using namespace ui;
+    const float k = c.k, pad = c.pad;
+    Show& s = shows_[showOpen_];
+    const Info* in = info(s.key);
+    if (!in) scrape_.requestShow(s.name);
+    auto ec = epCache_.find(s.key);
+    if (ec == epCache_.end()) ec = epCache_.emplace(s.key, db_.episodes(s.key)).first;
+    std::map<std::pair<int, int>, const Episode*> web;
+    for (const Episode& e : ec->second) web[{e.season, e.number}] = &e;
+
+    std::set<int> seasons;
+    for (int v : s.eps) seasons.insert(vids_[v].vc.season);
+    const int ri = resumeIndex(s);
+    if (seasonSel_ < 0 || !seasons.count(seasonSel_)) seasonSel_ = ri >= 0 && seasons.count(vids_[ri].vc.season) ? vids_[ri].vc.season : (seasons.empty() ? 0 : *seasons.begin());
+
+    const float x0 = c.view.x0 + pad;
+    float y = c.view.y0 + pad - scroll_;
+    const float pw = 250 * k, phh = 375 * k;
+    const Rect pr{x0, y, x0 + pw, y + phh};
+    if (c.onScreen(pr.y0, pr.y1)) posterTile(c.L, pr, k, c.t, in ? webBitmap(in->img, 300, 450) : nullptr, s.key, s.name, false, 0, false);
+    const float rx = x0 + pw + 36 * k, rw = c.view.x1 - pad - rx;
+    label(c.L, rx, y + 40 * k, ellipsize(in ? in->title : s.name, 40 * k, FontFace::UIBold, rw), 40 * k, FontFace::UIBold, c.t.text);
+    int done = 0;
+    for (int v : s.eps) if (prog(vids_[v].t.path).watched) ++done;
+    std::vector<std::string> meta;
+    if (in) {
+        meta.push_back(in->year);
+        meta.push_back(in->genres);
+        if (!in->rating.empty()) meta.push_back("RATING " + in->rating);
+        meta.push_back(in->extra);
+    } else {
+        meta.push_back(scrape_.offline() ? "OFFLINE - SHOW INFO WILL LOAD WHEN YOU ARE ONLINE" : "FETCHING SHOW INFO...");
+    }
+    label(c.L, rx, y + 76 * k, ellipsize(joinDot(meta), 20 * k, FontFace::UI, rw), 20 * k, FontFace::UI, c.t.accent);
+    label(c.L, rx, y + 104 * k, std::to_string(done) + " OF " + std::to_string(s.eps.size()) + " EPISODES WATCHED", 18 * k, FontFace::UI, c.t.dim);
+    if (in && !in->summary.empty()) {
+        const auto ln = wrapText(in->summary, 21 * k, FontFace::UI, rw, 7);
+        for (size_t i = 0; i < ln.size(); ++i) label(c.L, rx, y + (142 + 29 * i) * k, ln[i], 21 * k, FontFace::UI, c.t.text);
+    }
+    // buttons
+    {
+        std::string bl = "PLAY S1E1";
+        if (ri >= 0) {
+            const Progress p = prog(vids_[ri].t.path);
+            const VidClass& vc = vids_[ri].vc;
+            const std::string se = "S" + std::to_string(vc.season) + "E" + std::to_string(vc.episode);
+            bl = (p.any && !p.watched && p.pos > 20 ? "RESUME " : (p.any ? "CONTINUE " : "PLAY ")) + se;
+        }
+        const float by = y + phh - 52 * k;
+        const float bw1 = measureText(bl, 22 * k, FontFace::UIBold) + 56 * k;
+        const Rect b1{rx, by, rx + bw1, by + 48 * k}, b2{b1.x1 + 12 * k, by, b1.x1 + 12 * k + 120 * k, by + 48 * k};
+        if (c.onScreen(by, by + 48 * k)) {
+            button(c.L, b1, bl, c.hot(74, 0) ? State::Hover : State::Normal, true, 22 * k);
+            button(c.L, b2, "BACK", c.hot(71, 0) ? State::Hover : State::Normal, false, 22 * k);
+            c.hit(b1, 74, 0);
+            c.hit(b2, 71, 0);
+        }
+    }
+    y += phh + 30 * k;
+    // season chips
+    {
+        float sx = x0;
+        for (int se : seasons) {
+            const std::string txt = "SEASON " + std::to_string(se);
+            const float w = measureText(txt, 20 * k, FontFace::UIBold) + 36 * k;
+            const Rect r{sx, y, sx + w, y + 42 * k};
+            if (c.onScreen(r.y0, r.y1)) {
+                button(c.L, r, txt, se == seasonSel_ ? State::Selected : (c.hot(72, se) ? State::Hover : State::Normal), se == seasonSel_, 20 * k);
+                c.hit(r, 72, se);
+            }
+            sx += w + 10 * k;
+        }
+    }
+    y += 62 * k;
+    // episodes
+    const float rowH = 144 * k, tw = 224 * k, th = 126 * k;
+    for (int v : s.eps) {
+        Vid& vd = vids_[v];
+        if (vd.vc.season != seasonSel_) continue;
+        const Rect row{x0, y, c.view.x1 - pad, y + rowH - 8 * k};
+        if (c.onScreen(row.y0, row.y1)) {
+            const Progress p = prog(vd.t.path);
+            const bool hv = c.hot(73, v), playing = now_.active && now_.path == vd.t.path;
+            if (hv || playing) fillRound(c.L, row.x0, row.y0, row.x1, row.y1, 8 * k, withAlpha(c.t.accent, playing ? 40 : 20));
+            const auto wf = web.find({vd.vc.season, vd.vc.episode});
+            const Episode* ep = wf == web.end() ? nullptr : wf->second;
+            const Rect tr{row.x0 + 8 * k, row.y0 + 6 * k, row.x0 + 8 * k + tw, row.y0 + 6 * k + th};
+            const Bitmap* im = ep ? webBitmap(ep->img, 384, 216) : nullptr;
+            if (!im) im = thumbFor(vd);
+            double secs = 0;
+            auto tg = tagCache_.find(vd.t.path);
+            if (tg != tagCache_.end()) secs = tg->second.seconds;
+            else if (epTagAsked_.insert(vd.t.path).second) meta_.requestTags(vd.t.path);
+            if (secs > 0 && db_.duration(vd.t.path) <= 0) db_.setDuration(vd.t.path, secs);
+            if (secs <= 0) secs = p.dur > 0 ? p.dur : db_.duration(vd.t.path);
+            if (secs <= 0 && ep && ep->runtime > 0) secs = ep->runtime * 60.0;
+            const float frac = p.dur > 0 ? static_cast<float>(p.pos / p.dur) : (secs > 0 ? static_cast<float>(p.pos / secs) : 0.0f);
+            posterTile(c.L, tr, k, c.t, im, vd.t.path, vd.t.title, hv, p.pos > 0 ? std::max(frac, 0.03f) : 0.0f, false);
+            if (hv || playing) {
+                const float cx = (tr.x0 + tr.x1) * 0.5f, cy = (tr.y0 + tr.y1) * 0.5f;
+                dot(c.L, cx, cy, 24 * k, withAlpha(c.t.accent, 225));
+                triangle(c.L, cx, cy, 22 * k, true, Color8{8, 13, 20, 255});
+            }
+            const float tx = tr.x1 + 24 * k, tw2 = row.x1 - tx - 200 * k;
+            const std::string nm = ep && !ep->name.empty() ? ep->name : vd.t.title;
+            label(c.L, tx, row.y0 + 36 * k, ellipsize(std::to_string(vd.vc.episode) + ".  " + nm, 25 * k, FontFace::UIBold, tw2), 25 * k, FontFace::UIBold, hv || playing ? c.t.accent : c.t.text);
+            std::vector<std::string> sm;
+            if (secs > 0) sm.push_back(durText(secs));
+            if (ep && !ep->airdate.empty()) sm.push_back(ep->airdate);
+            if (p.watched) sm.push_back("WATCHED");
+            else if (p.pos > 20 && secs > 0) sm.push_back(durText(std::max(0.0, secs - p.pos)) + " LEFT");
+            label(c.L, tx, row.y0 + 64 * k, joinDot(sm), 18 * k, FontFace::UI, p.watched ? c.t.success : c.t.dim);
+            if (ep && !ep->summary.empty()) {
+                const auto ln = wrapText(ep->summary, 18 * k, FontFace::UI, tw2, 3);
+                for (size_t i = 0; i < ln.size(); ++i) label(c.L, tx, row.y0 + (92 + 24 * i) * k, ln[i], 18 * k, FontFace::UI, c.t.dim);
+            }
+            c.hit(row, 73, v);
+            const Rect wb{row.x1 - 180 * k, row.y0 + (rowH - 8 * k - 40 * k) * 0.5f, row.x1 - 10 * k, row.y0 + (rowH - 8 * k + 40 * k) * 0.5f};
+            button(c.L, wb, p.watched ? "UNWATCH" : "MARK WATCHED", c.hot(75, v) ? State::Hover : State::Normal, false, 16 * k);
+            c.hit(wb, 75, v);
+        }
+        y += rowH;
+    }
+    return y + scroll_ - c.view.y0 + pad;
+}
+
+float MediaApp::paintMovieGrid(PCtx& c) {
+    using namespace ui;
+    const float k = c.k, pad = c.pad, gap = c.gap;
+    const std::string q = lower(q_);
+    struct Row {
+        int pos = 0;
+        const Info* in = nullptr;
+        Progress p;
+        int year = 0;
+    };
+    std::vector<Row> rows;
+    for (size_t i = 0; i < movies_.size(); ++i) {
+        const Vid& v = vids_[movies_[i]];
+        Row r;
+        r.pos = static_cast<int>(i);
+        r.in = info(MediaScrape::movieKey(v.vc.name, v.vc.year));
+        r.p = prog(v.t.path);
+        r.year = r.in && !r.in->year.empty() ? std::atoi(r.in->year.c_str()) : v.vc.year;
+        if (!filterOk(r.p)) continue;
+        if (!q.empty() && (lower(v.vc.name) + " " + (r.in ? lower(r.in->genres + " " + r.in->title + " " + r.in->extra) : std::string())).find(q) == std::string::npos) continue;
+        rows.push_back(r);
+    }
+    if (sortMode_ == 1) std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.p.last > b.p.last; });
+    else if (sortMode_ == 2) std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.year > b.year; });
+    else if (sortMode_ == 3) std::reverse(rows.begin(), rows.end());
+    if (rows.empty()) {
+        if (!q.empty() || filterMode_ != 0) c.empty("NO MATCHES", "NO MOVIE MATCHES THE SEARCH OR FILTER");
+        else if (libScanning_) c.empty("SCANNING", "MOVIES APPEAR HERE AS THEY ARE FOUND");
+        else c.empty("NO MOVIES YET", "NAME FILES LIKE  MOVIE NAME (1999).MP4  OR KEEP THEM IN A FOLDER CALLED MOVIES");
+        return 0;
+    }
+    const int cols = std::max(2, static_cast<int>((c.view.w() - 2 * pad + gap) / (210 * k + gap)));
+    const float tw = (c.view.w() - 2 * pad - gap * (cols - 1)) / cols, ph2 = tw * 1.5f, cellH = ph2 + 76 * k + gap;
+    for (size_t n = 0; n < rows.size(); ++n) {
+        const Row& r = rows[n];
+        const Vid& v = vids_[movies_[r.pos]];
+        const int col = static_cast<int>(n) % cols, rw = static_cast<int>(n) / cols;
+        const float x0 = c.view.x0 + pad + col * (tw + gap), y0 = c.view.y0 + pad + rw * cellH - scroll_;
+        if (!c.onScreen(y0, y0 + cellH)) continue;
+        if (!r.in) scrape_.requestMovie(v.vc.name, v.vc.year);
+        const Rect pr{x0, y0, x0 + tw, y0 + ph2};
+        const bool hv = c.hot(80, r.pos);
+        const float frac = r.p.dur > 0 ? static_cast<float>(r.p.pos / r.p.dur) : 0.0f;
+        posterTile(c.L, pr, k, c.t, r.in ? webBitmap(r.in->img, 300, 450) : nullptr, v.vc.name, v.vc.name, hv, r.p.pos > 0 ? std::max(frac, 0.04f) : 0.0f, r.p.watched);
+        label(c.L, x0, y0 + ph2 + 28 * k, ellipsize(r.in ? r.in->title : v.vc.name, 22 * k, FontFace::UIBold, tw), 22 * k, FontFace::UIBold, hv ? c.t.accent : c.t.text);
+        label(c.L, x0, y0 + ph2 + 54 * k, ellipsize(joinDot({r.year ? std::to_string(r.year) : std::string(), r.in ? r.in->genres : std::string()}), 18 * k, FontFace::UI, tw), 18 * k, FontFace::UI, c.t.dim);
+        c.hit(Rect{x0, y0, x0 + tw, y0 + ph2 + 66 * k}, 80, r.pos);
+    }
+    return pad * 2 + ((static_cast<int>(rows.size()) + cols - 1) / cols) * cellH;
+}
+
+float MediaApp::paintMoviePage(PCtx& c) {
+    using namespace ui;
+    const float k = c.k, pad = c.pad;
+    const int vi = movies_[movieOpen_];
+    Vid& v = vids_[vi];
+    const Info* in = info(MediaScrape::movieKey(v.vc.name, v.vc.year));
+    if (!in) scrape_.requestMovie(v.vc.name, v.vc.year);
+    const Progress p = prog(v.t.path);
+    const float x0 = c.view.x0 + pad, y = c.view.y0 + pad - scroll_;
+    const float pw = 300 * k, phh = 450 * k;
+    const Rect pr{x0, y, x0 + pw, y + phh};
+    posterTile(c.L, pr, k, c.t, in ? webBitmap(in->img, 300, 450) : nullptr, v.vc.name, v.vc.name, false, 0, false);
+    const float rx = x0 + pw + 40 * k, rw = c.view.x1 - pad - rx;
+    label(c.L, rx, y + 44 * k, ellipsize(in ? in->title : v.vc.name, 44 * k, FontFace::UIBold, rw), 44 * k, FontFace::UIBold, c.t.text);
+    std::vector<std::string> meta;
+    if (in) {
+        meta.push_back(in->year.empty() && v.vc.year ? std::to_string(v.vc.year) : in->year);
+        meta.push_back(in->genres);
+        meta.push_back(in->extra2);
+    } else {
+        meta.push_back(scrape_.offline() ? "OFFLINE - MOVIE INFO WILL LOAD WHEN YOU ARE ONLINE" : "FETCHING MOVIE INFO...");
+    }
+    label(c.L, rx, y + 82 * k, ellipsize(joinDot(meta), 21 * k, FontFace::UI, rw), 21 * k, FontFace::UI, c.t.accent);
+    float ly = y + 114 * k;
+    std::string intro, plot;
+    if (in) {
+        const size_t br = in->summary.find("\n\n");
+        intro = in->summary.substr(0, br);
+        if (br != std::string::npos) plot = in->summary.substr(br + 2);
+    }
+    if (in && !in->extra.empty()) {  // credits: "LABEL<TAB>value" lines
+        size_t pos = 0;
+        int shown = 0;
+        while (pos < in->extra.size() && shown < 4) {
+            size_t nl = in->extra.find('\n', pos);
+            if (nl == std::string::npos) nl = in->extra.size();
+            const std::string line = in->extra.substr(pos, nl - pos);
+            pos = nl + 1;
+            const size_t tab = line.find('\t');
+            if (tab == std::string::npos) continue;
+            const std::string lab = line.substr(0, tab);
+            if (lab == "COUNTRY" || lab == "BUDGET" || lab == "BOX OFFICE" || lab == "MUSIC BY" || lab == "STUDIO") continue;
+            label(c.L, rx, ly + 18 * k, lab, 16 * k, FontFace::UIBold, c.t.muted);
+            const float lw = 150 * k;
+            const auto vl = wrapText(line.substr(tab + 1), 19 * k, FontFace::UI, rw - lw, 2);
+            for (size_t i = 0; i < vl.size(); ++i) label(c.L, rx + lw, ly + (18 + 24 * i) * k, vl[i], 19 * k, FontFace::UI, c.t.text);
+            ly += (vl.size() > 1 ? 52 : 28) * k;
+            ++shown;
+        }
+        ly += 6 * k;
+    }
+    if (!intro.empty()) {
+        const int maxLines = std::max(2, static_cast<int>((y + phh - 70 * k - ly) / (28 * k)));
+        const auto ln = wrapText(intro, 21 * k, FontFace::UI, rw, maxLines);
+        for (size_t i = 0; i < ln.size(); ++i) label(c.L, rx, ly + (22 + 28 * i) * k, ln[i], 21 * k, FontFace::UI, c.t.text);
+    }    const float by = y + phh - 52 * k;
+    std::string bl = "PLAY";
+    if (p.any && !p.watched && p.pos > 20) bl = "RESUME  " + clock(p.pos);
+    else if (p.watched) bl = "WATCH AGAIN";
+    const float bw1 = measureText(bl, 22 * k, FontFace::UIBold) + 56 * k;
+    const Rect b1{rx, by, rx + bw1, by + 48 * k}, b2{b1.x1 + 12 * k, by, b1.x1 + 12 * k + 220 * k, by + 48 * k}, b3{b2.x1 + 12 * k, by, b2.x1 + 12 * k + 120 * k, by + 48 * k};
+    button(c.L, b1, bl, c.hot(82, vi) ? State::Hover : State::Normal, true, 22 * k);
+    button(c.L, b2, p.watched ? "MARK UNWATCHED" : "MARK WATCHED", c.hot(75, vi) ? State::Hover : State::Normal, false, 18 * k);
+    button(c.L, b3, "BACK", c.hot(81, 0) ? State::Hover : State::Normal, false, 22 * k);
+    c.hit(b1, 82, vi);
+    c.hit(b2, 75, vi);
+    c.hit(b3, 81, 0);
+    if (p.any && !p.watched && p.dur > 0 && p.pos > 0) bar(c.L, Rect{rx, by - 22 * k, rx + 420 * k, by - 12 * k}, static_cast<float>(p.pos / p.dur), c.t.accent);
+    label(c.L, rx, y + phh + 40 * k, ellipsize(v.t.path, 17 * k, FontFace::UI, rw), 17 * k, FontFace::UI, c.t.muted);
+    return phh + 2 * pad + 60 * k;
+}
+
+float MediaApp::paintArtistGrid(PCtx& c) {
+    using namespace ui;
+    const float k = c.k, pad = c.pad, gap = c.gap;
+    const std::string q = lower(q_);
+    std::vector<int> vis;
+    for (size_t i = 0; i < artists_.size(); ++i) {
+        const Artist& a = artists_[i];
+        if (!q.empty()) {
+            bool hit = lower(a.name).find(q) != std::string::npos;
+            for (size_t j = 0; j < a.albums.size() && !hit; ++j) hit = lower(albums_[a.albums[j]].title).find(q) != std::string::npos;
+            if (!hit) continue;
+        }
+        vis.push_back(static_cast<int>(i));
+    }
+    if (sortMode_ == 1) std::reverse(vis.begin(), vis.end());
+    else if (sortMode_ == 2) std::stable_sort(vis.begin(), vis.end(), [&](int a, int b) { return artists_[a].albums.size() > artists_[b].albums.size(); });
+    else if (sortMode_ == 3) std::stable_sort(vis.begin(), vis.end(), [&](int a, int b) { return artists_[a].tracks > artists_[b].tracks; });
+    if (vis.empty()) {
+        if (!q.empty()) c.empty("NO MATCHES", "NOTHING IN YOUR MUSIC MATCHES THE SEARCH");
+        else if (libScanning_) c.empty("SCANNING YOUR MUSIC", "ARTISTS APPEAR HERE AS THEY ARE FOUND");
+        else c.empty("NO MUSIC YET", "ADD YOUR MUSIC AND VIDEO FOLDERS, OR DROP A FOLDER ONTO THE WINDOW");
+        return 0;
+    }
+    const int cols = std::max(2, static_cast<int>((c.view.w() - 2 * pad + gap) / (220 * k + gap)));
+    const float tw = (c.view.w() - 2 * pad - gap * (cols - 1)) / cols, cellH = tw + 76 * k + gap;
+    for (size_t n = 0; n < vis.size(); ++n) {
+        const int ai = vis[n];
+        Artist& a = artists_[ai];
+        const int col = static_cast<int>(n) % cols, rw = static_cast<int>(n) / cols;
+        const float x0 = c.view.x0 + pad + col * (tw + gap), y0 = c.view.y0 + pad + rw * cellH - scroll_;
+        if (!c.onScreen(y0, y0 + cellH)) continue;
+        const bool real = a.name != "Unknown Artist" && a.name != "Various Artists";
+        const Info* in = real ? info(MediaScrape::artistKey(a.name)) : nullptr;
+        if (real && !in) scrape_.requestArtist(a.name);
+        const Rect pr{x0, y0, x0 + tw, y0 + tw};
+        const bool hv = c.hot(90, ai);
+        const Bitmap* web = in ? webBitmap(in->img, 400, 400) : nullptr;
+        if (web) {
+            posterTile(c.L, pr, k, c.t, web, a.key, a.name, hv, 0, false);
+        } else {
+            // composite of the album covers (up to four) until a picture is found
+            std::vector<const Bitmap*> covers;
+            for (size_t j = 0; j < a.albums.size() && covers.size() < 4; ++j)
+                if (const Bitmap* b = artFor(albums_[a.albums[j]])) covers.push_back(b);
+            if (covers.empty()) posterTile(c.L, pr, k, c.t, nullptr, a.key, a.name, hv, 0, false);
+            else if (covers.size() == 1 || a.albums.size() == 1) posterTile(c.L, pr, k, c.t, covers[0], a.key, a.name, hv, 0, false);
+            else {
+                const float hw = tw * 0.5f;
+                for (size_t j = 0; j < 4; ++j) {
+                    const float qx = x0 + (j % 2) * hw, qy = y0 + (j / 2) * hw;
+                    drawImage(c.L, *covers[j % covers.size()], Rect{qx, qy, qx + hw, qy + hw}, 0);
+                }
+                if (hv) fillRound(c.L, pr.x0, pr.y0, pr.x1, pr.y1, 8 * k, Color8{0, 0, 0, 80});
+                if (hv) strokeRect(c.L, pr.x0, pr.y0, pr.x1, pr.y1, 2 * k, withAlpha(c.t.accent, 230));
+            }
+        }
+        label(c.L, x0, y0 + tw + 28 * k, ellipsize(a.name, 22 * k, FontFace::UIBold, tw), 22 * k, FontFace::UIBold, hv ? c.t.accent : c.t.text);
+        label(c.L, x0, y0 + tw + 54 * k, std::to_string(a.albums.size()) + (a.albums.size() == 1 ? " ALBUM  /  " : " ALBUMS  /  ") + std::to_string(a.tracks) + " TRACKS", 18 * k, FontFace::UI, c.t.dim);
+        c.hit(Rect{x0, y0, x0 + tw, y0 + tw + 66 * k}, 90, ai);
+    }
+    return pad * 2 + ((static_cast<int>(vis.size()) + cols - 1) / cols) * cellH;
+}
+
+float MediaApp::paintArtistPage(PCtx& c) {
+    using namespace ui;
+    const float k = c.k, pad = c.pad, gap = c.gap;
+    Artist& a = artists_[artistOpen_];
+    const bool real = a.name != "Unknown Artist" && a.name != "Various Artists";
+    const Info* in = real ? info(MediaScrape::artistKey(a.name)) : nullptr;
+    if (real && !in) scrape_.requestArtist(a.name);
+    const float lw = 340 * k;
+    const Rect pic{c.view.x0 + pad, c.view.y0 + pad, c.view.x0 + pad + lw, c.view.y0 + pad + lw};
+    const Bitmap* web = in ? webBitmap(in->img, 400, 400) : nullptr;
+    const Bitmap* art = web;
+    if (!art && !a.albums.empty()) art = artFor(albums_[a.albums[0]]);
+    posterTile(c.L, pic, k, c.t, art, a.key, a.name, false, 0, false);
+    float ly = pic.y1 + 38 * k;
+    for (const std::string& ln : wrapText(a.name, 34 * k, FontFace::UIBold, lw, 2)) {
+        label(c.L, pic.x0, ly, ln, 34 * k, FontFace::UIBold, c.t.text);
+        ly += 40 * k;
+    }
+    const std::string sub = joinDot({std::to_string(a.albums.size()) + (a.albums.size() == 1 ? " ALBUM" : " ALBUMS"), std::to_string(a.tracks) + " TRACKS", in ? in->extra : std::string()});
+    label(c.L, pic.x0, ly, ellipsize(sub, 19 * k, FontFace::UI, lw), 19 * k, FontFace::UI, c.t.accent);
+    ly += 20 * k;
+    const float bw = (lw - 10 * k) / 2;
+    const Rect b1{pic.x0, ly, pic.x0 + bw, ly + 44 * k}, b2{b1.x1 + 10 * k, ly, pic.x1, ly + 44 * k};
+    button(c.L, b1, "SHUFFLE", c.hot(92, 0) ? State::Hover : State::Normal, true, 20 * k);
+    button(c.L, b2, "BACK", c.hot(91, 0) ? State::Hover : State::Normal, false, 20 * k);
+    c.hit(b1, 92, 0);
+    c.hit(b2, 91, 0);
+    ly += 76 * k;
+    if (in && !in->summary.empty()) {
+        const int maxLines = std::max(0, static_cast<int>((c.view.y1 - ly) / (25 * k)));
+        if (maxLines > 0) {
+            const auto ln = wrapText(in->summary, 18 * k, FontFace::UI, lw, maxLines);
+            for (size_t i = 0; i < ln.size(); ++i) label(c.L, pic.x0, ly + 25 * k * i, ln[i], 18 * k, FontFace::UI, c.t.dim);
+        }
+    } else if (real && !in) {
+        label(c.L, pic.x0, ly, scrape_.offline() ? "OFFLINE - ARTIST INFO LOADS WHEN ONLINE" : "FETCHING ARTIST INFO...", 18 * k, FontFace::UI, c.t.muted);
+    }
+
+    const float gx0 = c.view.x0 + lw + 50 * k, gx1 = c.view.x1 - pad;
+    const int cols = std::max(2, static_cast<int>((gx1 - gx0 + gap) / (210 * k + gap)));
+    const float tw = (gx1 - gx0 - gap * (cols - 1)) / cols, cellH = tw + 76 * k + gap;
+    std::vector<int> order = a.albums;
+    std::stable_sort(order.begin(), order.end(), [&](int x, int y) { return albums_[x].year < albums_[y].year; });
+    for (size_t n = 0; n < order.size(); ++n) {
+        const int ai = order[n];
+        Album& al = albums_[ai];
+        const int col = static_cast<int>(n) % cols, rw = static_cast<int>(n) / cols;
+        const float x0 = gx0 + col * (tw + gap), y0 = c.view.y0 + pad + rw * cellH - scroll_;
+        if (!c.onScreen(y0, y0 + cellH)) continue;
+        const Rect cv{x0, y0, x0 + tw, y0 + tw};
+        const bool hv = c.hot(20, ai);
+        posterTile(c.L, cv, k, c.t, artFor(al), al.key, al.title, hv, 0, false);
+        label(c.L, x0, y0 + tw + 28 * k, ellipsize(al.title, 21 * k, FontFace::UIBold, tw), 21 * k, FontFace::UIBold, hv ? c.t.accent : c.t.text);
+        label(c.L, x0, y0 + tw + 54 * k, joinDot({al.year ? std::to_string(al.year) : std::string(), std::to_string(al.items.size()) + " TRACKS"}), 18 * k, FontFace::UI, c.t.dim);
+        c.hit(Rect{x0, y0, x0 + tw, y0 + tw + 66 * k}, 20, ai);
+    }
+    return pad * 2 + ((static_cast<int>(order.size()) + cols - 1) / cols) * cellH;
+}
+
+// Lyrics for the selected track, fetched from lrclib.net and kept in the database.
+float MediaApp::drawLyrics(PCtx& c, float x0, float x1) {
+    using namespace ui;
+    const float k = c.k, pad = c.pad;
+    const Item& it = items_[lyricsItem_];
+    const std::string ar = it.m.artist.empty() ? (albumOpen_ >= 0 ? albums_[albumOpen_].artist : std::string()) : it.m.artist;
+    const Info* in = info(MediaScrape::lyricsKey(ar, it.title));
+    if (!in) scrape_.requestLyrics(ar, it.title, it.m.seconds);
+    float y = c.view.y0 + pad - scroll_;
+    const Rect back{x1 - 200 * k, c.view.y0 + pad, x1, c.view.y0 + pad + 44 * k};
+    label(c.L, x0, y + 34 * k, ellipsize(it.title, 30 * k, FontFace::UIBold, x1 - x0 - 230 * k), 30 * k, FontFace::UIBold, c.t.accent);
+    y += 70 * k;
+    if (!in) {
+        label(c.L, x0, y + 24 * k, scrape_.offline() ? "OFFLINE - LYRICS LOAD WHEN YOU ARE ONLINE" : "FETCHING LYRICS...", 22 * k, FontFace::UI, c.t.dim);
+        y += 40 * k;
+    } else if (!in->found) {
+        label(c.L, x0, y + 24 * k, "NO LYRICS FOUND FOR THIS TRACK", 22 * k, FontFace::UI, c.t.dim);
+        y += 40 * k;
+    } else {
+        size_t pos = 0;
+        const std::string& s = in->summary;
+        while (pos <= s.size()) {
+            size_t e = s.find('\n', pos);
+            if (e == std::string::npos) e = s.size();
+            std::string line = s.substr(pos, e - pos);
+            pos = e + 1;
+            if (line.empty()) { y += 18 * k; continue; }
+            for (const std::string& w : wrapText(line, 24 * k, FontFace::UI, x1 - x0, 3)) {
+                if (c.onScreen(y, y + 32 * k)) label(c.L, x0, y + 24 * k, w, 24 * k, FontFace::UI, c.t.text);
+                y += 32 * k;
+            }
+        }
+    }
+    button(c.L, back, "TRACKS", c.hot(94, 0) ? State::Hover : State::Normal, false, 20 * k);
+    c.hit(back, 94, 0);
+    return y + scroll_ - c.view.y0 + pad;
 }
 
 }  // namespace sf

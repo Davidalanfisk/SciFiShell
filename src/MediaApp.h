@@ -8,8 +8,10 @@
 #include <string>
 #include <vector>
 
+#include "MediaDb.h"
 #include "MediaLibrary.h"
 #include "MediaMeta.h"
+#include "MediaScrape.h"
 #include "PanelApp.h"
 
 namespace sf {
@@ -92,7 +94,22 @@ private:
         MediaTrack t;
         std::string dir;
         bool asked = false;
+        VidClass vc;
     };
+    struct Show {
+        std::string name, key;
+        std::vector<int> eps;  // into vids_, in season / episode order
+    };
+    struct Artist {
+        std::string name, key;
+        std::vector<int> albums;  // into albums_
+        int tracks = 0;
+    };
+    struct InfoEntry {
+        Info i;
+        bool have = false;
+    };
+    struct PCtx;
     struct Station {
         std::string name, url, genre;
     };
@@ -112,9 +129,47 @@ private:
     void click(int id, int arg, float x, float y);
     int hitAt(float x, float y) const;
 
+    // ---- library: TV shows, movies, artists (all backed by the database and the web scraper)
+    void groupLibrary();
+    const Info* info(const std::string& key);
+    const Bitmap* webBitmap(const std::string& url, int w, int h);
+    void recordProgress();
+    void playVids(const std::vector<int>& list, int start);
+    int resumeIndex(const Show& s) const;
+    long long lastPlayed(const Show& s) const;
+    Progress prog(const std::string& path) const;
+    float paintShowGrid(PCtx& c);
+    float paintShowPage(PCtx& c);
+    float paintMovieGrid(PCtx& c);
+    float paintMoviePage(PCtx& c);
+    float paintArtistGrid(PCtx& c);
+    float paintArtistPage(PCtx& c);
+    const Bitmap* artistArt(const Artist& a, int w, int h, bool& composite);
+    bool filterOk(const Progress& p) const;
+    float drawLyrics(PCtx& c, float x0, float x1);
+
     MediaHost host_;
     MediaMeta meta_;
-    int tab_ = 0;  // 0 music, 1 video, 2 radio
+    MediaDb db_;
+    MediaScrape scrape_{db_};
+    int tab_ = 0;  // 0 music, 1 other video, 2 radio, 3 TV, 4 movies
+    int showOpen_ = -1, seasonSel_ = 0, movieOpen_ = -1, artistOpen_ = -1, lyricsItem_ = -1;
+    bool musicByAlbum_ = false;
+    int sortMode_ = 0, filterMode_ = 0;
+    std::vector<Show> shows_;
+    std::vector<int> movies_;
+    std::vector<Artist> artists_;
+    std::map<std::string, VidClass> vcCache_;
+    std::map<std::string, Progress> progress_;
+    std::map<std::string, InfoEntry> infoCache_;
+    std::map<std::string, std::vector<Episode>> epCache_;
+    std::map<std::string, std::string> imgPath_;
+    std::map<std::string, Bitmap> webCache_;
+    int webLoads_ = 0;
+    double recT_ = 0;
+    std::string recPath_, seekPath_;
+    double seekTo_ = 0, seekWait_ = 0;
+    std::set<std::string> epTagAsked_;
     int albumOpen_ = -1;
     bool manage_ = false;  // folder list view
     std::string q_;
@@ -137,6 +192,7 @@ private:
     int hover_ = -1;
     float scroll_ = 0, scrollTarget_ = 0, scrollMax_ = 0;
     float bands_[32] = {}, peaks_[32] = {};
+    int vizMode_ = 0;  // click the spectrum to cycle: bars, mirrored, radial, dot matrix
     bool animating_ = false, bandsMoving_ = false;
     double specT_ = 0;
     int vx_ = 0, vy_ = 0, vw_ = 0, vh_ = 0;

@@ -80,6 +80,7 @@ FrameInput InputSystem::poll() {
                 if (e.key.keysym.sym == SDLK_F7) in.osk = true;
                 if (e.key.keysym.sym == SDLK_F9) in.cityToggle = true;
                 if (e.key.keysym.sym == SDLK_F10) in.carToggle = true;
+                if (e.key.keysym.sym == SDLK_F1) in.harvi = true;
                 if (e.key.keysym.sym == SDLK_c && !ctrl) in.carCam = true;
                 if (e.key.keysym.sym == arrangeKey) in.arrange = true;
                 if ((e.key.keysym.mod & KMOD_ALT) && e.key.keysym.sym == SDLK_LEFT) in.navBack = true;

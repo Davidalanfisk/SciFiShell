@@ -68,6 +68,8 @@ public:
     // 6 platform, 7 beam. emerge 0..1 rise glow, fill 0..1 level, flash -1..1 change pulse.
     void drawBuilding(const GpuLabel& any, const Mat4& world, Vec3 neon, float seed, int kind, float emerge,
                       float fill, float flash);
+    // Translucent hologram part (cube or pyramid): emerge 0..1 dissolve, alpha scale, glow adds colour.
+    void drawHolo(const GpuLabel& any, bool pyramid, const Mat4& world, Vec3 color, float emerge, float alpha, float glow);
     // GLB models (assets/models/<name>.glb), loaded once, normalised to height 1 and sitting on y = 0. -1 if unavailable.
     int model(const std::string& name);
     Vec3 modelSize(int id) const;  // x/z extents relative to the unit height
@@ -79,6 +81,9 @@ public:
     void setLights(const float* xyzw32) { std::copy(xyzw32, xyzw32 + 96, lights_); }
     void clearLights() { std::fill(lights_, lights_ + 96, 0.0f); }
     // Interior lighting tune: spot gain, wall brightness cap, wall base level, ambient, light falloff.
+    void setFogTune(float density, float height, float bright, float tint, float start, float mist, float clarity, float glow) {
+        tune_[5] = density; tune_[6] = height; tune_[7] = bright; tune_[8] = tint; tune_[9] = start; tune_[10] = mist; tune_[11] = clarity; tune_[12] = glow;
+    }
     void setLightTune(float spot, float cap, float base, float ambient, float falloff) { tune_[0] = spot; tune_[1] = cap; tune_[2] = base; tune_[3] = ambient; tune_[4] = falloff; }
     // Procedural radial tool ring on a unit quad (any label supplies the required SRB).
     void drawRing(const GpuLabel& label, const Mat4& world, int segments, float hover, float rotation, float open,
@@ -180,7 +185,7 @@ private:
     float lightDir_[4] = {-0.4f, -1.0f, -0.6f, 0.0f};
     float accent_[4] = {0.1f, 0.85f, 1.0f, 0.0f};
     float lights_[96] = {};
-    float tune_[8] = {1.07f, 0.02f, 0.01f, 0.0f, 0.6f, 0, 0, 0};
+    float tune_[16] = {1.07f, 0.02f, 0.01f, 0.0f, 0.6f, 1.6f, 1.0f, 1.0f, 0.66f, 0.0f, 1.0f, 0.5f, 0.07f, 0, 0, 0};
     float alt_[4] = {1.0f, 0.65f, 0.1f, 0.0f};
 };
 

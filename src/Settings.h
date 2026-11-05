@@ -18,6 +18,7 @@ struct Settings {
     bool carryWins = true;  // windows follow you between the city, lobbies and rooms
     int arrangeKey = 0;     // SDL keycode that arranges windows; 0 = the default, F8
     bool snapWins = true;   // dragged windows snap to the edges and height of their neighbours
+    float fogDensity = 1.6f, fogHeight = 1.0f, fogBright = 1.0f, fogTint = 0.66f, fogStart = 0.0f, fogMist = 1.0f, fogClarity = 0.5f, fogGlow = 0.07f;  // fog sliders
     float sfxVol = 1.0f;  // sound effects volume, 0..1
     bool showCity = true;  // the city is the home view; off saves the generation and drawing cost
     float lightSpot = 1.07f, lightCap = 0.02f, lightBase = 0.01f, lightAmbient = 0.0f, lightFalloff = 0.6f;  // interior lighting sliders

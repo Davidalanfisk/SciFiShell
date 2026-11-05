@@ -1,0 +1,123 @@
+{
+  "start": "root",
+  "nodes": {
+    "root": {
+      "say": "Hello. I am HARVI, your Holographic Autonomous Response and Virtual Intelligence. What shall we explore?",
+      "emote": "happy",
+      "buttons": [
+        { "label": "QUICK TOUR", "goto": "tour" },
+        { "label": "CONTROLS", "goto": "controls" },
+        { "label": "OPEN SETTINGS", "action": "tool:settings", "goto": "settings_ok" },
+        { "label": "OPEN MEDIA", "action": "tool:media", "goto": "media_ok" },
+        { "label": "TROUBLESHOOT", "goto": "trouble" },
+        { "label": "DID YOU KNOW?", "action": "tip" }
+      ]
+    },
+    "tour": {
+      "say": "This city is generated from your own PC. Every building is a folder, every tower a drive. Fly with W A S D, look with the mouse, hold Shift to go faster.",
+      "emote": "happy",
+      "buttons": [
+        { "label": "WHAT ARE WINDOWS?", "goto": "windows" },
+        { "label": "THE CAR", "goto": "car" },
+        { "label": "BACK", "goto": "root" }
+      ]
+    },
+    "windows": {
+      "say": "Apps open as floating glass windows. Click one to focus it, drag its title bar to move it, and F8 cycles the arrangement. Alt+Tab switches between them.",
+      "emote": "neutral",
+      "buttons": [ { "label": "BACK", "goto": "tour" } ]
+    },
+    "car": {
+      "say": "Press F10 to summon the car from anywhere. C changes camera, Space is the handbrake, Shift boosts. The track fades in while you drive.",
+      "emote": "surprised",
+      "buttons": [ { "label": "BACK", "goto": "tour" } ]
+    },
+    "controls": {
+      "say": "F1 summons me. F2 opens the command ring, F7 the on-screen keyboard, F9 toggles the city, F10 the car, F12 takes a screenshot. V toggles VR.",
+      "emote": "thinking",
+      "buttons": [
+        { "label": "SETTINGS", "action": "tool:settings", "goto": "settings_ok" },
+        { "label": "BACK", "goto": "root" }
+      ]
+    },
+    "trouble": {
+      "say": "Tell me what is wrong. Is the picture too foggy or too bright, is the sound off, or is a window lost?",
+      "emote": "thinking",
+      "buttons": [
+        { "label": "TOO FOGGY", "action": "page:FOG", "goto": "fog_fix" },
+        { "label": "LIGHTING", "action": "page:GRAPHICS", "goto": "light_fix" },
+        { "label": "NO SOUND", "action": "page:SHELL", "goto": "sound_fix" },
+        { "label": "LOST A WINDOW", "action": "key:arrange", "goto": "lost_fix" },
+        { "label": "BACK", "goto": "root" }
+      ]
+    },
+    "fog_fix": {
+      "say": "I have opened the fog controls. Lower density and brightness for clearer streets; raise clarity to see the floors from above.",
+      "emote": "happy",
+      "buttons": [ { "label": "THANKS", "action": "dismiss" }, { "label": "BACK", "goto": "trouble" } ]
+    },
+    "light_fix": {
+      "say": "Here are the graphics options. The lighting sliders shape how bright the neon feels.",
+      "emote": "neutral",
+      "buttons": [ { "label": "THANKS", "action": "dismiss" }, { "label": "BACK", "goto": "trouble" } ]
+    },
+    "sound_fix": {
+      "say": "Check the sound effects slider on this page. If it is still silent, check your Windows output device.",
+      "emote": "confused",
+      "buttons": [ { "label": "THANKS", "action": "dismiss" }, { "label": "BACK", "goto": "trouble" } ]
+    },
+    "lost_fix": {
+      "say": "I rearranged your windows so they should all be in front of you again.",
+      "emote": "happy",
+      "buttons": [ { "label": "THANKS", "action": "dismiss" }, { "label": "BACK", "goto": "trouble" } ]
+    },
+    "settings_ok": {
+      "say": "Settings are open. Everything saves automatically, and the FOG page has a reset button if you get lost.",
+      "emote": "happy",
+      "buttons": [ { "label": "BACK", "goto": "root" }, { "label": "DISMISS", "action": "dismiss" } ]
+    },
+    "media_ok": {
+      "say": "The media player is open. Add folders in settings and it will build a library with posters, cast and lyrics.",
+      "emote": "happy",
+      "buttons": [ { "label": "BACK", "goto": "root" }, { "label": "DISMISS", "action": "dismiss" } ]
+    },
+    "ctx_settings": {
+      "say": "You are in Settings. Sliders change instantly. Need a hand with the fog or lighting?",
+      "emote": "neutral",
+      "buttons": [
+        { "label": "FOG", "action": "page:FOG" },
+        { "label": "GRAPHICS", "action": "page:GRAPHICS" },
+        { "label": "OK", "goto": "root" }
+      ]
+    },
+    "ctx_media": {
+      "say": "The media library fetches posters, cast, storylines and lyrics in the background and remembers them. Click a poster to open it.",
+      "emote": "happy",
+      "buttons": [ { "label": "OK", "goto": "root" } ]
+    },
+    "ctx_browser": {
+      "say": "This is the web browser. Ctrl+L focuses the address bar and F3 changes how deep the page is drawn.",
+      "emote": "neutral",
+      "buttons": [ { "label": "OK", "goto": "root" } ]
+    },
+    "ctx_files": {
+      "say": "The file browser works like the city: double click a folder to go in, drag to move files, and the right-click menu has the rest.",
+      "emote": "neutral",
+      "buttons": [ { "label": "OK", "goto": "root" } ]
+    },
+    "ctx_car": {
+      "say": "Nice wheels. Hold Shift to boost, Space to drift, and C to change view. Press F10 again to get out.",
+      "emote": "surprised",
+      "buttons": [ { "label": "OK", "action": "dismiss" } ]
+    }
+  },
+  "tips": [
+    "Press F9 to switch between the city and the file room at any time.",
+    "Drag a folder onto the shell to add it to your media library.",
+    "The command ring on F2 holds shortcuts to every tool.",
+    "Right click a window to pin your view to it, and again to let go.",
+    "The fog sliders live in Settings, and RESET FOG returns them to normal.",
+    "The speedometer appears whenever you are driving the car.",
+    "Ctrl and Tab work like a task switcher between your open windows."
+  ]
+}

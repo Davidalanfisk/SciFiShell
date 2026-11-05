@@ -43,6 +43,10 @@ void Settings::load() {
                 if (f >> sc) showCity = sc != 0;
                 float sv = 1.0f;
                 if (f >> sv) sfxVol = sv;
+                float fa, fb, fc;
+                if (f >> fa >> fb >> fc) { fogDensity = fa; fogHeight = fb; fogBright = fc; }
+                float f1, f2, f3, f4, f5;
+                if (f >> f1 >> f2 >> f3 >> f4 >> f5) { fogTint = f1; fogStart = f2; fogMist = f3; fogClarity = f4; fogGlow = f5; }
             }
         }
     }
@@ -57,6 +61,14 @@ void Settings::load() {
     lightAmbient = std::clamp(lightAmbient, 0.0f, 3.0f);
     lightFalloff = std::clamp(lightFalloff, 0.04f, 0.6f);
     sfxVol = std::clamp(sfxVol, 0.0f, 1.0f);
+    fogDensity = std::clamp(fogDensity, 0.0f, 3.0f);
+    fogHeight = std::clamp(fogHeight, 0.5f, 3.0f);
+    fogBright = std::clamp(fogBright, 0.3f, 3.0f);
+    fogTint = std::clamp(fogTint, 0.0f, 1.0f);
+    fogStart = std::clamp(fogStart, 0.0f, 150.0f);
+    fogMist = std::clamp(fogMist, 0.0f, 3.0f);
+    fogClarity = std::clamp(fogClarity, 0.1f, 1.0f);
+    fogGlow = std::clamp(fogGlow, 0.0f, 0.4f);
 }
 
 void Settings::save() const {
@@ -64,7 +76,7 @@ void Settings::save() const {
     if (p.empty()) return;
     std::error_code ec;
     std::filesystem::create_directories(p.parent_path(), ec);
-    std::ofstream(p) << lookIdx << ' ' << speedIdx << ' ' << (invertY ? 1 : 0) << ' ' << (crosshair ? 1 : 0) << ' ' << (showFps ? 1 : 0) << ' ' << webQuality << ' ' << aaIdx << ' ' << distIdx << ' ' << (reflections ? 1 : 0) << ' ' << (postFx ? 1 : 0) << ' ' << (vsync ? 1 : 0) << ' ' << (carryWins ? 1 : 0) << ' ' << (snapWins ? 1 : 0) << ' ' << arrangeKey << ' ' << lightSpot << ' ' << lightCap << ' ' << lightBase << ' ' << lightAmbient << ' ' << lightFalloff << ' ' << (showCity ? 1 : 0) << ' ' << sfxVol;
+    std::ofstream(p) << lookIdx << ' ' << speedIdx << ' ' << (invertY ? 1 : 0) << ' ' << (crosshair ? 1 : 0) << ' ' << (showFps ? 1 : 0) << ' ' << webQuality << ' ' << aaIdx << ' ' << distIdx << ' ' << (reflections ? 1 : 0) << ' ' << (postFx ? 1 : 0) << ' ' << (vsync ? 1 : 0) << ' ' << (carryWins ? 1 : 0) << ' ' << (snapWins ? 1 : 0) << ' ' << arrangeKey << ' ' << lightSpot << ' ' << lightCap << ' ' << lightBase << ' ' << lightAmbient << ' ' << lightFalloff << ' ' << (showCity ? 1 : 0) << ' ' << sfxVol << ' ' << fogDensity << ' ' << fogHeight << ' ' << fogBright << ' ' << fogTint << ' ' << fogStart << ' ' << fogMist << ' ' << fogClarity << ' ' << fogGlow;
 }
 
 }  // namespace sf

@@ -172,6 +172,7 @@ bool AppShell::init() {
     switcher_ = std::make_unique<TaskSwitcher>(renderer_);
     settingsPanel_ = std::make_unique<SettingsHub>(renderer_);
     osk_ = std::make_unique<OnScreenKeyboard>(renderer_);
+    harvi_ = std::make_unique<Harvi>(renderer_);
     {
         StartHost h;
         h.tool = [this](Tool t) { syncWins(); runTool(t); };
@@ -527,6 +528,34 @@ void AppShell::buildSettingsHub() {
                              save();
                          }});
     cats.push_back(std::move(gfx));
+
+    SettingsCategory fog{"FOG", "Atmosphere: density, height, colour", "SHELL", {}};
+    auto fogSlider = [this, &fog](const char* title, const char* hint, float* v, float lo, float hi) {
+        SettingsItem it;
+        it.title = title;
+        it.hint = hint;
+        it.value = [v] { char b[16]; std::snprintf(b, sizeof b, "%.2f", *v); return std::string(b); };
+        it.sliderGet = [v] { return *v; };
+        it.sliderSet = [this, v](float x) { *v = x; settings_.save(); };
+        it.lo = lo;
+        it.hi = hi;
+        fog.items.push_back(std::move(it));
+    };
+    fogSlider("DENSITY", "How thick the fog is with distance", &settings_.fogDensity, 0.0f, 3.0f);
+    fogSlider("HEIGHT", "How high it climbs up the towers", &settings_.fogHeight, 0.5f, 3.0f);
+    fogSlider("BRIGHTNESS", "Lower keeps floors dark", &settings_.fogBright, 0.3f, 3.0f);
+    fogSlider("COLOUR", "Violet, blue, teal, grey", &settings_.fogTint, 0.0f, 1.0f);
+    fogSlider("START DISTANCE", "Clear space around you", &settings_.fogStart, 0.0f, 150.0f);
+    fogSlider("GROUND MIST", "Low bank hugging the streets", &settings_.fogMist, 0.0f, 3.0f);
+    fogSlider("FLOOR CLARITY", "Keeps floors dark seen from above", &settings_.fogClarity, 0.1f, 1.0f);
+    fogSlider("NEON GLOW", "How much the fog catches neon", &settings_.fogGlow, 0.0f, 0.4f);
+    fog.items.push_back({"RESET FOG", "Back to the default fog", nullptr, [this, save] {
+                             settings_.fogDensity = 1.6f; settings_.fogHeight = 1.0f; settings_.fogBright = 1.0f;
+                             settings_.fogTint = 0.66f; settings_.fogStart = 0.0f; settings_.fogMist = 1.0f;
+                             settings_.fogClarity = 0.5f; settings_.fogGlow = 0.07f;
+                             save();
+                         }});
+    cats.push_back(std::move(fog));
 
     SettingsCategory wm{"WINDOWS", "Arrange and move windows", "SHELL", {}};
     wm.items.push_back({"ARRANGE IN ARC", "Curve open windows around you", nullptr, [this] { arrangeArc(); }});
@@ -1296,6 +1325,21 @@ bool AppShell::scriptExec(const std::string& line) {
         std::string v;
         is >> v;
         if (v == "settings") runTool(Tool::Settings);
+        else if (v == "settingspage") { std::string s; is >> s; runTool(Tool::Settings); settingsPanel_->openPage(s); }
+        else if (v == "harvi") {
+            std::string sub; is >> sub;
+            std::string rest; std::getline(is, rest);
+            if (!rest.empty() && rest[0] == ' ') rest.erase(0, 1);
+            const Vec3 e = vrOn_ ? head_.eye : camera_.position;
+            const Vec3 f = vrOn_ ? head_.forward : camera_.forward();
+            if (sub == "on") harvi_->summon(e, f, vrOn_);
+            else if (sub == "off") harvi_->dismiss();
+            else if (sub == "say") harvi_->say(rest, "neutral");
+            else if (sub == "emote") harvi_->emote(rest, 6.0f);
+            else if (sub == "gesture") harvi_->gesture(rest);
+            else if (sub == "node") harvi_->showNode(rest);
+            else if (sub == "ctx") harvi_->setContext(rest);
+        }
         else if (v == "theme") runTool(Tool::Theme);
         else if (v == "monitor") runTool(Tool::Monitor);
         else if (v == "terminal") runTool(Tool::Terminal);
@@ -2143,6 +2187,12 @@ void AppShell::tick(double dt) {
         settings_.save();
     }
     input_.arrangeKey = settings_.arrangeKey ? settings_.arrangeKey : SDLK_F8;
+    if (in.harvi && !(focus_.p && winTyping(focus_)))
+        harvi_->toggle(vrOn_ ? head_.eye : camera_.position, vrOn_ ? head_.forward : camera_.forward(), vrOn_);
+    if (in.escape && harvi_->active() && !(focus_.p && winTyping(focus_))) {
+        harvi_->dismiss();
+        in.escape = false;
+    }
     if (in.cityToggle && !(focus_.p && winTyping(focus_))) setCityEnabled(!settings_.showCity);
     if (in.arrange && !((focus_.p && winTyping(focus_)) && input_.arrangeKey < 256)) arrangeCycle();
     // Only the focused window can take typed text; otherwise the keyboard walks the camera.
@@ -2379,6 +2429,19 @@ void AppShell::tick(double dt) {
                 osk_->leave();
             }
         }
+        bool hvHit = false;
+        harvi_->hold(harvi_->panelOpen() && (harvi_->panel().busy() || harvi_->panel().hitDistance(o, d) >= 0.0f));
+        if (harvi_->panelOpen() && !overlayBusy && !winModal) {
+            const float hd = harvi_->panel().hitDistance(o, d), wd = top.p ? winHit(top, o, d) : -1.0f;
+            hvHit = harvi_->panel().busy() || (hd >= 0.0f && (wd < 0.0f || hd <= wd));
+            if (hvHit) {
+                harvi_->panel().pointer(o, d);
+                top = {};
+                oskHit = true;
+            } else {
+                harvi_->panel().leave();
+            }
+        }
         if (!overlayBusy) {
             for (const WinRef& w : winOrder_) {
                 if (fsw.p && w != fsw) winLeave(w, o, d);
@@ -2449,8 +2512,13 @@ void AppShell::tick(double dt) {
             }
             bool clickEv = in.click || pad.aPressed || vrInput_.selectPressed;
             if (clickEv && oskHit) {
-                osk_->click(o, d);
-                if (!in.click) osk_->releaseButton();
+                if (hvHit) {
+                    harvi_->panel().click(o, d);
+                    if (!in.click) harvi_->panel().releaseButton();
+                } else {
+                    osk_->click(o, d);
+                    if (!in.click) osk_->releaseButton();
+                }
                 in.click = pointerSelect = keySelect = false;
                 pad.aPressed = false;
                 vrInput_.selectPressed = false;
@@ -2480,6 +2548,7 @@ void AppShell::tick(double dt) {
             }
             if (in.clickUp) {
                 osk_->releaseButton();
+                harvi_->panel().releaseButton();
                 for (const WinRef& w : winOrder_) winRelease(w);
             }
             for (const WinRef& w : winOrder_)
@@ -2755,7 +2824,20 @@ void AppShell::tick(double dt) {
         appsPanel_->update(dt, time_);
     }
     scriptTick(dt);
-    if (state_ != State::FileRoom) renderer_.clearLights();
+    {
+        const Vec3 hEye = vrOn_ ? head_.eye : camera_.position;
+        const Vec3 hFwd = vrOn_ ? head_.forward : camera_.forward();
+        harvi_->setContext(driving_ ? "car" : (focus_.p && focus_.kind == kWinSettings ? "settings" : ""));
+        harvi_->update(dt, hEye, hFwd, vrOn_);
+        const std::string act = harvi_->takeAction();
+        if (act == "tool:settings") runTool(Tool::Settings);
+        else if (act == "tool:media") runTool(Tool::Media);
+        else if (act == "key:arrange") arrangeCycle();
+        else if (act.rfind("page:", 0) == 0) {
+            runTool(Tool::Settings);
+            pendingMediaPage_ = act.substr(5);
+        }
+    }
     if (state_ == State::FileRoom) {
         room_->pump();
         if (cityMode_) renderer_.clearLights();
@@ -2863,6 +2945,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         }
     }    static const bool dbgNoMirror = std::getenv("SCIFI_NOMIRROR") != nullptr, dbgNoPost = std::getenv("SCIFI_NOPOST") != nullptr;
     renderer_.setPostFx(settings_.postFx && !dbgNoPost);
+    renderer_.setFogTune(settings_.fogDensity, settings_.fogHeight, settings_.fogBright, settings_.fogTint, settings_.fogStart, settings_.fogMist, settings_.fogClarity, settings_.fogGlow);
     renderer_.setLightTune(settings_.lightSpot, settings_.lightCap, settings_.lightBase, settings_.lightAmbient, settings_.lightFalloff);
     if (city_) city_->setDrawScale(settings_.distScale());
     if (state_ == State::FileRoom && !dbgNoMirror && true) {
@@ -2899,6 +2982,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         renderer_.clearDepth();
         osk_->render();
     }
+    if (harvi_->active()) harvi_->render(*crosshair_);
     if (state_ == State::FileRoom && appsPanel_->isOpen()) {
         renderer_.clearDepth();
         appsPanel_->root().renderTree(renderer_);

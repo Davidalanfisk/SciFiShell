@@ -16,6 +16,7 @@
 #include "MediaPlayer.h"
 #include "MediaApp.h"
 #include "OnScreenKeyboard.h"
+#include "Harvi.h"
 #ifdef _WIN32
 #include "AppWindow.h"
 #include "AppCatalog.h"
@@ -140,6 +141,7 @@ private:
     std::unique_ptr<SettingsHub> settingsPanel_;
     std::unique_ptr<SysMonitor> monitor_;
     std::unique_ptr<OnScreenKeyboard> osk_;  // floating keyboard for the headset and gamepad; types into the focused window
+    std::unique_ptr<Harvi> harvi_;           // holographic assistant (F1)
     void toggleKeyboard();
     std::unique_ptr<Terminal> terminal_;
     std::unique_ptr<FileBrowser> files2d_;
