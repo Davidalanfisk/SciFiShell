@@ -270,6 +270,7 @@ struct MediaApp::PCtx {
 
 MediaApp::MediaApp(Renderer& renderer, MediaHost host) : PanelApp(renderer, 1600, 900, 2.2f), host_(std::move(host)) {
     title_ = "MEDIA";
+    tagCache_ = db_.allTags();
     loadStations();
 }
 
@@ -397,7 +398,7 @@ void MediaApp::reload() {
             Item it;
             it.t = t;
             items_.push_back(std::move(it));
-            if (tagAsked_.insert(t.path).second) {
+            if (!tagCache_.count(t.path) && tagAsked_.insert(t.path).second) {
                 meta_.requestTags(t.path);
                 ++tagsOutstanding_;
             }
@@ -508,10 +509,12 @@ void MediaApp::pump() {
     }
     MetaResult r;
     int n = 0;
+    std::vector<std::pair<std::string, TrackMeta>> fresh;
     while (n < 40 && meta_.poll(r)) {
         ++n;
         if (r.kind == MetaResult::Tags) {
             tagCache_[r.key] = r.meta;
+            if (r.ok) fresh.emplace_back(r.key, r.meta);
             if (tagsOutstanding_ > 0) --tagsOutstanding_;
             albumsDirty_ = true;
         } else if (r.kind == MetaResult::Art) {
@@ -524,6 +527,7 @@ void MediaApp::pump() {
             if (!theatre_) invalidate();
         }
     }
+    if (!fresh.empty()) db_.putTags(fresh);
 }
 
 bool MediaApp::albumMatches(const Album& a) const {

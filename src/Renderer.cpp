@@ -57,6 +57,8 @@ void Renderer::shutdown() {
     resolveSrc_ = nullptr;
     quad_ = {};
     pyramid_ = {};
+    sphere_ = {};
+    facet_ = {};
     cube_ = {};
     panelPipeline_ = {};
     solidPipeline_ = {};
@@ -418,6 +420,55 @@ void Renderer::buildMeshes() {
     tri(bc[0], bc[1], bc[2], {0, 0, -1});
     tri(bc[0], bc[2], bc[3], {0, 0, -1});
     pyramid_ = createMesh(pv, pi);
+
+    // Smooth unit-diameter sphere for the assistant's rounded body parts.
+    {
+        std::vector<float> sv;
+        std::vector<uint32_t> si;
+        const int lat = 20, lon = 32;
+        for (int a = 0; a <= lat; ++a) {
+            const float th = kPi * a / lat;
+            for (int b = 0; b <= lon; ++b) {
+                const float ph = 2.0f * kPi * b / lon;
+                const Vec3 n{std::sin(th) * std::cos(ph), std::cos(th), std::sin(th) * std::sin(ph)};
+                sv.insert(sv.end(), {n.x * 0.5f, n.y * 0.5f, n.z * 0.5f, n.x, n.y, n.z, float(b) / lon, float(a) / lat});
+            }
+        }
+        for (int a = 0; a < lat; ++a)
+            for (int b = 0; b < lon; ++b) {
+                const uint32_t i0 = a * (lon + 1) + b, i1 = i0 + lon + 1;
+                si.insert(si.end(), {i0, i0 + 1, i1, i0 + 1, i1 + 1, i1});
+            }
+        sphere_ = createMesh(sv, si);
+    }
+
+    // Faceted low-poly "gem" sphere with flat normals: the angular half of the assistant's look.
+    {
+        std::vector<float> fv;
+        std::vector<uint32_t> fi;
+        const int lat = 6, lon = 10;
+        auto pt = [&](int a, int b) {
+            const float th = kPi * a / lat, ph = 2.0f * kPi * b / lon;
+            return Vec3{std::sin(th) * std::cos(ph), std::cos(th), std::sin(th) * std::sin(ph)} * 0.5f;
+        };
+        auto ftri = [&](Vec3 a, Vec3 b, Vec3 c) {
+            Vec3 n = normalize(cross(b - a, c - a));
+            if (dot(n, a + b + c) < 0) {
+                std::swap(b, c);
+                n = n * -1.0f;
+            }
+            const uint32_t base = static_cast<uint32_t>(fv.size() / 8);
+            for (const Vec3& p : {a, b, c}) fv.insert(fv.end(), {p.x, p.y, p.z, n.x, n.y, n.z, 0.5f, 0.5f});
+            fi.insert(fi.end(), {base, base + 1, base + 2});
+        };
+        for (int a = 0; a < lat; ++a)
+            for (int b = 0; b < lon; ++b) {
+                const Vec3 p00 = pt(a, b), p01 = pt(a, b + 1), p10 = pt(a + 1, b), p11 = pt(a + 1, b + 1);
+                if (a > 0) ftri(p00, p01, p10);
+                if (a < lat - 1) ftri(p01, p11, p10);
+            }
+        facet_ = createMesh(fv, fi);
+    }
 }
 
 void Renderer::resize() {
@@ -721,12 +772,12 @@ void Renderer::drawBuilding(const GpuLabel& any, const Mat4& world, Vec3 neon, f
     else draw(solidPipeline_, any.solidSRB, cube_, world, color, params, eyeL);
 }
 
-void Renderer::drawHolo(const GpuLabel& any, bool pyramid, const Mat4& world, Vec3 color, float emerge, float alpha, float glow) {
+void Renderer::drawHolo(const GpuLabel& any, int shape, const Mat4& world, Vec3 color, float emerge, float alpha, float glow) {
     const float c[4] = {color.x, color.y, color.z, 1.0f};
     const float params[4] = {emerge, alpha, glow, 12.0f};
     Vec3 eye = view_.rigidInverse().transformPoint({0, 0, 0});
     const float eyeL[4] = {eye.x, eye.y, eye.z, 0};
-    draw(floorPipeline_, any.floorSRB, pyramid ? pyramid_ : cube_, world, c, params, eyeL);
+    draw(solidPipeline_, any.solidSRB, shape == 3 ? facet_ : shape == 2 ? sphere_ : (shape == 1 ? pyramid_ : cube_), world, c, params, eyeL);
 }
 
 int Renderer::model(const std::string& name) {

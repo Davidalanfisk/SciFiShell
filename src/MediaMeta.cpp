@@ -5,7 +5,11 @@
 #include <filesystem>
 #include <fstream>
 
+#include <cstdio>
+
+#include "MediaDb.h"
 #include "stb_image.h"
+#include "stb_image_write.h"
 #include "Thumbnails.h"
 
 #ifdef _WIN32
@@ -71,6 +75,33 @@ bool decodeImageFile(const fs::path& p, Bitmap& out) {
     out.rgba.assign(px, px + static_cast<size_t>(w) * h * 4);
     stbi_image_free(px);
     return true;
+}
+
+// On-disk cache of finished covers and video frames, so a restart shows them at once instead of re-reading every file.
+// "<hash>.jpg" is the picture; "<hash>.none" records that nothing was found, so those lookups are not repeated either.
+fs::path cacheFile(const char* kind, const std::string& key, const char* ext) {
+    unsigned long long h = 1469598103934665603ull;
+    for (unsigned char c : key) h = (h ^ c) * 1099511628211ull;
+    char name[48];
+    snprintf(name, sizeof(name), "%s_%016llx%s", kind, h, ext);
+    return fs::u8path(MediaDb::dir()) / "cache" / name;
+}
+
+// 1 = loaded, 0 = known missing, -1 = not cached
+int cacheLoad(const char* kind, const std::string& key, Bitmap& out) {
+    std::error_code ec;
+    if (fs::exists(cacheFile(kind, key, ".none"), ec)) return 0;
+    return decodeImageFile(cacheFile(kind, key, ".jpg"), out) ? 1 : -1;
+}
+
+void cacheStore(const char* kind, const std::string& key, const Bitmap* bmp) {
+    std::error_code ec;
+    fs::create_directories(fs::u8path(MediaDb::dir()) / "cache", ec);
+    if (!bmp) {
+        std::ofstream(cacheFile(kind, key, ".none"), std::ios::binary);
+        return;
+    }
+    stbi_write_jpg(cacheFile(kind, key, ".jpg").u8string().c_str(), bmp->w, bmp->h, 4, bmp->rgba.data(), 90);
 }
 
 bool folderArt(const std::string& trackPath, Bitmap& out) {
@@ -254,21 +285,33 @@ void MediaMeta::run() {
 #endif
             } else if (job.kind == 1) {
                 r.kind = MetaResult::Art;
-                Bitmap raw;
-                bool have = folderArt(job.path, raw);
-#ifdef _WIN32
-                if (!have) have = shellThumb(job.path, 320, raw);
-#endif
-                if (have) {
-                    r.bmp = scaleCover(raw, 320, 320);
+                const int c = cacheLoad("art", job.key, r.bmp);
+                if (c == 1) {
                     r.ok = true;
+                } else if (c == -1) {
+                    Bitmap raw;
+                    bool have = folderArt(job.path, raw);
+#ifdef _WIN32
+                    if (!have) have = shellThumb(job.path, 320, raw);
+#endif
+                    if (have) {
+                        r.bmp = scaleCover(raw, 320, 320);
+                        r.ok = true;
+                    }
+                    cacheStore("art", job.key, r.ok ? &r.bmp : nullptr);
                 }
             } else {
                 r.kind = MetaResult::Thumb;
-                Bitmap raw;
-                if (extractVideoFrame(job.path, raw)) {
-                    r.bmp = scaleCover(raw, 384, 216);
+                const int c = cacheLoad("vid", job.key, r.bmp);
+                if (c == 1) {
                     r.ok = true;
+                } else if (c == -1) {
+                    Bitmap raw;
+                    if (extractVideoFrame(job.path, raw)) {
+                        r.bmp = scaleCover(raw, 384, 216);
+                        r.ok = true;
+                    }
+                    cacheStore("vid", job.key, r.ok ? &r.bmp : nullptr);
                 }
             }
         } catch (...) {

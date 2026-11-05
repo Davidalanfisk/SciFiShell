@@ -69,7 +69,7 @@ public:
     void drawBuilding(const GpuLabel& any, const Mat4& world, Vec3 neon, float seed, int kind, float emerge,
                       float fill, float flash);
     // Translucent hologram part (cube or pyramid): emerge 0..1 dissolve, alpha scale, glow adds colour.
-    void drawHolo(const GpuLabel& any, bool pyramid, const Mat4& world, Vec3 color, float emerge, float alpha, float glow);
+    void drawHolo(const GpuLabel& any, int shape, const Mat4& world, Vec3 color, float emerge, float alpha, float glow);  // shape: 0 cube, 1 pyramid, 2 smooth sphere, 3 faceted sphere
     // GLB models (assets/models/<name>.glb), loaded once, normalised to height 1 and sitting on y = 0. -1 if unavailable.
     int model(const std::string& name);
     Vec3 modelSize(int id) const;  // x/z extents relative to the unit height
@@ -172,7 +172,7 @@ private:
     Diligent::ITexture* resolveDst_ = nullptr;
     Diligent::ITextureView* currentDsv_ = nullptr;
     Diligent::ITexture* resolveSrc_ = nullptr;
-    Mesh quad_, cube_, pyramid_;
+    Mesh quad_, cube_, pyramid_, sphere_, facet_;
     std::vector<Mesh> models_;
     std::vector<std::shared_ptr<GpuLabel>> modelTex_;
     std::vector<Vec3> modelSizes_;

@@ -7,17 +7,103 @@
       "buttons": [
         { "label": "QUICK TOUR", "goto": "tour" },
         { "label": "CONTROLS", "goto": "controls" },
-        { "label": "OPEN SETTINGS", "action": "tool:settings", "goto": "settings_ok" },
-        { "label": "OPEN MEDIA", "action": "tool:media", "goto": "media_ok" },
+        { "label": "TOOLS & APPS", "goto": "tools" },
+        { "label": "MEDIA HELP", "goto": "media_help" },
+        { "label": "CUSTOMISE", "goto": "custom" },
         { "label": "TROUBLESHOOT", "goto": "trouble" },
         { "label": "DID YOU KNOW?", "action": "tip" }
       ]
+    },
+    "tools": {
+      "say": "The shell has a browser, text editor, image viewer, file browser, terminal, calculator, system monitor, FTP client and a media player. Which would you like to hear about?",
+      "emote": "happy",
+      "buttons": [
+        { "label": "BROWSER", "goto": "t_browser" },
+        { "label": "FILES", "goto": "t_files" },
+        { "label": "TERMINAL", "goto": "t_term" },
+        { "label": "EDITOR", "goto": "t_edit" },
+        { "label": "MONITOR", "goto": "t_mon" },
+        { "label": "BACK", "goto": "root" }
+      ]
+    },
+    "t_browser": {
+      "say": "The browser is a full Chromium engine. Ctrl+L focuses the address bar, and F3 changes how deep the page is drawn in 3D.",
+      "emote": "neutral",
+      "buttons": [ { "label": "BACK", "goto": "tools" } ]
+    },
+    "t_files": {
+      "say": "The file browser shows your drives as towers. Double click to enter a folder, drag to move files, and right click for copy, rename and delete. Drag a folder onto the shell to add it to your media library.",
+      "emote": "neutral",
+      "buttons": [ { "label": "BACK", "goto": "tools" } ]
+    },
+    "t_term": {
+      "say": "The terminal runs your normal shell inside a glass window. Select text with the mouse and right click to paste.",
+      "emote": "thinking",
+      "buttons": [ { "label": "BACK", "goto": "tools" } ]
+    },
+    "t_edit": {
+      "say": "The text editor opens any plain file. Ctrl+S saves, Ctrl+F finds, and it remembers where you left off.",
+      "emote": "neutral",
+      "buttons": [ { "label": "BACK", "goto": "tools" } ]
+    },
+    "t_mon": {
+      "say": "The system monitor shows live CPU, memory, disk and network use. The same readings drive the glowing CPU region of the city.",
+      "emote": "surprised",
+      "buttons": [ { "label": "BACK", "goto": "tools" } ]
+    },
+    "media_help": {
+      "say": "The media player builds a library of movies, TV and music from the folders you add. It scrapes posters, cast, plots and lyrics from several sources and caches everything locally.",
+      "emote": "happy",
+      "buttons": [
+        { "label": "OPEN MEDIA", "action": "tool:media", "goto": "media_ok" },
+        { "label": "ADD FOLDERS", "goto": "m_folders" },
+        { "label": "TV & RESUME", "goto": "m_tv" },
+        { "label": "MISSING ART?", "goto": "m_art" },
+        { "label": "BACK", "goto": "root" }
+      ]
+    },
+    "m_folders": {
+      "say": "Open Settings and add your movie, TV and music folders, or simply drag a folder onto the shell. Scanning runs in the background and a progress bar shows while it works.",
+      "emote": "neutral",
+      "buttons": [ { "label": "OPEN SETTINGS", "action": "tool:settings", "goto": "settings_ok" }, { "label": "BACK", "goto": "media_help" } ]
+    },
+    "m_tv": {
+      "say": "TV shows appear as posters. Open one to see seasons and episodes. I remember what you have watched and resume from where you stopped.",
+      "emote": "happy",
+      "buttons": [ { "label": "BACK", "goto": "media_help" } ]
+    },
+    "m_art": {
+      "say": "If a poster or album cover is missing, the name on disk may be unusual. Rename the folder to Title (Year) for movies or Artist - Album for music, then rescan. Cached results are kept so repeat opens are instant.",
+      "emote": "thinking",
+      "buttons": [ { "label": "BACK", "goto": "media_help" } ]
+    },
+    "custom": {
+      "say": "You can tune the look and feel. Pick a settings page and I will open it for you.",
+      "emote": "happy",
+      "buttons": [
+        { "label": "SHELL", "action": "page:SHELL", "goto": "settings_ok" },
+        { "label": "GRAPHICS", "action": "page:GRAPHICS", "goto": "light_fix" },
+        { "label": "FOG", "action": "page:FOG", "goto": "fog_fix" },
+        { "label": "WINDOWS", "action": "page:WINDOWS", "goto": "settings_ok" },
+        { "label": "BACK", "goto": "root" }
+      ]
+    },
+    "vr": {
+      "say": "Press V to toggle VR. Use your controller pointer to click windows, and I will hover closer so my menu stays within reach.",
+      "emote": "surprised",
+      "buttons": [ { "label": "BACK", "goto": "controls" } ]
+    },
+    "city": {
+      "say": "Each region of the city is a part of your PC: drives, folders, CPU and memory. Walk up the small step rings to reach a platform, or drive the car and it will guide you along the roads.",
+      "emote": "neutral",
+      "buttons": [ { "label": "BACK", "goto": "tour" } ]
     },
     "tour": {
       "say": "This city is generated from your own PC. Every building is a folder, every tower a drive. Fly with W A S D, look with the mouse, hold Shift to go faster.",
       "emote": "happy",
       "buttons": [
         { "label": "WHAT ARE WINDOWS?", "goto": "windows" },
+        { "label": "THE CITY", "goto": "city" },
         { "label": "THE CAR", "goto": "car" },
         { "label": "BACK", "goto": "root" }
       ]
@@ -36,6 +122,7 @@
       "say": "F1 summons me. F2 opens the command ring, F7 the on-screen keyboard, F9 toggles the city, F10 the car, F12 takes a screenshot. V toggles VR.",
       "emote": "thinking",
       "buttons": [
+        { "label": "VR MODE", "goto": "vr" },
         { "label": "SETTINGS", "action": "tool:settings", "goto": "settings_ok" },
         { "label": "BACK", "goto": "root" }
       ]
@@ -118,6 +205,11 @@
     "Right click a window to pin your view to it, and again to let go.",
     "The fog sliders live in Settings, and RESET FOG returns them to normal.",
     "The speedometer appears whenever you are driving the car.",
-    "Ctrl and Tab work like a task switcher between your open windows."
+    "Ctrl and Tab work like a task switcher between your open windows.",
+    "TV shows remember the last episode you watched and resume from there.",
+    "Media metadata is cached on disk, so reopening the player is instant.",
+    "Press V to jump in and out of VR.",
+    "Ask me about any tool from the TOOLS & APPS menu.",
+    "The sound effects slider in Settings also controls the car hum."
   ]
 }

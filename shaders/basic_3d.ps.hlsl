@@ -432,21 +432,23 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
     float tm = g_Accent.w;
     if (g_Params.w > 11.5 && g_Params.w < 12.5)
     {
-        // Hologram: fresnel rim, scanlines, flicker, and a pixel dissolve driven by emergence (params.x).
+        // Solid hologram body: lit flat colour with a soft rim; only the summon dissolve punches holes (emerge < 1).
         float3 V = normalize(g_Light.xyz - In.WPos);
         float3 hn = normalize(In.Nrm);
-        float fres = pow(1.0 - abs(dot(hn, V)), 2.0);
-        float scan = 0.65 + 0.35 * sin(In.WPos.y * 90.0 - tm * 6.0);
-        float flick = 0.9 + 0.1 * sin(tm * 37.0 + In.WPos.y * 3.0);
+        float fres = pow(1.0 - abs(dot(hn, V)), 3.0);
         float n = hash22(floor(In.WPos.xz * 60.0) + floor(In.WPos.y * 60.0)).x;
         float emg = g_Params.x;
-        if (n > emg * 1.15 - 0.1 + 0.0) discard;
-        float edge = smoothstep(emg * 1.15 - 0.25, emg * 1.15 - 0.1, n);
-        float shade = 0.35 + 0.65 * saturate(dot(hn, normalize(float3(0.3, 0.8, 0.5))) * 0.5 + 0.5);
-        float3 c = g_Color.rgb * (shade * 0.55 + fres * 1.6) * scan * flick + float3(0.7, 1.0, 1.0) * edge * 0.8;
+        float edge = 0.0;
+        if (emg < 0.999)
+        {
+            if (n > emg * 1.15 - 0.1) discard;
+            edge = smoothstep(emg * 1.15 - 0.25, emg * 1.15 - 0.1, n);
+        }
+        float shade = 0.5 + 0.5 * saturate(dot(hn, normalize(float3(0.3, 0.8, 0.5))) * 0.5 + 0.5);
+        float spec = pow(saturate(dot(reflect(-normalize(float3(0.3, 0.8, 0.5)), hn), V)), 24.0);
+        float3 c = g_Color.rgb * (shade + fres * 0.35) + spec * 0.35 + float3(0.7, 1.0, 1.0) * edge * 0.8;
         c += g_Color.rgb * g_Params.z;
-        float a = saturate((0.28 + fres * 0.6) * g_Params.y * scan + edge * 0.5);
-        Color = float4(c * a, a);
+        Color = float4(c, 1.0);
         return;
     }
     if (g_Params.w > 2.5)

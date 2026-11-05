@@ -40,7 +40,8 @@ MediaDb::MediaDb() {
     exec("CREATE TABLE IF NOT EXISTS info(key TEXT PRIMARY KEY,title TEXT,summary TEXT,genres TEXT,year TEXT,rating TEXT,img TEXT,extra TEXT,extra2 TEXT,found INTEGER,fetched INTEGER);"
          "CREATE TABLE IF NOT EXISTS episodes(show TEXT,season INTEGER,num INTEGER,name TEXT,summary TEXT,img TEXT,runtime INTEGER,airdate TEXT,PRIMARY KEY(show,season,num));"
          "CREATE TABLE IF NOT EXISTS progress(path TEXT PRIMARY KEY,pos REAL,dur REAL,watched INTEGER,last INTEGER);"
-         "CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,dur REAL);");
+         "CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,dur REAL);"
+         "CREATE TABLE IF NOT EXISTS tags(path TEXT PRIMARY KEY,title TEXT,artist TEXT,album TEXT,albumartist TEXT,track INTEGER,year INTEGER,seconds REAL);");
     // v2: matching got stricter, so drop earlier scraped results (except lyrics) and rescrape them
     sqlite3_stmt* v = nullptr;
     int ver = 0;
@@ -56,6 +57,46 @@ MediaDb::~MediaDb() {
 }
 
 void MediaDb::exec(const char* sql) { sqlite3_exec(db_, sql, nullptr, nullptr, nullptr); }
+
+std::map<std::string, TrackMeta> MediaDb::allTags() {
+    std::lock_guard<std::mutex> lk(m_);
+    std::map<std::string, TrackMeta> r;
+    if (!db_) return r;
+    Stmt st(db_, "SELECT path,title,artist,album,albumartist,track,year,seconds FROM tags");
+    if (!st.s) return r;
+    while (sqlite3_step(st.s) == SQLITE_ROW) {
+        TrackMeta m;
+        m.title = col(st.s, 1);
+        m.artist = col(st.s, 2);
+        m.album = col(st.s, 3);
+        m.albumArtist = col(st.s, 4);
+        m.track = sqlite3_column_int(st.s, 5);
+        m.year = sqlite3_column_int(st.s, 6);
+        m.seconds = sqlite3_column_double(st.s, 7);
+        r.emplace(col(st.s, 0), std::move(m));
+    }
+    return r;
+}
+
+void MediaDb::putTags(const std::vector<std::pair<std::string, TrackMeta>>& tags) {
+    std::lock_guard<std::mutex> lk(m_);
+    if (!db_ || tags.empty()) return;
+    exec("BEGIN");
+    for (const auto& [path, m] : tags) {
+        Stmt st(db_, "INSERT OR REPLACE INTO tags VALUES(?,?,?,?,?,?,?,?)");
+        if (!st.s) continue;
+        bindText(st.s, 1, path);
+        bindText(st.s, 2, m.title);
+        bindText(st.s, 3, m.artist);
+        bindText(st.s, 4, m.album);
+        bindText(st.s, 5, m.albumArtist);
+        sqlite3_bind_int(st.s, 6, m.track);
+        sqlite3_bind_int(st.s, 7, m.year);
+        sqlite3_bind_double(st.s, 8, m.seconds);
+        sqlite3_step(st.s);
+    }
+    exec("COMMIT");
+}
 
 bool MediaDb::getInfo(const std::string& key, Info& out) {
     std::lock_guard<std::mutex> lk(m_);

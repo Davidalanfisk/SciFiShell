@@ -420,7 +420,7 @@ void Harvi::update(double dtd, Vec3 eye, Vec3 forward, bool vr) {
     }
 
     // Trail from the tail.
-    emit(Mat4::translate(pos_).transformPoint(Mat4::rotateY(yaw_).transformDir({-1.45f, 0.02f, 0.18f})), dt * (0.6f + emerge_));
+    emit(Mat4::translate(pos_).transformPoint(Mat4::rotateY(yaw_).transformDir({-1.75f, 0.02f, 0.18f})), dt * (0.6f + emerge_));
     for (auto& p : parts_) {
         p.p = p.p + p.v * dt;
         p.life -= dt * 0.9f;
@@ -436,9 +436,10 @@ void Harvi::render(const GpuLabel& any) {
     renderer_.clearDepth();
     const float t = time_;
     const float e = emerge_;
-    auto holo = [&](bool pyr, const Mat4& m, Vec3 col, float a, float glow = 0.0f) { renderer_.drawHolo(any, pyr, m, col, e, a, glow); };
+    auto holo = [&](int shape, const Mat4& m, Vec3 col, float a, float glow = 0.0f) { renderer_.drawHolo(any, shape, m, col, e, a, glow); };
+    const Vec3 kBelly{0.50f, 0.85f, 1.0f}, kDark{0.02f, 0.06f, 0.14f}, kBody{0.10f, 0.45f, 0.95f};
 
-    for (const auto& p : parts_) holo(false, Mat4::translate(p.p) * Mat4::scale({0.012f, 0.012f, 0.012f}), kCyan, p.life * 1.3f, 0.3f);
+    for (const auto& p : parts_) holo(2, Mat4::translate(p.p) * Mat4::scale({0.014f, 0.014f, 0.014f}), kCyan, 1.0f, 0.4f);
 
     float yaw = -kPi * 0.5f - 0.2f - (talking_ ? 0.25f : 0.0f);
     yaw += std::sin(t * 2.0f) * 0.06f;
@@ -450,32 +451,30 @@ void Harvi::render(const GpuLabel& any) {
     const float bobY = std::sin(t * 1.7f) * p_.bobAmp + hop;
     const Vec3 wander{std::sin(t * 0.6f) * 0.05f, std::sin(t * 0.9f) * 0.03f, std::sin(t * 0.45f) * 0.06f};
     const Mat4 base = Mat4::translate(pos_) * Mat4::rotateY(yaw_);
-    const float S = 0.75f;
-    const Vec3 anchor{-0.8f, 0.02f, 0.18f};
+    const float S = 0.9f;
+    const Vec3 anchor{-1.35f, 0.02f, 0.18f};
     const Mat4 root = base * Mat4::translate(anchor + wander + Vec3{0, bobY, 0}) * Mat4::rotateY(yaw) * rotZ(p_.roll) * Mat4::rotateX(pitch) *
                       Mat4::scale({S, S, S});
 
-    // Body: two angular halves meeting at the widest point (pyramids point down -Z from their apex).
-    holo(true, root * Mat4::translate({0, 0, -0.30f}) * Mat4::rotateY(kPi) *     Mat4::scale({0.28f, 0.44f, 0.30f}), kBlue, 1.0f);
-        holo(true, root * Mat4::translate({0, 0, 0.55f}) * Mat4::scale({0.28f, 0.44f, 0.55f}), kBlue, 1.0f);
-    holo(false, root * Mat4::translate({0, 0.17f, 0.12f}) * Mat4::scale({0.025f, 0.02f, 0.4f}), kCyan, 1.0f, 0.4f);
+    // Body: faceted gem-like ellipsoids (head and trunk, tapering rear) with a lighter belly and a spine stripe.
+    holo(3, root * Mat4::translate({0, 0, 0.05f}) * Mat4::scale({0.38f, 0.46f, 0.95f}), kBody, 1.0f);
+    holo(3, root * Mat4::translate({0, 0, 0.55f}) * Mat4::scale({0.22f, 0.28f, 0.62f}), kBody, 1.0f);
+    holo(3, root * Mat4::translate({0, -0.13f, -0.02f}) * Mat4::scale({0.33f, 0.34f, 0.85f}), kBelly, 1.0f);
+    holo(0, root * Mat4::translate({0, 0.215f, 0.12f}) * Mat4::scale({0.025f, 0.02f, 0.5f}), kCyan, 1.0f, 0.4f);
 
-    // Jaw: upper and lower lip hinge at the front of the head and open with p_.jaw.
-    holo(true, root * Mat4::translate({0, 0.02f, -0.30f}) * Mat4::rotateX(p_.jaw * 0.12f) * Mat4::translate({0, 0, -0.30f}) * Mat4::rotateY(kPi) *
-                   Mat4::scale({0.20f, 0.05f, 0.30f}),
-         kCyan, 0.9f, 0.1f);
-    holo(true, root * Mat4::translate({0, -0.04f, -0.30f}) * Mat4::rotateX(-p_.jaw * 0.55f) * Mat4::translate({0, 0, -0.27f}) * Mat4::rotateY(kPi) *
-                   Mat4::scale({0.17f, 0.04f, 0.27f}),
-         kCyan, 0.9f, 0.1f + p_.jaw * 0.3f);
+    // Lips: short blunt faceted wedges hinged at the front of the head; they open with p_.jaw.
+    holo(3, root * Mat4::translate({0, -0.03f, -0.42f}) * Mat4::rotateX(p_.jaw * 0.14f) * Mat4::translate({0, 0.02f, -0.02f}) * Mat4::scale({0.26f, 0.10f, 0.20f}), kCyan, 1.0f, 0.1f);
+    holo(3, root * Mat4::translate({0, -0.09f, -0.40f}) * Mat4::rotateX(-p_.jaw * 0.55f) * Mat4::translate({0, -0.01f, -0.02f}) * Mat4::scale({0.23f, 0.09f, 0.19f}), kCyan, 1.0f,
+         0.1f + p_.jaw * 0.2f);
 
-    // Tail: hinge at the rear, swings with a wiggle.
+    // Tail: two angular fins hinged at the rear that swing with a wiggle.
     const float tailSw = std::sin(t * p_.tailFreq) * p_.tailAmp + (talking_ ? std::sin(t * 9.0f) * 0.1f : 0.0f);
-    holo(true, root * Mat4::translate({0, 0, 0.5f}) * Mat4::rotateY(tailSw) * Mat4::rotateY(kPi) * Mat4::scale({0.03f, 0.40f, 0.38f}), kCyan, 0.7f, 0.15f);
-    holo(true, root * Mat4::translate({0, 0, 0.5f}) * Mat4::rotateY(tailSw * 1.3f) * Mat4::rotateY(kPi) * Mat4::scale({0.03f, 0.2f, 0.55f}), kBlue, 0.6f, 0.1f);
+    holo(1, root * Mat4::translate({0, 0, 0.9f}) * Mat4::rotateY(tailSw) * Mat4::rotateY(kPi) * Mat4::scale({0.04f, 0.40f, 0.40f}), kCyan, 1.0f, 0.1f);
+    holo(1, root * Mat4::translate({0, 0, 0.9f}) * Mat4::rotateY(tailSw * 1.3f) * Mat4::rotateY(kPi) * Mat4::scale({0.04f, 0.2f, 0.55f}), kBody, 1.0f);
 
     // Dorsal fin: swept back, ripples.
     const float dors = std::sin(t * p_.finFreq * 0.8f) * p_.finAmp * 0.4f;
-    holo(true, root * Mat4::translate({0, 0.20f, -0.10f}) * rotZ(dors) * Mat4::rotateX(kPi * 0.5f + 0.55f) * Mat4::scale({0.03f, 0.26f, 0.30f}), kCyan, 0.65f, 0.15f);
+    holo(1, root * Mat4::translate({0, 0.2f, -0.10f}) * rotZ(dors) * Mat4::rotateX(kPi * 0.5f + 0.55f) * Mat4::scale({0.04f, 0.28f, 0.34f}), kCyan, 1.0f, 0.1f);
 
     // Pectoral fins: flap about their root; they droop or lift with the mood.
     const float flap = std::sin(t * p_.finFreq) * p_.finAmp * (waveT_ >= 0 ? 1.4f : 1.0f);
@@ -483,39 +482,38 @@ void Harvi::render(const GpuLabel& any) {
         const float sgn = static_cast<float>(side);
         const float ang = -(p_.droop + flap * 0.5f) * sgn;
         const float sweep = (kPi * 0.5f + 0.6f) * -sgn;
-        holo(true, root * Mat4::translate({sgn * 0.17f, -0.10f, -0.03f}) * rotZ(ang) * Mat4::rotateY(sweep) * Mat4::scale({0.18f, 0.03f, 0.26f}), kCyan, 0.65f, 0.15f);
+        holo(1, root * Mat4::translate({sgn * 0.17f, -0.10f, -0.03f}) * rotZ(ang) * Mat4::rotateY(sweep) * Mat4::scale({0.22f, 0.04f, 0.30f}), kCyan, 1.0f, 0.1f);
     }
 
-    // Gills: slats on each side that flare open.
+    // Gills: slats on each side of the head that flare open.
     for (int side = -1; side <= 1; side += 2) {
         const float sgn = static_cast<float>(side);
         for (int i = 0; i < 3; ++i) {
             const float flare = (p_.gill * 0.9f + 0.1f * std::sin(t * 2.5f + i)) * sgn;
-            holo(false, root * Mat4::translate({sgn * 0.19f, 0.0f, -0.09f + i * 0.045f}) * Mat4::rotateY(flare) * Mat4::scale({0.012f, 0.20f, 0.025f}), kCyan, 1.0f,
+            holo(0, root * Mat4::translate({sgn * 0.19f, 0.0f, -0.09f + i * 0.05f}) * Mat4::rotateY(flare) * Mat4::scale({0.014f, 0.2f, 0.025f}), kBelly, 1.0f,
                  0.3f + p_.gill * 0.5f);
         }
     }
 
-    // Eyes: a ball, a pupil that looks around and an eyelid that blinks or squints.
+    // Eyes: a ball, an iris and pupil that look around, and an eyelid that blinks or squints.
     const float blink = blinkPhase_ >= 0 ? std::sin(kPi * blinkPhase_) : 0.0f;
     const float cover = std::max(blink, p_.lid);
     for (int side = -1; side <= 1; side += 2) {
         const float sgn = static_cast<float>(side);
-        const Vec3 ec{sgn * 0.11f, 0.07f, -0.15f};
-        holo(false, root * Mat4::translate(ec) * Mat4::scale({0.09f, 0.09f, 0.09f}), {0.6f, 0.9f, 1.0f}, 0.8f, 0.2f);
-        holo(false, root * Mat4::translate({ec.x + sgn * 0.045f, ec.y + p_.lookY * 0.02f, ec.z - p_.lookX * 0.022f}) * Mat4::scale({0.035f, 0.04f, 0.04f}),
-             {0.9f, 1.0f, 1.0f}, 1.0f, 1.2f);
-        if (cover > 0.03f) {
-            const float h = 0.10f * cover;
-            holo(false, root * Mat4::translate({ec.x + sgn * 0.003f, ec.y + 0.05f - h * 0.5f, ec.z}) * Mat4::scale({0.098f, h, 0.098f}), kBlue, 1.0f, 0.2f);
-        }
+        const Vec3 ec{sgn * 0.19f, 0.12f, -0.30f};
+        const Vec3 gaze{sgn * 0.045f, p_.lookY * 0.02f, -p_.lookX * 0.025f * sgn};
+        holo(2, root * Mat4::translate(ec) * Mat4::scale({0.14f, 0.14f, 0.14f}), {0.95f, 0.98f, 1.0f}, 1.0f, 0.1f);
+        holo(2, root * Mat4::translate(ec + gaze * 1.1f + Vec3{sgn * 0.035f, 0, 0}) * Mat4::scale({0.08f, 0.08f, 0.08f}), kCyan, 1.0f, 0.3f);
+        holo(2, root * Mat4::translate(ec + gaze * 1.1f + Vec3{sgn * 0.065f, 0, 0}) * Mat4::scale({0.045f, 0.045f, 0.045f}), kDark, 1.0f);
+        if (cover > 0.03f)
+            holo(2, root * Mat4::translate({ec.x + sgn * 0.004f, ec.y + 0.07f * (1.0f - cover), ec.z}) * Mat4::scale({0.15f, 0.15f * cover, 0.15f}), kBody, 1.0f);
     }
 
     // Thinking dots above the head.
     if (p_.dots > 0.05f)
         for (int i = 0; i < 3; ++i) {
             const float k = 0.5f + 0.5f * std::sin(t * 5.0f - i * 1.1f);
-            holo(false, root * Mat4::translate({(i - 1) * 0.16f, 0.52f + 0.04f * k, -0.2f}) * Mat4::scale(Vec3{0.05f, 0.05f, 0.05f} * (0.6f + 0.6f * k)), kCyan, p_.dots, 1.0f);
+            holo(2, root * Mat4::translate({(i - 1) * 0.18f, 0.68f + 0.04f * k, -0.2f}) * Mat4::scale(Vec3{0.07f, 0.07f, 0.07f} * (0.6f + 0.6f * k)), kCyan, 1.0f, 0.6f);
         }
 }
 

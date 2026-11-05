@@ -50,8 +50,8 @@ std::string upper(std::string s) {
 }
 }  // namespace
 namespace {
-constexpr int kStepN = 20;  // fine treads in the ring round each slab: a shallow ramp (about 6 degrees) that feet and wheels both climb
-constexpr float kStepTread = 0.45f, kStepRise = 1.0f / 21.0f;
+constexpr int kStepN = 12;  // fine treads in the ring round each slab: a shallow ramp (about 11 degrees) that feet and wheels both climb
+constexpr float kStepTread = 0.4f, kStepRise = 1.0f / 13.0f;
 // Street-level buses: they run on the ground and only climb over an earlier bus where they would cross it.
 constexpr float kBusGround = 0.14f, kBusBridge = 3.9f, kBusRamp = 8.0f, kBusFlat = 2.0f;
 constexpr float kStEnd = 4.0f;    // a bus ends this far outside the slab edge, at the foot of the step ring, where its station stands
@@ -163,7 +163,7 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap, int first, int co
     }
     // Greedy compact packing: biggest platforms first, each at the smallest radius from the hub where it clears the hub and
     // every platform already placed. Target angles follow the golden angle so the regions spread evenly around the centre.
-    constexpr float kHubHalf = 112.0f, kClear = 22.0f;
+    constexpr float kHubHalf = 125.0f, kClear = 42.0f;
     std::vector<float> px(n, 0.0f), pz(n, 0.0f);
     std::vector<int> order;
     std::vector<int> placed;

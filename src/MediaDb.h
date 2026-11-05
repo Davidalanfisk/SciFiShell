@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "MediaMeta.h"
 struct sqlite3;
 
 namespace sf {
@@ -47,6 +48,10 @@ public:
 
     double duration(const std::string& path);
     void setDuration(const std::string& path, double seconds);
+
+    // Embedded tags per file, so grouping into artists and albums is identical and instant on every start.
+    std::map<std::string, TrackMeta> allTags();
+    void putTags(const std::vector<std::pair<std::string, TrackMeta>>& tags);
 
 private:
     void exec(const char* sql);

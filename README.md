@@ -209,6 +209,8 @@ recently watched, year, rating) and `SHOW` (all, in progress, unwatched, watched
 (SQLite): scraped info, episode lists, posters (cached in `media\img`), durations, and your watch progress. Info is
 fetched in the background from free public sources (TVmaze, iTunes, Deezer, Wikipedia and lrclib) and never blocks
 the window. If you are offline the saved info is used and anything missing is fetched later.
+Embedded track tags are saved in the same database and cover art and video thumbnails in `media\cache`, so the
+library opens instantly and identically on later runs (delete `media\cache` to refresh covers).
 
 **Video** - play a video right inside the window. `FULLSCREEN` takes the picture to the full size of your display: only
 the video is shown, and the title, seek bar, transport and volume fade in when you move the pointer and fade away again
