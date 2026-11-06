@@ -498,7 +498,7 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
             float3 rv = float3(vd.x, -vd.y, vd.z);
             float gl = 0.6 + 0.8 * hash12(tid + 7.0);
             float3 gloss = glossLights(In.WPos, rv, 28.0 + 40.0 * tr) * (0.5 + 0.5 * sheen) + float3(0.10, 0.13, 0.16) * pow(1.0 - saturate(abs(vd.y)), 3.0) * 0.5;
-            c += gloss * gl * (1.0 - 0.8 * seam) * 0.6;
+            c += gloss * gl * (1.0 - 0.8 * seam) * 0.3;
             Color = float4(c, 1.0);
             return;
         }
@@ -584,7 +584,7 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         float3 reflection = (reflSum + sky * (1.0 - saturate(cov))) * metalTint;
         float gd = length(In.WPos.xz - eyeP.xz) + 0.35 * max(eyeP.y, 0.0);
         col *= fade * exp(-gd * 0.008) / (1.0 + gd * gd / 6000.0);  // grid and pulses dim steadily with distance from the player
-        col += metal * (1.0 - fres) * fade + reflection * rk * 0.3;
+        col += metal * (1.0 - fres) * fade + reflection * rk * 0.15;
         col += float3(0.14, 0.42, 0.55) * spillLight(In.WPos, float3(0, 1, 0)) * 0.3 * fade * (0.6 + 0.4 * rough);
         // Distance haze: beyond ~95 m the floor is an opaque patch of exactly the horizon colour, so the grid has no visible edge.
         col = col * (1.0 - mist) + mistColor(g_Accent.rgb) * mist;
@@ -648,7 +648,7 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         float3 incident = normalize(In.WPos - g_Eye.xyz);
         float3 reflected = reflect(incident, n);
         float gloss = (0.6 + 0.8 * hash12(pid + 7.0)) * (1.0 - 0.8 * seam * detailK);
-        spillAdd += glossLights(In.WPos, reflected, 28.0 + 40.0 * hash12(pid)) * gloss * 0.6;
+        spillAdd += glossLights(In.WPos, reflected, 28.0 + 40.0 * hash12(pid)) * gloss * 0.3;
         base += float3(0.2, 0.8, 1.0) * 0.05 * seam * lineRow * detailK;
         float below = smoothstep(0.0, 2.6, In.WPos.y);
         float ceilGlow = smoothstep(4.5, 8.5, In.WPos.y);
