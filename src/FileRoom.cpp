@@ -15,7 +15,7 @@ constexpr size_t kMaxEntries = 1000;
 constexpr size_t kMaxRooms = 400;
 // A room stays a comfortable gallery: past these limits a folder opens as a building of its own (lobby floors and a lift),
 // and loose files are split across several rooms.
-constexpr size_t kMaxRoomItems = 120, kMaxRoomDoors = 24;
+constexpr size_t kMaxRoomItems = 1000, kMaxRoomDoors = 24;
 
 static std::vector<DirEntry> looseSlice(const std::vector<DirEntry>& all, size_t from, size_t count) {
     const size_t b = std::min(from, all.size()), e = std::min(all.size(), from + count);
@@ -853,9 +853,9 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     std::stable_partition(items.begin(), items.end(), [](const DirEntry& e) { return e.isDir; });
     const int n = static_cast<int>(items.size());
     const int dirCount = static_cast<int>(std::count_if(items.begin(), items.end(), [](const DirEntry& e) { return e.isDir; }));
-    const int tiers = std::clamp((n + 24) / 25, 2, 3);
-    const float pitch = 2.4f, tierH = 1.5f;
+    const float pitch = 2.4f, tierH = 1.5f, floorH = 5.4f;
     struct Slot { Vec3 p; float yaw; };
+    bool corner = true;  // multi-floor rooms keep the near-right corner free for the lift
     auto makeSlots = [&](float S) {
         std::vector<Slot> out;
         const int along = std::max(0, static_cast<int>((S - 1.0f) / pitch));
@@ -863,18 +863,25 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
         for (int j = 0; j < along; ++j) ts.push_back((j - (along - 1) * 0.5f) * pitch);
         const float h = S * 0.5f;
         for (float t : ts) out.push_back({{t, 0, -h + 0.03f}, 0.0f});          // far wall, left to right
-        for (float t : ts) out.push_back({{h - 0.03f, 0, t}, -kPi * 0.5f});    // right wall, far to near
+        for (float t : ts) if (!corner || t < h - 3.4f) out.push_back({{h - 0.03f, 0, t}, -kPi * 0.5f});    // right wall, far to near
         for (float t : ts) out.push_back({{-h + 0.03f, 0, t}, kPi * 0.5f});   // left wall, far to near
         for (auto it = ts.rbegin(); it != ts.rend(); ++it)
-            if (std::fabs(*it) >= 3.0f) out.push_back({{*it, 0, h - 0.03f}, kPi});  // exit wall last, right to left, past the door
+            if (std::fabs(*it) >= 3.0f && (!corner || *it < h - 3.4f)) out.push_back({{*it, 0, h - 0.03f}, kPi});  // exit wall last, right to left, past the door
         return out;
     };
+    // Big folders add floors rather than growing without limit: each floor carries three rows of frames.
+    constexpr float kFloorSide = 36.0f;
+    const int perFloor = std::max(1, (static_cast<int>(makeSlots(kFloorSide).size()) - dirCount) * 3);
+    const int floors = std::max(1, (n - dirCount + perFloor - 1) / perFloor);
+    corner = floors > 1;
+    const int tiers = floors > 1 ? floors * 3 : std::clamp((n + 24) / 25, 2, 3);
     float S = 10.0f;
     while (S < 120.0f && static_cast<int>(makeSlots(S).size()) < dirCount + 1) S += 1.0f;
     while (S < 120.0f && (static_cast<int>(makeSlots(S).size()) - dirCount) * tiers < n - dirCount) S += 1.0f;
     const std::vector<Slot> slots = makeSlots(S);
     const int doorCols = std::min(dirCount, std::max(0, static_cast<int>(slots.size()) - 1));  // any folders beyond this hang as cards
-    const float H = 1.7f + tiers * tierH, h = S * 0.5f;
+    const float H = (floors - 1) * floorH + 1.7f + std::min(tiers - (floors - 1) * 3, 3) * tierH, h = S * 0.5f;
+    auto tierY = [&](int t) { return 1.35f + (t % 3) * tierH + (t / 3) * floorH; };
     const Vec3 kc = kPalette[idx % 5];
     const Vec3 wall{0.014f, 0.022f, 0.04f}, light{1.6f, 1.8f, 2.0f};
 
@@ -887,6 +894,51 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     add({h + 0.2f, H * 0.5f, 0}, {0.4f, H, S + 0.8f}, wall);
     add({0, H + 0.1f, 0}, {S + 0.8f, 0.2f, S + 0.8f}, wall * 0.7f, -1.0f);
     add({0, 0.0f, 0}, {S + 0.2f, 0.04f, S + 0.2f}, Vec3{0.036f, 0.038f, 0.043f}, -3.0f);
+    // Upper floors: a walkable gallery ledge along the walls, with the lift standing in the near-right corner.
+    const Vec3 ledgeCol = wall * 3.0f, ledgeRim{0.8f, 0.9f, 1.0f};
+    const float lw = 1.6f, podHalf = 1.2f, px = h - 2.0f, pz = h - 2.0f;
+    roomFloors_ = floors;
+    roomHalf_ = h;
+    podX_ = px;
+    podZ_ = pz;
+    levels_ = floors;
+    for (int f = 1; f < floors; ++f) {
+        const float y = f * floorH - 0.12f, yr = f * floorH - 0.06f;
+        auto ledge = [&](float x0, float x1, float z0, float z1, bool rimX, float rimAt) {
+            add({(x0 + x1) * 0.5f, y, (z0 + z1) * 0.5f}, {x1 - x0, 0.1f, z1 - z0}, ledgeCol);
+            if (rimX) add({(x0 + x1) * 0.5f, yr, rimAt}, {x1 - x0, 0.03f, 0.05f}, ledgeRim * 1.4f, -1.0f);
+            else add({rimAt, yr, (z0 + z1) * 0.5f}, {0.05f, 0.03f, z1 - z0}, ledgeRim * 1.4f, -1.0f);
+        };
+        ledge(-h, h, -h, -h + lw, true, -h + lw);
+        ledge(-h, -h + lw, -h + lw, h, false, -h + lw);
+        ledge(h - lw, h, -h + lw, h - podHalf * 2 - 0.8f, false, h - lw);
+        ledge(-h + lw, h - podHalf * 2 - 0.8f, h - lw, h, true, h - lw);
+    }
+    if (floors > 1) {
+        const Vec3 glass{0.5f, 0.8f, 1.0f};
+        const float top = (floors - 1) * floorH + 3.4f;
+        for (int e : {-1, 1})
+            for (int g : {-1, 1}) add({px + e * podHalf, top * 0.5f, pz + g * podHalf}, {0.08f, top, 0.08f}, ledgeRim * 1.2f, -1.0f);
+        for (int f = 0; f < floors; ++f) {
+            add({px, f * floorH + 3.4f, pz - podHalf}, {podHalf * 2, 0.06f, 0.06f}, ledgeRim * 1.5f, -1.0f);
+            add({px - podHalf, f * floorH + 3.4f, pz}, {0.06f, 0.06f, podHalf * 2}, ledgeRim * 1.5f, -1.0f);
+        }
+        auto car = std::make_unique<ShellNode>(renderer_, &eye_);
+        auto cadd = [&](Vec3 c, Vec3 s, Vec3 col, float glow) { car->boxes.push_back({c, s, col, glow, true}); };
+        cadd({px, 0.08f, pz}, {podHalf * 2 + 0.1f, 0.14f, podHalf * 2 + 0.1f}, wall * 3.0f, 0.0f);
+        cadd({px, 3.12f, pz}, {podHalf * 2 + 0.1f, 0.14f, podHalf * 2 + 0.1f}, wall * 3.0f, 0.0f);
+        cadd({px, 3.02f, pz}, {0.22f, 0.03f, 0.22f}, Vec3{0.7f, 0.85f, 0.9f}, -1.0f);
+        cadd({px + podHalf, 1.55f, pz}, {0.0f, 3.0f, podHalf * 2}, glass, -2.0f);
+        cadd({px, 1.55f, pz + podHalf}, {podHalf * 2, 3.0f, 0.0f}, glass, -2.0f);
+        cadd({px - podHalf, 0.16f, pz}, {0.06f, 0.04f, podHalf * 2}, ledgeRim, -1.0f);
+        cadd({px, 0.16f, pz - podHalf}, {podHalf * 2, 0.04f, 0.06f}, ledgeRim, -1.0f);
+        liftCar_ = root_->add(std::move(car));
+        liftTarget_ = 0;
+        liftY_ = 0.0f;
+    } else {
+        roomFloors_ = 1;
+        levels_ = 1;
+    }
     // Dressing: corner pillars.
     {
         const Vec3 dark = wall * 2.6f;
@@ -905,6 +957,7 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
             add({x, sy, z}, {0.26f, 0.15f, 0.26f}, wall * 3.5f);
             add({x, sy - 0.08f, z}, {0.15f, 0.02f, 0.15f}, Vec3{0.7f, 0.86f, 0.9f}, -1.0f);
             emitters_.push_back({{x, std::min(sy, 3.8f), z}, {0, 0, 0}, 0.7f});
+            for (int f = 1; f < floors; ++f) emitters_.push_back({{x, f * floorH + 3.0f, z}, {0, 0, 0}, 0.7f});
         };
         for (int j = 0; j < along; j += 2) {
             const float t = (j - (along - 1) * 0.5f) * pitch;
@@ -956,7 +1009,7 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
             card->yaw = sl.yaw;
             card->scale = {1.9f, 2.375f, 0.06f};
         } else {
-            card->position = {sl.p.x, 1.35f + tier * tierH, sl.p.z};
+            card->position = {sl.p.x, tierY(tier), sl.p.z};
             card->yaw = sl.yaw;
             card->scale = {2.0f, 1.28f, 0.06f};
             const float nx = std::sin(sl.yaw), nz = std::cos(sl.yaw);
@@ -967,6 +1020,28 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
         addCard(std::move(card));
     }
 
+    if (floors > 1) {
+        for (int l = 0; l < floors; ++l) {
+            auto btn = std::make_unique<CardNode>(renderer_, DirEntry{}, "CALL");
+            btn->roomIndex = -100 - l;
+            btn->position = {podX_ - 1.3f, l * floorH + 1.4f, podZ_ - 0.9f};
+            btn->yaw = -kPi * 0.5f;
+            btn->scale = {0.28f, 0.5f, 0.05f};
+            addCard(std::move(btn));
+        }
+        liftBtns_.clear();
+        const int rowsN = (floors + 1) / 2;
+        const float sp = std::min(0.42f, 1.9f / rowsN);
+        for (int j = 0; j < floors; ++j) {
+            auto btn = std::make_unique<CardNode>(renderer_, DirEntry{}, j == 0 ? "G" : std::to_string(j));
+            btn->roomIndex = -10 - j;
+            const float off = 2.4f - (j / 2) * sp;
+            btn->position = {podX_ + 1.12f, off, podZ_ + 0.3f - (j % 2) * 0.4f};
+            btn->yaw = -kPi * 0.5f;
+            btn->scale = {0.3f, sp * 0.66f, 0.05f};
+            liftBtns_.push_back({addCard(std::move(btn)), off});
+        }
+    }
     {
         auto sign = std::make_unique<SignNode>(renderer_, clip(ri.name, 24) + "  -  " + std::to_string(n), 6.0f, 0.75f);
         sign->position = {0, H - 0.5f, -h + 0.02f};
@@ -977,6 +1052,7 @@ void FileRoom::enterRoom(int idx, bool setSpawn) {
     walk_.push_back({-h + 0.5f, h - 0.5f, -h + 0.5f, h - 0.5f});
     rows_ = static_cast<int>(S * 0.5f);
     extent_ = S + 20.0f;
+    roomTop_ = H - 0.4f;
     if (setSpawn) {
         spawnPos_ = {0, 1.6f, h - 2.0f};
         spawnYaw_ = 0.0f;
@@ -1015,10 +1091,15 @@ void FileRoom::resolve(Vec3& p) const {
         const float qx = std::clamp(p.x, r.x0, r.x1), qz = std::clamp(p.z, r.z0, r.z1);
         const float d = (qx - p.x) * (qx - p.x) + (qz - p.z) * (qz - p.z);
         if (d < bd) { bd = d; best.x = qx; best.z = qz; }
-        if (d == 0.0f) return;
+        if (d == 0.0f) { best = p; break; }
     }
     p.x = best.x;
     p.z = best.z;
+    if (inRoom_ && roomFloors_ > 1) {  // riding the lift car: stay inside it
+        if (std::fabs(p.x - podX_) < 1.2f && std::fabs(p.z - podZ_) < 1.2f && prevPos_.y > liftY_ + 0.2f && prevPos_.y < liftY_ + 3.0f)
+            p.y = std::clamp(p.y, liftY_ + 0.35f, liftY_ + 2.9f);
+        prevPos_ = p;
+    }
 }
 
 // Which walkway level a player at this eye height is standing on or beneath.
@@ -1071,6 +1152,13 @@ void FileRoom::resolveLobby(Vec3& p) const {
 
 // Height of the surface under a player: the lift car, a walkway slab, or the ground.
 float FileRoom::floorHeight(const Vec3& p) const {
+    if (building_ && inRoom_ && roomFloors_ > 1) {
+        const float h = roomHalf_;
+        if (std::fabs(p.x - podX_) < 1.2f && std::fabs(p.z - podZ_) < 1.2f && p.y > liftY_ + 0.2f && p.y < liftY_ + 3.0f) return liftY_;
+        const bool corner = p.x > h - 3.2f && p.z > h - 3.2f;
+        const bool band = p.x < -h + 1.6f || p.z < -h + 1.6f || p.x > h - 1.6f || p.z > h - 1.6f;
+        return band && !corner ? levelAtEye(p.y, roomFloors_) * kLevelH : 0.0f;
+    }
     if (!building_ || inRoom_ || slots_.empty() || levels_ <= 1) return 0.0f;
     if (std::fabs(p.x) < 1.35f && p.z < -hallD_ + 0.4f && p.y > liftY_ + 0.2f && p.y < liftY_ + 3.0f) return liftY_;
     const bool strip = !(p.x > -hallHW_ + kStrip && p.x < hallHW_ - kStrip && p.z > -hallD_ + kStrip && p.z < kFrontZ - kStrip);
@@ -1078,7 +1166,7 @@ float FileRoom::floorHeight(const Vec3& p) const {
 }
 
 float FileRoom::maxEye() const {
-    if (inRoom_) return 3.5f;
+    if (inRoom_) return std::max(3.5f, roomTop_);
     return levels_ > 1 ? (levels_ - 1) * kLevelH + 3.5f : 6.0f;
 }
 
@@ -1117,7 +1205,58 @@ void FileRoom::updateLights() {
     renderer_.setLights(out);
 }
 
+// Hovering a video frame for a moment turns its thumbnail into a muted, looping live preview.
+void FileRoom::updatePreview() {
+    using Clock = std::chrono::steady_clock;
+    const bool alive = previewCard_ && std::find(cards_.begin(), cards_.end(), previewCard_) != cards_.end();
+    CardNode* want = nullptr;
+    if (hovered_ && !hovered_->isDoor() && hovered_->thumbnail() && !hovered_->isParentLink &&
+        classifyFile(hovered_->entry.path, hovered_->entry.isDir) == FileKind::Video)
+        want = hovered_;
+    if (previewCard_ && (!alive || want != previewCard_)) {
+        if (alive && savedThumb_) previewCard_->setThumbnail(savedThumb_);
+        preview_.close();
+        previewCard_ = nullptr;
+        savedThumb_.reset();
+        previewLabel_.reset();
+    }
+    if (!want) { dwellCard_ = nullptr; return; }
+    if (want != previewCard_) {
+        if (dwellCard_ != want) { dwellCard_ = want; dwellStart_ = Clock::now(); return; }
+        if (Clock::now() - dwellStart_ < std::chrono::milliseconds(450)) return;
+        if (!preview_.open(want->entry.path) || !preview_.hasVideo()) { preview_.close(); dwellStart_ = Clock::now() + std::chrono::hours(1); return; }
+        preview_.setMaxVideoSize(kPrevW, kPrevH);
+        preview_.setVolume(0.0f);
+        const double dur = preview_.duration();
+        if (dur > 8.0) preview_.seek(dur * 0.2);
+        preview_.play();
+        previewCard_ = want;
+        savedThumb_ = want->thumbnail();
+        previewLabel_ = renderer_.createDynamicLabel(kPrevW, kPrevH);
+        previewBuf_.assign(static_cast<size_t>(kPrevW) * kPrevH * 4, 0);
+        for (size_t i = 3; i < previewBuf_.size(); i += 4) previewBuf_[i] = 255;
+    }
+    if (preview_.ended()) { preview_.seek(0); preview_.play(); }
+    int fw = 0, fh = 0;
+    if (preview_.takeFrame(frameBuf_, fw, fh) && fw > 0 && fh > 0) {
+        // Fit the frame inside the card face, centred on black.
+        const float s = std::min(static_cast<float>(kPrevW) / fw, static_cast<float>(kPrevH) / fh);
+        const int dw = std::max(1, static_cast<int>(fw * s)), dh = std::max(1, static_cast<int>(fh * s));
+        const int ox = (kPrevW - dw) / 2, oy = (kPrevH - dh) / 2;
+        std::fill(previewBuf_.begin(), previewBuf_.end(), uint8_t{0});
+        for (size_t i = 3; i < previewBuf_.size(); i += 4) previewBuf_[i] = 255;
+        for (int y = 0; y < dh; ++y) {
+            const uint8_t* src = frameBuf_.data() + static_cast<size_t>(std::min(fh - 1, static_cast<int>(y / s))) * fw * 4;
+            uint8_t* dst = previewBuf_.data() + (static_cast<size_t>(oy + y) * kPrevW + ox) * 4;
+            for (int x = 0; x < dw; ++x) std::memcpy(dst + x * 4, src + static_cast<size_t>(std::min(fw - 1, static_cast<int>(x / s))) * 4, 4);
+        }
+        renderer_.updateLabel(*previewLabel_, previewBuf_.data(), kPrevW, kPrevH);
+        previewCard_->setThumbnail(previewLabel_);
+    }
+}
+
 void FileRoom::pump() {
+    updatePreview();
     updateLights();
     if (building_ && cardsVisible_) {
         int budget = 40;
@@ -1145,12 +1284,14 @@ void FileRoom::pump() {
             }
         }
     }
-    if (liftCar_ && building_ && !inRoom_) {
+    if (liftCar_ && building_) {
         static auto last = std::chrono::steady_clock::now();
         const auto now = std::chrono::steady_clock::now();
         const float dt = std::min(0.1f, std::chrono::duration<float>(now - last).count());
         last = now;
-        const bool nearShaft = std::fabs(eye_.x) < 2.2f && eye_.z < -hallD_ + 3.5f && eye_.z > -hallD_ + 0.3f;
+        const bool nearShaft = inRoom_ ? (std::fabs(eye_.x - podX_) < 3.4f && std::fabs(eye_.z - podZ_) < 3.4f &&
+                                          !(std::fabs(eye_.x - podX_) < 1.2f && std::fabs(eye_.z - podZ_) < 1.2f))
+                                       : (std::fabs(eye_.x) < 2.2f && eye_.z < -hallD_ + 3.5f && eye_.z > -hallD_ + 0.3f);
         if (nearShaft) liftTarget_ = levelAtEye(eye_.y, levels_);  // the car comes to whoever walks up to it
         const float goal = liftTarget_ * kLevelH, step = 4.0f * dt;
         liftY_ += std::clamp(goal - liftY_, -step, step);

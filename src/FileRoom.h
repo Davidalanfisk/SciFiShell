@@ -1,12 +1,15 @@
 #pragma once
 // 3D file browser room: files and folders are cards on a ring around the player.
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "LCARSUI.h"
+#include "MediaPlayer.h"
 #include "SceneGraph.h"
 #include "Thumbnails.h"
 #include "Viewer.h"
@@ -81,6 +84,7 @@ public:
     const std::string& currentPath() const { return path_; }
     // Uploads finished thumbnails (a few per frame). Call once per frame from the main thread.
     void pump();
+    void updatePreview();
 
     void setHover(Node* node);
     // Activates a card: folders are opened. Returns a short status message.
@@ -151,6 +155,15 @@ private:
     std::vector<LobbySlot> slots_;
     float hallHW_ = 14.0f, hallD_ = 24.0f;
     int levels_ = 1;
+    float roomTop_ = 3.5f, roomHalf_ = 0.0f, podX_ = 0.0f, podZ_ = 0.0f;
+    int roomFloors_ = 1;
+    static constexpr int kPrevW = 960, kPrevH = 614;
+    MediaPlayer preview_;
+    CardNode* previewCard_ = nullptr;
+    CardNode* dwellCard_ = nullptr;
+    std::chrono::steady_clock::time_point dwellStart_;
+    std::shared_ptr<GpuLabel> savedThumb_, previewLabel_;
+    std::vector<uint8_t> previewBuf_, frameBuf_;
     std::vector<CardNode*> doorCards_;
     Node* liftCar_ = nullptr;
     std::vector<std::pair<CardNode*, float>> liftBtns_;  // in-car buttons and their height above the car floor
