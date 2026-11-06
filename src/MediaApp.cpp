@@ -703,7 +703,17 @@ void MediaApp::onWheel(float, float, float notches) {
 }
 
 void MediaApp::onKey(EditKey k) {
-    if (!searchFocus_) return;
+    if (!searchFocus_) {
+        if ((k == EditKey::Up || k == EditKey::Down) && host_.now && host_.setVolume) {
+            const NowInfo now = host_.now();
+            host_.setVolume(std::clamp(now.vol + (k == EditKey::Up ? 0.1f : -0.1f), 0.0f, 1.0f));
+            idleT_ = 0;
+        } else if (k == EditKey::MediaPlayPause && host_.toggle) {
+            host_.toggle();
+            idleT_ = 0;
+        }
+        return;
+    }
     if (k == EditKey::Backspace) {
         if (popUtf8(q_)) scroll_ = scrollTarget_ = 0;
     } else if (k == EditKey::Enter) {

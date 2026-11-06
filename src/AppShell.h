@@ -15,6 +15,7 @@
 #include "MediaLibrary.h"
 #include "MediaPlayer.h"
 #include "MediaApp.h"
+#include "MediaSeekGesture.h"
 #include "OnScreenKeyboard.h"
 #include "Harvi.h"
 #ifdef _WIN32
@@ -82,6 +83,8 @@ private:
     Renderer renderer_;
     Sfx sfx_;
     InputSystem input_;
+    MediaSeekGesture mediaSeek_;
+    std::string mediaSeekPath_;
     XInputController pad_;
     VRSystem vr_;
     std::unique_ptr<LCARSMenu> menu_;
@@ -314,6 +317,7 @@ private:
     std::shared_ptr<GpuLabel> kmhLabel_;
     void toggleCar();
     void updateCar(double dt, float throttle, float steer, bool handbrake, bool boost, float lookX, float lookY);
+    void leaveTrack();
     float recT_ = -1;                            // recT_ >= 0 while the view eases onto a pinned window
     Vec3 recFromPos_{}, recToPos_{};
     float recFromYaw_ = 0, recToYaw_ = 0, recFromPitch_ = 0, recToPitch_ = 0;

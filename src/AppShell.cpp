@@ -176,19 +176,9 @@ bool AppShell::init() {
     {
         StartHost h;
         h.tool = [this](Tool t) { syncWins(); runTool(t); };
-        h.app = [this](int i) {
-            syncWins();
-#ifdef _WIN32
-            launchApp(i);
-            flyToWin(focus_);
-#else
-            (void)i;
-#endif
-        };
         h.focusRow = [this](int i) { syncWins(); startFocusRow(i); };
         h.action = [this](const std::string& a) { syncWins(); startAction(a); };
         h.rows = [this] { return startRows(); };
-        h.theme = [this] { cycleTheme(); };
         start_ = std::make_unique<StartMenu>(renderer_, std::move(h));
     }
     monitor_ = std::make_unique<SysMonitor>(renderer_, [this] { return city_ ? city_->sysStats() : SystemStats{}; });
@@ -457,11 +447,12 @@ void AppShell::buildSettingsHub() {
                            }});
     shell.items.push_back({"INVERT LOOK Y", "Flip vertical look", [this, onOff] { return onOff(settings_.invertY); },
                            [this, save] { settings_.invertY = !settings_.invertY; save(); }});
-    shell.items.push_back({"CROSSHAIR", "Aiming dot", [this, onOff] { return onOff(settings_.crosshair); },
+    SettingsCategory gfx{"GRAPHICS", "Quality, lighting and fog", "SHELL", {}};
+    gfx.items.push_back({"CROSSHAIR", "Aiming dot", [this, onOff] { return onOff(settings_.crosshair); },
                            [this, save] { settings_.crosshair = !settings_.crosshair; save(); }});
-    shell.items.push_back({"FPS COUNTER", "Frame rate readout", [this, onOff] { return onOff(settings_.showFps); },
+    gfx.items.push_back({"FPS COUNTER", "Frame rate readout", [this, onOff] { return onOff(settings_.showFps); },
                            [this, save] { settings_.showFps = !settings_.showFps; save(); }});
-    shell.items.push_back({"BROWSER RESOLUTION", "Web page render quality",
+    gfx.items.push_back({"BROWSER RESOLUTION", "Web page render quality",
 #ifdef SCIFI_HAS_CEF
                            [this] { return WebBrowser::qualityText(settings_.webQuality); },
                            [this, save] {
@@ -472,7 +463,7 @@ void AppShell::buildSettingsHub() {
 #else
                            [] { return std::string("N/A"); }, nullptr});
 #endif
-    shell.items.push_back({"DISPLAY", "Shell window size", [this] {
+    gfx.items.push_back({"DISPLAY", "Shell window size", [this] {
                                int w = 0, h = 0, dw = 0, dh = 0;
                                SDL_GetWindowSizeInPixels(window_, &w, &h);
                                SDL_DisplayMode dm{};
@@ -484,7 +475,6 @@ void AppShell::buildSettingsHub() {
     shell.items.push_back({"EXIT SHELL", "Quit the application", nullptr, [this] { running_ = false; }});
     cats.push_back(std::move(shell));
 
-    SettingsCategory gfx{"GRAPHICS", "Performance and quality", "SHELL", {}};
     gfx.items.push_back({"CITY", "Show the city (F9). Off saves a lot of GPU and memory", [this, onOff] { return onOff(settings_.showCity); },
                          [this] { setCityEnabled(!settings_.showCity); }});
     gfx.items.push_back({"ANTI-ALIASING", "Edge smoothing (restart to apply)",
@@ -527,10 +517,7 @@ void AppShell::buildSettingsHub() {
                              settings_.lightAmbient = 0.0f; settings_.lightFalloff = 0.6f;
                              save();
                          }});
-    cats.push_back(std::move(gfx));
-
-    SettingsCategory fog{"FOG", "Atmosphere: density, height, colour", "SHELL", {}};
-    auto fogSlider = [this, &fog](const char* title, const char* hint, float* v, float lo, float hi) {
+    auto fogSlider = [this, &gfx](const char* title, const char* hint, float* v, float lo, float hi) {
         SettingsItem it;
         it.title = title;
         it.hint = hint;
@@ -539,23 +526,23 @@ void AppShell::buildSettingsHub() {
         it.sliderSet = [this, v](float x) { *v = x; settings_.save(); };
         it.lo = lo;
         it.hi = hi;
-        fog.items.push_back(std::move(it));
+        gfx.items.push_back(std::move(it));
     };
-    fogSlider("DENSITY", "How thick the fog is with distance", &settings_.fogDensity, 0.0f, 3.0f);
-    fogSlider("HEIGHT", "How high it climbs up the towers", &settings_.fogHeight, 0.5f, 3.0f);
-    fogSlider("BRIGHTNESS", "Lower keeps floors dark", &settings_.fogBright, 0.3f, 3.0f);
-    fogSlider("COLOUR", "Violet, blue, teal, grey", &settings_.fogTint, 0.0f, 1.0f);
-    fogSlider("START DISTANCE", "Clear space around you", &settings_.fogStart, 0.0f, 150.0f);
+    fogSlider("FOG DENSITY", "How thick the fog is with distance", &settings_.fogDensity, 0.0f, 3.0f);
+    fogSlider("FOG HEIGHT", "How high it climbs up the towers", &settings_.fogHeight, 0.5f, 3.0f);
+    fogSlider("FOG BRIGHTNESS", "Lower keeps floors dark", &settings_.fogBright, 0.3f, 3.0f);
+    fogSlider("FOG COLOUR", "Violet, blue, teal, grey", &settings_.fogTint, 0.0f, 1.0f);
+    fogSlider("FOG START DISTANCE", "Clear space around you", &settings_.fogStart, 0.0f, 150.0f);
     fogSlider("GROUND MIST", "Low bank hugging the streets", &settings_.fogMist, 0.0f, 3.0f);
     fogSlider("FLOOR CLARITY", "Keeps floors dark seen from above", &settings_.fogClarity, 0.1f, 1.0f);
     fogSlider("NEON GLOW", "How much the fog catches neon", &settings_.fogGlow, 0.0f, 0.4f);
-    fog.items.push_back({"RESET FOG", "Back to the default fog", nullptr, [this, save] {
+    gfx.items.push_back({"RESET FOG", "Back to the default fog", nullptr, [this, save] {
                              settings_.fogDensity = 1.6f; settings_.fogHeight = 1.0f; settings_.fogBright = 1.0f;
                              settings_.fogTint = 0.66f; settings_.fogStart = 0.0f; settings_.fogMist = 1.0f;
                              settings_.fogClarity = 0.5f; settings_.fogGlow = 0.07f;
                              save();
                          }});
-    cats.push_back(std::move(fog));
+    cats.push_back(std::move(gfx));
 
     SettingsCategory wm{"WINDOWS", "Arrange and move windows", "SHELL", {}};
     wm.items.push_back({"ARRANGE IN ARC", "Curve open windows around you", nullptr, [this] { arrangeArc(); }});
@@ -1076,19 +1063,6 @@ void AppShell::toggleStart() {
         start_->close();
         return;
     }
-#ifdef _WIN32
-    if (!start_->appsLoaded()) {
-        std::vector<std::string> names;
-        std::vector<Bitmap> icons;
-        for (size_t i = 0; i < pinnedCount_ && i < catalog_.size(); ++i) {
-            Bitmap bm;
-            if (!loadAppIcon(catalog_[i].launch, 128, bm, true)) bm = makeLabel(catalog_[i].name.substr(0, 1), 90.0f, FontFace::UI, Color8{}, 128, 128);
-            names.push_back(catalog_[i].name);
-            icons.push_back(std::move(bm));
-        }
-        start_->setApps(std::move(names), std::move(icons));
-    }
-#endif
     openPanel(start_.get());
 }
 
@@ -1723,20 +1697,26 @@ Vec3 AppShell::mouseRayDirection(int mx, int my) const {
     return normalize(camera_.world().transformDir({ndcX * t * aspect, ndcY * t, -1.0f}));
 }
 
+void AppShell::leaveTrack() {
+    if (!onTrack_ || !city_) return;
+    onTrack_ = false;
+    City::TrackFrame f0;
+    if (city_->trackSample(0.0f, f0)) {
+        carPos_ = {f0.p.x, 0.0f, f0.p.z};
+        carYaw_ = std::atan2(-f0.flat.x, -f0.flat.z);
+        carPos_.y = city_->floorAt({carPos_.x, 3.0f, carPos_.z}, 1.7f, 1.0f);
+    }
+    carVel_ = {};
+    carSpeed_ = carVy_ = 0.0f;
+    trackCool_ = 3.0f;
+}
+
 // Summon the car just ahead of the player and climb in, or climb out again leaving it parked.
 void AppShell::toggleCar() {
     if (!cityMode_ || !city_ || vrOn_) return;
     if (driving_) {
         driving_ = false;
-        if (onTrack_) {
-            onTrack_ = false;
-            City::TrackFrame f0;
-            if (city_->trackSample(0.0f, f0)) {
-                carPos_ = {f0.p.x, 0.0f, f0.p.z};
-                carYaw_ = std::atan2(-f0.flat.x, -f0.flat.z);
-                carPos_.y = city_->floorAt({carPos_.x, 3.0f, carPos_.z}, 1.7f, 1.0f);
-            }
-        }
+        leaveTrack();
         const Vec3 rt{std::cos(carYaw_), 0, -std::sin(carYaw_)};
         camera_.position = {carPos_.x + rt.x * 3.0f, carPos_.y + 1.7f, carPos_.z + rt.z * 3.0f};
         camera_.yaw = carYaw_;
@@ -2153,10 +2133,14 @@ void AppShell::handleSwitcher(FrameInput& in, PadState& pad) {
         switcher_->close();
     }
     vrInput_.selectPressed = vrInput_.backPressed = false;
+    mediaSeek_.reset();
     in.keys.clear();
     in.text.clear();
     in.click = false;
     in.escape = in.back = in.select = in.space = in.left = in.right = in.up = in.down = false;
+    in.mediaSeekLeft = in.mediaSeekRight = false;
+    in.mediaSeekLeftReleased = in.mediaSeekRightReleased = false;
+    in.mediaVolumeUp = in.mediaVolumeDown = in.mediaPlayPause = false;
     in.wheel = 0.0f;
     pad.aPressed = pad.bPressed = pad.leftPressed = pad.rightPressed = pad.upPressed = pad.downPressed = false;
 }
@@ -2222,8 +2206,8 @@ void AppShell::tick(double dt) {
         // A text field taking focus brings the keyboard up for gamepad and VR controller users.
         if (winTypingNow && !wasTyping_ && lastSource_ != 0 && !osk_->isOpen()) toggleKeyboard();
         wasTyping_ = winTypingNow;
-        if (pad.rbPressed || vrInput_.switchPressed) in.tabStep += 1;
-        if (pad.lbPressed) in.tabStep -= 1;
+        if ((!driving_ && pad.rbPressed) || vrInput_.switchPressed) in.tabStep += 1;
+        if (!driving_ && pad.lbPressed) in.tabStep -= 1;
     }
     {
         std::vector<std::string> picked = std::move(in.dropped);
@@ -2265,6 +2249,12 @@ void AppShell::tick(double dt) {
     const bool kbMove = !typing || (SDL_GetModState() & KMOD_ALT) != 0;
     float kbX = kbMove ? in.moveX : 0.0f, kbY = kbMove ? in.moveY : 0.0f, kbZ = kbMove ? in.moveZ : 0.0f;
     if (viewer_->active() && !viewer_->isText()) kbZ = std::min(kbZ, 0.0f);  // Space is play/pause in the media viewer
+    const WinRef mediaFullWin = fullWin();
+    if (state_ == State::FileRoom && !switcher_->isOpen() && !appsPanel_->isOpen() && !viewer_->active() &&
+        !renaming_ && !winTypingNow && focus_.kind == kWinPanel && focus_.p == media_.get() &&
+        (!mediaFullWin.p || mediaFullWin == focus_) &&
+        !(SDL_GetModState() & (KMOD_CTRL | KMOD_ALT | KMOD_GUI | KMOD_SHIFT)))
+        kbZ = std::min(kbZ, 0.0f);
     kbZ = clampf(kbZ + pad.rt - pad.lt + vrInput_.lookY, -1, 1);  // right trigger = up, left trigger = down; VR right stick up / down climbs
     float moveX = clampf(kbX + pad.lx + vrInput_.moveX, -1, 1);
     float moveY = clampf(kbY + pad.ly + vrInput_.moveY, -1, 1);
@@ -2286,6 +2276,11 @@ void AppShell::tick(double dt) {
     bool pointerSelect = in.click || vrInput_.selectPressed;
     bool back = in.back || pad.bPressed || vrInput_.backPressed;
     bool vrPointer = vrOn_ && vrInput_.valid && !vrGaze_;
+    if (driving_ && onTrack_ && (in.escape || pad.yPressed) && !typing && !switcher_->isOpen() &&
+        !appsPanel_->isOpen() && !viewer_->active() && !fullWin().p) {
+        leaveTrack();
+        in.escape = pad.yPressed = false;
+    }
     if ((in.carToggle || (driving_ && pad.yPressed)) && !(focus_.p && winTyping(focus_))) toggleCar();
     if (in.carCam && driving_ && !typing) carFirst_ = !carFirst_;
     if (driving_) pointerSelect = keySelect = false;
@@ -2497,6 +2492,10 @@ void AppShell::tick(double dt) {
                     if (!in.text.empty()) winText(f, in.text);
                     in.keys.clear();
                     in.text.clear();
+                } else if (f.kind == kWinPanel && f.p == media_.get() && !viewer_->active() && (!fsw.p || fsw == f)) {
+                    if (in.mediaVolumeUp) { winKey(f, EditKey::Up); up = pad.upPressed; }
+                    if (in.mediaVolumeDown) { winKey(f, EditKey::Down); down = pad.downPressed; }
+                    if (in.mediaPlayPause) { winKey(f, EditKey::MediaPlayPause); in.space = false; }
                 } else if (f.kind == kWinBrowser) {
                     for (EditKey k : in.keys)
                         if (k == EditKey::Up || k == EditKey::Down || k == EditKey::PageUp || k == EditKey::PageDown || k == EditKey::Home || k == EditKey::End)
@@ -2690,7 +2689,9 @@ void AppShell::tick(double dt) {
         } else {
             if (driving_) {
                 const Uint8* ks = SDL_GetKeyboardState(nullptr);
-                updateCar(dt, clampf(moveY + scriptThrottle_, -1, 1), clampf(moveX + scriptSteer_, -1, 1), ks[SDL_SCANCODE_SPACE] != 0 || pad.lt > 0.5f, in.shift || pad.rt > 0.5f, lookX, lookY);
+                updateCar(dt, clampf(kbY + pad.rt - pad.lt + vrInput_.moveY + scriptThrottle_, -1, 1),
+                          clampf(moveX + scriptSteer_, -1, 1), ks[SDL_SCANCODE_SPACE] != 0 || pad.lbHeld,
+                          in.shift || pad.rbHeld, lookX, lookY);
             } else {
                 updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed);
             }
@@ -2703,7 +2704,8 @@ void AppShell::tick(double dt) {
                 camera_.yaw = 0.0f;
             }
             hudTarget_.clear();
-            if (driving_) hudTarget_ = "F10 EXIT   C CAMERA   SPACE DRIFT   SHIFT BOOST";
+            if (driving_) hudTarget_ = onTrack_ ? "ESC / Y EXIT TRACK   RT/LT DRIVE   RB/LB BOOST / DRIFT"
+                                               : "F10 / Y EXIT   C CAMERA   RT/LT DRIVE   RB/LB BOOST / DRIFT";
             if (cityMode_ && !driving_) {
                 room_->setHover(nullptr);
                 std::string path, name;
@@ -2768,6 +2770,26 @@ void AppShell::tick(double dt) {
         }
     }
 
+    {
+        const WinRef fullscreen = fullWin();
+        const bool focused = state_ == State::FileRoom && !switcher_->isOpen() && !appsPanel_->isOpen() &&
+                             !viewer_->active() && !renaming_ && !input_.capturing && focus_.kind == kWinPanel &&
+                             focus_.p == media_.get() && !media_->wantsText() &&
+                             (!fullscreen.p || fullscreen == focus_) &&
+                             (SDL_GetWindowFlags(window_) & SDL_WINDOW_INPUT_FOCUS) &&
+                             !(SDL_GetModState() & (KMOD_CTRL | KMOD_ALT | KMOD_GUI | KMOD_SHIFT));
+        const NowInfo now = mediaNow();
+        if (now.path != mediaSeekPath_) {
+            mediaSeek_.reset();
+            mediaSeekPath_ = now.path;
+        }
+        double target = 0;
+        if (mediaSeek_.update(focused && now.active && !now.live && !now.loading,
+                              in.mediaSeekLeft, in.mediaSeekRight, in.mediaSeekLeftHeld, in.mediaSeekRightHeld,
+                              in.mediaSeekLeftReleased, in.mediaSeekRightReleased,
+                              static_cast<double>(SDL_GetTicks64()) / 1000.0, now.pos, now.dur, target))
+            mediaPlayer_.seek(target);
+    }
     if (riding_) rideStep(dt);
     if (tourActive_) tourStep(dt);
     {

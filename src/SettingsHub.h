@@ -42,7 +42,7 @@ public:
     void close();
     void openPage(const std::string& name) {
         for (size_t i = 0; i < cats_.size(); ++i)
-            if (cats_[i].name == name) { page_ = static_cast<int>(i); sel_ = 0; dirty_ = true; }
+            if (cats_[i].name == name) { page_ = static_cast<int>(i); sel_ = 0; scrollRow_ = 0; dirty_ = true; }
     }
     bool isOpen() const { return open_; }
     void hide();  // minimise: keeps the current page; open() brings it back
@@ -87,6 +87,7 @@ public:
     bool toPanel(Vec3 o, Vec3 d, float& px, float& py, float& t) const;
     int hitButton(Vec3 o, Vec3 d) const;  // 1 fullscreen, 2 close, 0 none
     void applyFullscreen();
+    void ensureSelectionVisible();
     int W_ = 1832, H_ = 960;  // bitmap size: fullscreen widens it to the screen's shape
 
     Rect fsRect_{0, 0, 0, 0}, closeRect_{0, 0, 0, 0}, hideRect_{0, 0, 0, 0};
@@ -110,6 +111,7 @@ public:
     int page_ = -1;  // -1 home, otherwise a category index
     int sel_ = 0;
     int homeSel_ = 0;
+    int scrollRow_ = 0;
     bool open_ = false;
     bool dirty_ = true;
     Vec3 fallbackFlat_{0, 0, -1};

@@ -20,6 +20,11 @@ FrameInput InputSystem::poll() {
             case SDL_QUIT: in.quit = true; break;
             case SDL_WINDOWEVENT:
                 if (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) in.resized = true;
+                if (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                    seekLeftHeld_ = seekRightHeld_ = false;
+                    in.mediaSeekLeft = in.mediaSeekRight = false;
+                    in.mediaSeekLeftReleased = in.mediaSeekRightReleased = false;
+                }
                 // A hosted program taking focus drops SDL's mouse capture; re-establish it as soon as focus returns.
                 if (e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED || e.window.event == SDL_WINDOWEVENT_ENTER) {
                     if (relative_) {
@@ -85,6 +90,13 @@ FrameInput InputSystem::poll() {
                 if (e.key.keysym.sym == arrangeKey) in.arrange = true;
                 if ((e.key.keysym.mod & KMOD_ALT) && e.key.keysym.sym == SDLK_LEFT) in.navBack = true;
                 if ((e.key.keysym.mod & KMOD_ALT) && e.key.keysym.sym == SDLK_RIGHT) in.navForward = true;
+                if (!(e.key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI | KMOD_SHIFT))) {
+                    if (e.key.keysym.sym == SDLK_LEFT) { in.mediaSeekLeft = true; seekLeftHeld_ = true; }
+                    if (e.key.keysym.sym == SDLK_RIGHT) { in.mediaSeekRight = true; seekRightHeld_ = true; }
+                    if (e.key.keysym.sym == SDLK_UP) in.mediaVolumeUp = true;
+                    if (e.key.keysym.sym == SDLK_DOWN) in.mediaVolumeDown = true;
+                    if (e.key.keysym.sym == SDLK_SPACE) in.mediaPlayPause = true;
+                }
                 if (e.key.keysym.sym == SDLK_b && !ctrl) in.browser = true;
                 if (ctrl && e.key.keysym.sym == SDLK_v) break;  // Ctrl+V is paste, not "toggle VR"
                 switch (e.key.keysym.sym) {
@@ -103,6 +115,8 @@ FrameInput InputSystem::poll() {
                 break;
             }
             case SDL_KEYUP:
+                if (e.key.keysym.sym == SDLK_LEFT) { in.mediaSeekLeftReleased = seekLeftHeld_; seekLeftHeld_ = false; }
+                if (e.key.keysym.sym == SDLK_RIGHT) { in.mediaSeekRightReleased = seekRightHeld_; seekRightHeld_ = false; }
                 switch (e.key.keysym.sym) {
                     case SDLK_LALT: case SDLK_RALT: case SDLK_LCTRL: case SDLK_RCTRL: in.modReleased = true; break;
                     default: break;
@@ -125,6 +139,8 @@ FrameInput InputSystem::poll() {
         }
     }
     const Uint8* k = SDL_GetKeyboardState(nullptr);
+    in.mediaSeekLeftHeld = seekLeftHeld_;
+    in.mediaSeekRightHeld = seekRightHeld_;
     in.moveY = (k[SDL_SCANCODE_W] ? 1.0f : 0.0f) - (k[SDL_SCANCODE_S] ? 1.0f : 0.0f);
     in.moveX = (k[SDL_SCANCODE_D] ? 1.0f : 0.0f) - (k[SDL_SCANCODE_A] ? 1.0f : 0.0f);
     in.moveZ = (k[SDL_SCANCODE_SPACE] ? 1.0f : 0.0f) - (k[SDL_SCANCODE_LCTRL] ? 1.0f : 0.0f);

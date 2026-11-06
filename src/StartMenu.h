@@ -1,6 +1,6 @@
 #pragma once
 // The Start menu: a normal floating window (so it carries, moves, resizes and arranges like every other window) that
-// launches the built-in tools and Windows apps, lists the running windows, arranges them and holds the power options.
+// launches the built-in tools, lists the running windows, arranges them and holds the power options.
 #include <functional>
 #include <string>
 #include <vector>
@@ -17,19 +17,15 @@ struct StartHost {
         int state = 0;  // 0 open, 1 minimised, 2 has focus
     };
     std::function<void(Tool)> tool;
-    std::function<void(int)> app;        // index into the Windows apps list
     std::function<void(int)> focusRow;   // index into rows()
     std::function<void(const std::string&)> action;  // arc | tile | min | exit | restart | shutdown | lock | sleep
     std::function<std::vector<Row>()> rows;
-    std::function<void()> theme;
 };
 
 class StartMenu : public PanelApp {
 public:
     StartMenu(Renderer& renderer, StartHost host);
     const char* name() const override { return "START"; }
-    void setApps(std::vector<std::string> names, std::vector<Bitmap> icons);
-    bool appsLoaded() const { return appsLoaded_; }
     void focusSearch() { searchFocus_ = true; invalidate(); }
     bool wantsText() const override { return searchFocus_; }
     bool back() override;
@@ -46,8 +42,8 @@ protected:
     double repaintInterval() const override { return 1.0; }
 
 private:
-    enum HitType { kTool = 1, kApp, kRow, kAct, kSearch, kPowerToggle };
-    enum Act { kArc = 1, kTile, kMin, kSettings, kTheme, kExit, kRestart, kShut, kLock, kSleep, kClear };
+    enum HitType { kTool = 1, kRow, kAct, kSearch, kPowerToggle };
+    enum Act { kArc = 1, kTile, kMin, kExit, kRestart, kShut, kLock, kSleep, kClear };
     struct Hit {
         ui::Rect r;
         int type, arg;
@@ -62,9 +58,6 @@ private:
     int hitAt(float x, float y) const;
 
     StartHost host_;
-    std::vector<std::string> appNames_;
-    std::vector<Bitmap> appIcons_;
-    bool appsLoaded_ = false;
     std::vector<Hit> hits_;
     std::vector<StartHost::Row> rows_;
     std::string query_;

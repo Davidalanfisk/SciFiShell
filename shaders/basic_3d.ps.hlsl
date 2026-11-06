@@ -9,12 +9,15 @@ cbuffer Constants
     float4   g_Alt;
     float4   g_Lights[24];  // interior light points: xyz position, w intensity
     float4   g_Tune[4];     // lighting sliders: [0] spot gain, wall cap, wall base, ambient; [1].x falloff, .y fog density, .z fog height, .w fog brightness
+    float4   g_Eye;
 };
 
 Texture2D g_Tex;
 SamplerState g_Tex_sampler;
+#if SCIFI_REFLECTION
 Texture2D g_Refl;
 SamplerState g_Refl_sampler;
+#endif
 
 float hash12(float2 p)
 {
@@ -466,7 +469,7 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         Color = float4(skyColor(d, tm, g_Accent.rgb, g_Alt.rgb), 1.0);
         return;
     }
-    // Tron-style floor: dark glass with glowing grid lines, brighter every 5 m, fading into the void.
+    // Dark glass floor with glowing grid lines, brighter every 5 m, fading into the void.
     if (g_Params.w > 0.5)
     {
         // The floor is a thin cube with no culling and no depth write: drop its underside and sides so only the y=0 top
@@ -562,7 +565,11 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
             for (int i = -3; i <= 3; ++i)
             {
                 float w = exp(-0.28 * i * i);
+                #if SCIFI_REFLECTION
                 float4 s = g_Refl.SampleLevel(g_Refl_sampler, uv + float2(jx, i * blurV), 0);
+                #else
+                float4 s = float4(0, 0, 0, 0);
+                #endif
                 reflSum += s.rgb * w;
                 cov += s.a * w;
                 wsum += w;
@@ -638,6 +645,10 @@ void main(in PSInput In, out float4 Color : SV_TARGET)
         float sp = spillLight(In.WPos, n);
         sp = g_Tune[0].y * sp / (g_Tune[0].y + sp) + g_Tune[0].z;
         spillAdd = float3(0.14, 0.45, 0.6) * sp * (0.3 + base * 8.0) * (1.0 - 0.5 * seam * detailK);
+        float3 incident = normalize(In.WPos - g_Eye.xyz);
+        float3 reflected = reflect(incident, n);
+        float gloss = (0.6 + 0.8 * hash12(pid + 7.0)) * (1.0 - 0.8 * seam * detailK);
+        spillAdd += glossLights(In.WPos, reflected, 28.0 + 40.0 * hash12(pid)) * gloss * 0.6;
         base += float3(0.2, 0.8, 1.0) * 0.05 * seam * lineRow * detailK;
         float below = smoothstep(0.0, 2.6, In.WPos.y);
         float ceilGlow = smoothstep(4.5, 8.5, In.WPos.y);

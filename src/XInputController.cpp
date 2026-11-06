@@ -92,6 +92,8 @@ PadState XInputController::poll() {
         rb = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
     }
 #endif
+    s.lbHeld = lb;
+    s.rbHeld = rb;
     s.yPressed = y && !impl_->prevY;
     impl_->prevY = y;
     s.aPressed = a && !impl_->prevA;

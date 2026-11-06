@@ -14,7 +14,7 @@ namespace sf {
 namespace {
 constexpr int kW = 1832, kH = 960, kPad = 40, kGap = 24;
 constexpr int kCols = 5, kHomeTop = 140, kHomeCardH = 240;
-constexpr int kListTop = 236, kRowH = 96, kRowGap = 16, kMaxItems = 12;
+constexpr int kListTop = 236, kRowH = 96, kRowGap = 16, kVisibleRows = 6;
 constexpr float kWorldW = 2.0f, kDist = 1.7f;
 
 void fillRoundRect(Bitmap& bm, float x0, float y0, float x1, float y1, float r, Color8 c) {
@@ -57,6 +57,7 @@ void SettingsHub::open(Vec3 eye, Vec3 forward) {
     if (!hidden_) {
         page_ = -1;
         sel_ = homeSel_ = 0;
+        scrollRow_ = 0;
     }
     hidden_ = false;
     open_ = true;
@@ -70,7 +71,7 @@ void SettingsHub::refreshValues() {
 }
 
 std::string SettingsHub::signature() const {
-    std::string s = std::to_string(page_) + ":" + std::to_string(sel_) + ":" + currentTheme().name + ":" +
+    std::string s = std::to_string(page_) + ":" + std::to_string(sel_) + ":" + std::to_string(scrollRow_) + ":" + currentTheme().name + ":" +
                     std::to_string(hoverBtn_) + (fullscreen_ ? "F" : "W");
     for (const std::string& v : vals_) s += "|" + v;
     return s;
@@ -130,10 +131,14 @@ void SettingsHub::rebuild() {
         rects_.push_back(br);
         ui::button(bm, ui::Rect{br.x0, br.y0, br.x1, br.y1}, "< BACK", sel_ == 0 ? ui::State::Selected : ui::State::Normal, false, 30);
         const float cw = static_cast<float>(W_ - 2 * kPad - kGap) / 2;
-        const int n = std::min(static_cast<int>(c.items.size()), kMaxItems);
+        const int n = static_cast<int>(c.items.size());
         for (int i = 0; i < n; ++i) {
+            if (i / 2 < scrollRow_ || i / 2 >= scrollRow_ + kVisibleRows) {
+                rects_.push_back({-1, -1, -1, -1});
+                continue;
+            }
             const SettingsItem& it = c.items[static_cast<size_t>(i)];
-            const float x = kPad + (i % 2) * (cw + kGap), y = static_cast<float>(kListTop + (i / 2) * (kRowH + kRowGap));
+            const float x = kPad + (i % 2) * (cw + kGap), y = static_cast<float>(kListTop + (i / 2 - scrollRow_) * (kRowH + kRowGap));
             const Rect r{x, y, x + cw, y + kRowH};
             rects_.push_back(r);
             card(r, sel_ == i + 1);
@@ -152,6 +157,10 @@ void SettingsHub::rebuild() {
                 drawText(bm, x + cw - 28 - measureText(v, 30, FontFace::UIBold), y + 60, v, 30, FontFace::UIBold, tk.accent);
             }
         }
+        if (n > kVisibleRows * 2)
+            ui::labelRight(bm, static_cast<float>(W_ - kPad), 203, "SCROLL / ARROWS  " + std::to_string(scrollRow_ + 1) + " - " +
+                           std::to_string(std::min(scrollRow_ + kVisibleRows, (n + 1) / 2)) + " / " + std::to_string((n + 1) / 2),
+                           20, FontFace::UI, tk.dim);
     }
     if (!rects_.empty()) sel_ = std::clamp(sel_, 0, static_cast<int>(rects_.size()) - 1);
     aspect_ = static_cast<float>(bm.w) / bm.h;
@@ -162,7 +171,7 @@ int SettingsHub::hitIndex(Vec3 o, Vec3 d) const {
     float px, py, t;
     if (!toPanel(o, d, px, py, t)) return -1;
     for (size_t i = 0; i < rects_.size(); ++i)
-        if (px >= rects_[i].x0 && px <= rects_[i].x1 && py >= rects_[i].y0 && py <= rects_[i].y1) return static_cast<int>(i);
+        if (rects_[i].x0 >= 0 && px >= rects_[i].x0 && px <= rects_[i].x1 && py >= rects_[i].y0 && py <= rects_[i].y1) return static_cast<int>(i);
     return -1;
 }
 
@@ -277,18 +286,53 @@ void SettingsHub::hide() {
 }
 
 void SettingsHub::step(int delta) {
+    if (page_ >= 0 && page_ < static_cast<int>(cats_.size())) {
+        const int rows = (static_cast<int>(cats_[static_cast<size_t>(page_)].items.size()) + 1) / 2;
+        const int next = std::clamp(scrollRow_ + delta, 0, std::max(0, rows - kVisibleRows));
+        if (next != scrollRow_) {
+            scrollRow_ = next;
+            if (sel_ > 0) {
+                const int first = scrollRow_ * 2 + 1;
+                const int last = std::min(static_cast<int>(cats_[static_cast<size_t>(page_)].items.size()), (scrollRow_ + kVisibleRows) * 2);
+                sel_ = std::clamp(sel_, first, last);
+            }
+            dirty_ = true;
+        }
+        return;
+    }
     const int n = static_cast<int>(rects_.size());
-    if (n > 0) sel_ = ((sel_ + delta) % n + n) % n;
+    if (n > 0) {
+        sel_ = ((sel_ + delta) % n + n) % n;
+        ensureSelectionVisible();
+    }
+}
+
+void SettingsHub::ensureSelectionVisible() {
+    if (page_ < 0 || sel_ < 1) return;
+    const int row = (sel_ - 1) / 2;
+    if (row < scrollRow_) scrollRow_ = row;
+    if (row >= scrollRow_ + kVisibleRows) scrollRow_ = row - kVisibleRows + 1;
+    dirty_ = true;
 }
 
 void SettingsHub::move(int dx, int dy) {
     if (rects_.empty()) return;
+    if (page_ >= 0 && dy != 0 && sel_ > 0) {
+        int next = sel_ + 2 * dy;
+        if (dy > 0 && next == static_cast<int>(rects_.size()) && sel_ + 1 < next)
+            --next;
+        if (next >= 1 && next < static_cast<int>(rects_.size())) {
+            sel_ = next;
+            ensureSelectionVisible();
+            return;
+        }
+    }
     const Rect& cur = rects_[static_cast<size_t>(sel_)];
     const float cx = (cur.x0 + cur.x1) * 0.5f, cy = (cur.y0 + cur.y1) * 0.5f;
     int best = -1;
     float bestScore = 1e9f;
     for (size_t i = 0; i < rects_.size(); ++i) {
-        if (static_cast<int>(i) == sel_) continue;
+        if (static_cast<int>(i) == sel_ || rects_[i].x0 < 0) continue;
         const float ox = (rects_[i].x0 + rects_[i].x1) * 0.5f - cx, oy = (rects_[i].y0 + rects_[i].y1) * 0.5f - cy;
         const float along = dx != 0 ? ox * dx : oy * dy, perp = dx != 0 ? std::fabs(oy) : std::fabs(ox);
         if (along < 20.0f) continue;
@@ -305,6 +349,7 @@ void SettingsHub::activateSelected() {
             homeSel_ = sel_;
             page_ = sel_;
             sel_ = 1;
+            scrollRow_ = 0;
             dirty_ = true;
         }
         return;
@@ -365,6 +410,7 @@ bool SettingsHub::back() {
     }
     if (page_ < 0) return false;
     page_ = -1;
+    scrollRow_ = 0;
     sel_ = homeSel_;
     dirty_ = true;
     return true;

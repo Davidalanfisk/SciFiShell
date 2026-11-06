@@ -33,6 +33,7 @@ struct Constants {
     float alt[4];     // theme alert colour
     float lights[96]; // interior light points: xyz + intensity, read by basic_3d.ps only
     float tune[16];   // lighting sliders, read by basic_3d.ps only
+    float eye[4];
 };
 constexpr TEXTURE_FORMAT kColorFormat = TEX_FORMAT_RGBA8_UNORM_SRGB;
 constexpr TEXTURE_FORMAT kDepthFormat = TEX_FORMAT_D32_FLOAT;
@@ -316,6 +317,8 @@ bool Renderer::createPipeline(Pipeline& out, const char* name, const char* vsFil
     sci.Desc.ShaderType = SHADER_TYPE_PIXEL;
     sci.Desc.Name = psFile;
     sci.FilePath = psFile;
+    ShaderMacro macros[] = {{"SCIFI_REFLECTION", reflection ? "1" : "0"}};
+    sci.Macros = {macros, 1};
     device_->CreateShader(sci, &ps);
     if (!vs || !ps) {
         std::fprintf(stderr, "Failed to compile shaders for pipeline '%s'\n", name);
@@ -653,6 +656,8 @@ void Renderer::bindLabel(GpuLabel& label) {
         p.pso->CreateShaderResourceBinding(&srb, true);
         if (auto* var = srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_Tex"))
             var->Set(label.texture->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+        if (auto* var = srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_Refl"))
+            var->Set(label.texture->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
     };
     bind(panelPipeline_, label.panelSRB);
     bind(solidPipeline_, label.solidSRB);
@@ -675,6 +680,8 @@ void Renderer::draw(Pipeline& pipeline, IShaderResourceBinding* srb, const Mesh&
         std::memcpy(cb->alt, alt_, sizeof(cb->alt));
         std::memcpy(cb->lights, lights_, sizeof(cb->lights));
         std::memcpy(cb->tune, tune_, sizeof(cb->tune));
+        const Vec3 eye = view_.rigidInverse().transformPoint({0, 0, 0});
+        cb->eye[0] = eye.x; cb->eye[1] = eye.y; cb->eye[2] = eye.z; cb->eye[3] = 0.0f;
     }
     context_->SetPipelineState(pipeline.pso);
     context_->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -768,8 +775,11 @@ void Renderer::drawBuilding(const GpuLabel& any, const Mat4& world, Vec3 neon, f
     const float params[4] = {emerge, fill, flash, static_cast<float>(kind)};
     Vec3 eye = view_.rigidInverse().transformPoint({0, 0, 0});
     const float eyeL[4] = {eye.x, eye.y, eye.z, 0};
-    if (kind == 6 || kind == 10) draw(floorPipeline_, any.floorSRB, cube_, world, color, params, eyeL);  // glass pane: blended, no depth write
-    else draw(solidPipeline_, any.solidSRB, cube_, world, color, params, eyeL);
+    if (kind == 6 || kind == 10) {
+        if (auto* var = any.floorSRB->GetVariableByName(SHADER_TYPE_PIXEL, "g_Refl"))
+            var->Set(any.texture->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+        draw(floorPipeline_, any.floorSRB, cube_, world, color, params, eyeL);  // glass pane: blended, no depth write
+    } else draw(solidPipeline_, any.solidSRB, cube_, world, color, params, eyeL);
 }
 
 void Renderer::drawHolo(const GpuLabel& any, int shape, const Mat4& world, Vec3 color, float emerge, float alpha, float glow) {

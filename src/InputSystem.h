@@ -8,7 +8,7 @@
 namespace sf {
 
 // Text-editing keys. Unlike the edge-triggered flags below these also fire on key repeat.
-enum class EditKey { Backspace, Delete, Enter, Tab, Left, Right, Up, Down, Home, End, PageUp, PageDown, DocStart, DocEnd, Save, Paste, Edit, Copy, Cut, SelectAll, Undo };
+enum class EditKey { Backspace, Delete, Enter, Tab, Left, Right, Up, Down, Home, End, PageUp, PageDown, DocStart, DocEnd, Save, Paste, Edit, Copy, Cut, SelectAll, Undo, MediaPlayPause };
 
 struct FrameInput {
     std::vector<EditKey> keys;      // this frame's editing keys, in order
@@ -21,6 +21,10 @@ struct FrameInput {
     bool escape = false;            // Escape pressed this frame
     float moveZ = 0;                // fly: +1 space, -1 left ctrl
     bool left = false, right = false, fullscreen = false;  // edge-triggered (viewer shortcuts: seek, F)
+    bool mediaSeekLeft = false, mediaSeekRight = false;  // unmodified arrow presses
+    bool mediaSeekLeftReleased = false, mediaSeekRightReleased = false;
+    bool mediaSeekLeftHeld = false, mediaSeekRightHeld = false;
+    bool mediaVolumeUp = false, mediaVolumeDown = false, mediaPlayPause = false;
     bool shift = false;             // left shift held (movement boost)
     bool click = false;             // left mouse button pressed this frame
     bool clickUp = false;           // left mouse button released this frame
@@ -63,6 +67,7 @@ public:
 
 private:
     bool relative_ = false;
+    bool seekLeftHeld_ = false, seekRightHeld_ = false;
 };
 
 }  // namespace sf
