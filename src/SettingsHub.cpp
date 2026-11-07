@@ -71,7 +71,7 @@ void SettingsHub::refreshValues() {
 }
 
 std::string SettingsHub::signature() const {
-    std::string s = std::to_string(page_) + ":" + std::to_string(sel_) + ":" + std::to_string(scrollRow_) + ":" + currentTheme().name + ":" +
+    std::string s = std::to_string(page_) + ":" + std::to_string(sel_) + ":" + std::to_string(scrollRow_) + ":" + currentThemeKey() + ":" +
                     std::to_string(hoverBtn_) + (fullscreen_ ? "F" : "W");
     for (const std::string& v : vals_) s += "|" + v;
     return s;
@@ -361,6 +361,24 @@ void SettingsHub::activateSelected() {
     const auto& items = cats_[static_cast<size_t>(page_)].items;
     if (sel_ - 1 < static_cast<int>(items.size()) && items[static_cast<size_t>(sel_ - 1)].act) items[static_cast<size_t>(sel_ - 1)].act();
     dirty_ = true;
+}
+
+bool SettingsHub::scriptActivate(const std::string& category, const std::string& title) {
+    if (!open_) return false;
+    for (size_t i = 0; i < cats_.size(); ++i) {
+        if (cats_[i].name != category) continue;
+        const auto& items = cats_[i].items;
+        for (size_t j = 0; j < items.size(); ++j) {
+            if (items[j].title != title || !items[j].act) continue;
+            page_ = static_cast<int>(i);
+            sel_ = static_cast<int>(j) + 1;
+            ensureSelectionVisible();
+            items[j].act();
+            dirty_ = true;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool SettingsHub::activateHit(Vec3 o, Vec3 d) {

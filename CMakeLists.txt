@@ -60,6 +60,8 @@ find_package(SDL2 REQUIRED CONFIG)
 set(SOURCES
     src/main.cpp
     src/AppShell.cpp
+    src/plugins/AppShellCar.cpp
+    src/plugins/AppShellParks.cpp
     src/TaskSwitcher.cpp
     src/Harvi.cpp
     src/Renderer.cpp
@@ -67,6 +69,8 @@ set(SOURCES
     src/LCARSUI.cpp
     src/Theme.cpp
     src/Settings.cpp
+    src/PluginManager.cpp
+    src/PluginPackage.cpp
     src/SettingsPanel.cpp
     src/SettingsHub.cpp
     src/UiKit.cpp
@@ -86,7 +90,9 @@ set(SOURCES
     src/XInputController.cpp
     src/Utils.cpp
     src/City.cpp
-    src/Track.cpp
+    src/plugins/Parks.cpp
+    src/plugins/CarRender.cpp
+    src/plugins/Track.cpp
     src/Sfx.cpp
     src/CityData.cpp
     src/TextRender.cpp
@@ -127,6 +133,20 @@ if(WIN32)
     list(APPEND SOURCES assets/icon/app.rc)
 endif()
 add_executable(SciFiShell ${SOURCES})
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(PluginManagerTest tests/PluginManagerTest.cpp src/PluginManager.cpp)
+    target_include_directories(PluginManagerTest PRIVATE src)
+    target_compile_definitions(PluginManagerTest PRIVATE NOMINMAX)
+    add_test(NAME PluginManagerTest COMMAND PluginManagerTest)
+    add_executable(PluginPackageTest tests/PluginPackageTest.cpp src/PluginPackage.cpp)
+    target_include_directories(PluginPackageTest PRIVATE src)
+    add_test(NAME PluginPackageTest COMMAND PluginPackageTest)
+    add_executable(PluginThemeTest tests/PluginThemeTest.cpp src/Theme.cpp)
+    target_include_directories(PluginThemeTest PRIVATE src)
+    add_test(NAME PluginThemeTest COMMAND PluginThemeTest)
+endif()
 if(WIN32)
     # Out-of-process UI Automation clicker for hosted Windows programs (see src/UiaHelper.cpp).
     add_executable(SciFiUia src/UiaHelper.cpp)

@@ -119,6 +119,22 @@ Ground-level fog drifts between the towers (tune it with the fog sliders in Sett
 
 **The car.** Press `F10` anywhere in the city to summon a neon hologram sports car, and `F10` again to leave it. `C` swaps first and third person; `Space` drifts and `Shift` boosts. A speedo appears on the HUD. The wheels steer and spin, and a quiet electric hum rises with speed. Parked, it is solid: you can stand on it. Ramps on every region let you drive up onto the platforms.
 
+**Plugins.** Settings > Plugins lists the built-in **Car and Track** and **Parks and Toys** plugins. Both are enabled by default; select either to disable or re-enable it immediately. Disabling driving exits the car and removes the track; disabling parks removes the parks, ducks, stands and active snacks. Preferences are stored separately from other settings in `%LOCALAPPDATA%\SciFiShell\plugins.ini` on Windows (`~/.config/scifishell/plugins.ini` elsewhere). If the preference file cannot be read or written, the page reports an error and does not overwrite the file.
+
+The two gameplay plugins are trusted, statically linked C++ code, not sandboxed extensions. Settings > Plugins also installs **data-only theme packages**: choose a `.sfplugin` file, then enable it on the Plugins page and cycle to it using Settings > Shell > Theme. Theme packages have no executable code, external files, network or filesystem permissions. Installed packages are discovered from the per-user `SciFiShell/plugins` directory at startup and start disabled unless previously enabled.
+
+A `.sfplugin` is one UTF-8/ASCII JSON file of at most 16 KiB, not a ZIP. All fields below are required; unknown fields, duplicate keys, permissions other than an empty array, and types other than `theme` are rejected. Strings use printable ASCII; `\"`, `\\` and `\/` are the supported escapes. IDs are lowercase reverse-domain-style letters, digits, dots and hyphens; `org.scifishell.*` is reserved. Colours are `#RRGGBB`.
+
+An installable example is in `examples/plugins/twilight.sfplugin`.
+
+```json
+{"id":"com.example.twilight","name":"TWILIGHT","version":"1.0.0","author":"Example","description":"A violet theme","type":"theme","platforms":["any"],"permissions":[],"accent":"#aa22ff","alt":"#12ccdd"}
+```
+
+Installing never overwrites an existing package. To remove an installed theme, disable it first and delete its `.sfplugin` file from the per-user plugins directory. ZIP manifests, scripts, native DLL loading, permission grants, updates and an app store are not implemented. Do not treat native code as sandboxed.
+
+To add a built-in plugin, implement its feature code and factory in `src/plugins`, include it in `CMakeLists.txt`, and register the factory in `AppShell::init`. The manager discovers built-in registrations and validated theme packages, starts enabled ones after loading preferences, stops them in reverse order on shutdown, and calls the same hooks for Settings toggles. A stop callback must remove active effects and input handling safely; it must not delete user data. The gameplay plugins currently share `AppShell`/`City` state and are tightly coupled to those internal APIs; this in-process interface gives them the application's privileges and is intended only for code built with the shell.
+
 ![The car](docs/car.jpg)
 
 **H.A.R.V.I.** Press `F1` and a holographic fish materialises beside a dialogue panel: quick tour, controls, troubleshooting, "Did you know?" tips, and shortcuts that open tools and settings pages. He gives contextual help when summoned over Settings or while driving. His lips, eyes, gills, fins and tail are individually articulated: the jaw lip-syncs to the text as it types out, and he blinks, looks around, and emotes (happy, confused, thinking, surprised, sad) and gestures (nod, shake, spin, hop, wave).

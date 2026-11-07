@@ -203,7 +203,7 @@ void PanelApp::update(double dt) {
     tick(dt);
     if (!open_) return;
     sincePaint_ += dt;
-    const std::string sig = currentTheme().name;
+    const std::string sig = currentThemeKey();
     if (sig != themeSig_) {
         themeSig_ = sig;
         dirty_ = true;

@@ -68,6 +68,7 @@ public:
     void move(int dx, int dy);                 // directional navigation (keys / pad)
     void step(int delta);                      // linear navigation (wheel)
     void activateSelected();
+    bool scriptActivate(const std::string& category, const std::string& title);
     bool activateHit(Vec3 origin, Vec3 dir);   // click: activates the card under the ray, if any
     bool back();                               // category page -> home; false when already home
 

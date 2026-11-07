@@ -12,6 +12,8 @@
 #include "Renderer.h"
 #include "Sfx.h"
 #include "Settings.h"
+#include "PluginManager.h"
+#include "PluginPackage.h"
 #include "MediaLibrary.h"
 #include "MediaPlayer.h"
 #include "MediaApp.h"
@@ -82,6 +84,8 @@ private:
     SDL_Window* window_ = nullptr;
     Renderer renderer_;
     Sfx sfx_;
+    PluginManager plugins_{PluginManager::defaultStatePath()};
+    std::unique_ptr<PluginPackageStore> pluginPackages_;
     InputSystem input_;
     MediaSeekGesture mediaSeek_;
     std::string mediaSeekPath_;
@@ -306,7 +310,7 @@ private:
     float scoreT_ = 0.0f;  // seconds the score pop-up stays on the HUD
     Vec3 knock_{};  // horizontal shove from a blast, decays away
     // The drivable car (F10 summons / leaves it, C swaps first and third person).
-    bool driving_ = false, carOn_ = false, carFirst_ = false;
+    bool driving_ = false, carOn_ = false, carFirst_ = false, drivingPluginEnabled_ = false;
     Vec3 carPos_{}, carVel_{};
     float carYaw_ = 0, carPitch_ = 0, carVy_ = 0, carSpawn_ = 0, carSteer_ = 0, carSpeed_ = 0, carSpin_ = 0, chaseYaw_ = 0, lookOffX_ = 0, lookOffY_ = 0, scriptThrottle_ = 0, scriptSteer_ = 0;
     bool onTrack_ = false, carBoostOn_ = false;  // car is riding the race track
@@ -316,6 +320,9 @@ private:
     std::unordered_map<int, std::shared_ptr<GpuLabel>> speedLabels_;
     std::shared_ptr<GpuLabel> kmhLabel_;
     void toggleCar();
+    void stopDrivingPlugin();
+    Plugin makeDrivingPlugin();
+    Plugin makeParksPlugin();
     void updateCar(double dt, float throttle, float steer, bool handbrake, bool boost, float lookX, float lookY);
     void leaveTrack();
     float recT_ = -1;                            // recT_ >= 0 while the view eases onto a pinned window

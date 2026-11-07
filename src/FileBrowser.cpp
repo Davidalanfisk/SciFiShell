@@ -583,7 +583,7 @@ void FileBrowser::paint(Bitmap& bm) {
         Rect r{c.x1 - 16 - 260, ay, c.x1 - 16, ay + 46};
         button(bm, r, "OPEN IN 3D ROOM", cwd_.empty() ? State::Disabled : hot(r, 11), true, 20);
     }
-    std::string st = folderHandler ? std::string("PICK FOLDERS: browse into a folder (or select several) and add them to the media library") : pickHandler ? std::string("PICK A FILE: double-click the file to open it in the editor") : status_;
+    std::string st = folderHandler ? std::string("PICK FOLDERS: browse into a folder (or select several) and add them to the media library") : pickHandler ? std::string("PICK A FILE: double-click a file to select it") : status_;
     if (st.empty()) st = std::to_string(view_.size()) + " items" + (sel_.empty() ? "" : "   |   " + std::to_string(sel_.size()) + " selected") + "   |   Double-click opens   |   Ctrl / Shift click selects several";
     label(bm, c.x0 + 20, c.y1 - 18, ellipsize(st, 20, FontFace::UI, c.w() - 40), 20, FontFace::UI, t.dim);
 }

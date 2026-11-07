@@ -47,11 +47,13 @@ public:
     bool exitSpawn(Vec3& pos) const;
     bool debugPond(Vec3& pos);  // nearest pond park to the hub, for scripted checks
     bool debugStreet(Vec3& pos) const;  // debugging aid: street in front of the first grown tower
+    void setParksEnabled(bool enabled);
+    void setDrivingEnabled(bool enabled);
 
     // Street toys: hot dog carts and ice cream stands hand out a wireframe snack (0 = hot dog, 1 = ice cream) that is held,
     // then thrown like a grenade and blows up after five seconds, shoving anyone nearby.
     bool pickStand(Vec3 origin, Vec3 dir, int& kind);
-    void giveItem(int kind) { held_ = kind; }
+    void giveItem(int kind) { if (parksEnabled_ && (kind == 0 || kind == 1)) held_ = kind; }
     bool holding() const { return held_ >= 0; }
     // The drivable car: AppShell owns the physics and tells the city where to draw it.
     struct CarView { bool show = false, hideBody = false, solid = false; Vec3 pos{0, 0, 0}; float yaw = 0, pitch = 0, steer = 0, speed = 0, spawn = 1, spin = 0;
@@ -154,6 +156,7 @@ private:
     struct NetRoute { int plat; std::vector<Vec3> pts; };  // pts: x, height above road, z
     void buildNetwork() const;
     void drawSlope(Renderer& r, Vec3 a, Vec3 b, float width, float th, Vec3 neon, float seed, int kind, float emerge);
+    void renderStreetLights(Renderer& r, const Platform& p, const Block& b, Vec3 tint, bool detail, int& draws);
     void renderBlockScenery(Renderer& r, const Platform& p, const Block& b, uint32_t seed, Vec3 tint, bool detail, int& draws);
     struct Stand { float x, z; int kind; };
     struct Shot { Vec3 p, v; int kind = 0; float age = 0, boomT = 0; bool boom = false; };
@@ -176,6 +179,7 @@ private:
     bool trackDirty_ = true;
     float trackFade_ = 0;
     bool dry_ = false;                    // scenery pass that only collects stands (for picking) and draws nothing
+    bool parksEnabled_ = false, drivingEnabled_ = false;
     std::vector<Stand>* standSink_ = nullptr;
     std::vector<Shot> shots_;
     int held_ = -1;
