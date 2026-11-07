@@ -9,6 +9,9 @@
 
 #include "CityData.h"
 #include "SceneGraph.h"
+#include "NativePlugin.h"
+#include "TrackSamplingApi.h"
+#include "ParksSceneApi.h"
 
 namespace sf {
 
@@ -49,12 +52,17 @@ public:
     bool debugStreet(Vec3& pos) const;  // debugging aid: street in front of the first grown tower
     void setParksEnabled(bool enabled);
     void setDrivingEnabled(bool enabled);
+    bool prepareDrivingModule(const std::filesystem::path& path, std::string& error);
+    void releaseDrivingModule();
+    bool prepareParksModule(const std::filesystem::path& path, std::string& error);
+    void releaseParksModule();
+    const SfTrackSamplingV1* drivingModule() const { return trackSampling_; }
 
     // Street toys: hot dog carts and ice cream stands hand out a wireframe snack (0 = hot dog, 1 = ice cream) that is held,
     // then thrown like a grenade and blows up after five seconds, shoving anyone nearby.
     bool pickStand(Vec3 origin, Vec3 dir, int& kind);
-    void giveItem(int kind) { if (parksEnabled_ && (kind == 0 || kind == 1)) held_ = kind; }
-    bool holding() const { return held_ >= 0; }
+    void giveItem(int kind);
+    bool holding() const;
     // The drivable car: AppShell owns the physics and tells the city where to draw it.
     struct CarView { bool show = false, hideBody = false, solid = false; Vec3 pos{0, 0, 0}; float yaw = 0, pitch = 0, steer = 0, speed = 0, spawn = 1, spin = 0;
         bool rail = false;  // riding the race track: orientation comes from the track's own frame instead of yaw/pitch
@@ -70,7 +78,7 @@ public:
     bool trackSample(float s, TrackFrame& out) const;
     void setTrackFade(float f) { trackFade_ = f; }
     void throwHeld(Vec3 eye);
-    void setLook(Vec3 forward) { look_ = forward; }
+    void setLook(Vec3 forward);
     bool takeScore(int& points, int& total);  // ducks popped since the last call
     struct SfxEvent { int id; Vec3 p; };  // 1 throw, 2 explosion, 3 duck popped
     bool takeSfx(SfxEvent& e) { if (sfxQ_.empty()) return false; e = sfxQ_.front(); sfxQ_.erase(sfxQ_.begin()); return true; }
@@ -159,7 +167,6 @@ private:
     void renderStreetLights(Renderer& r, const Platform& p, const Block& b, Vec3 tint, bool detail, int& draws);
     void renderBlockScenery(Renderer& r, const Platform& p, const Block& b, uint32_t seed, Vec3 tint, bool detail, int& draws);
     struct Stand { float x, z; int kind; };
-    struct Shot { Vec3 p, v; int kind = 0; float age = 0, boomT = 0; bool boom = false; };
     struct DuckPos { uint32_t key; Vec3 p; };
     std::vector<DuckPos>* duckSink_ = nullptr;
     std::unordered_map<uint32_t, double> deadDucks_;  // duck key -> wall_ time it was popped; they return after a while
@@ -180,15 +187,16 @@ private:
     float trackFade_ = 0;
     bool dry_ = false;                    // scenery pass that only collects stands (for picking) and draws nothing
     bool parksEnabled_ = false, drivingEnabled_ = false;
+    NativePlugin trackSamplingModule_;
+    const SfTrackSamplingV1* trackSampling_ = nullptr;
+    NativePlugin parksModule_;
+    const SfParksSceneV1* parksScene_ = nullptr;
+    const SfParksToysV1* parksToys_ = nullptr;
     std::vector<Stand>* standSink_ = nullptr;
-    std::vector<Shot> shots_;
-    int held_ = -1;
-    Vec3 look_{0, 0, -1};
-    Vec3 blast_{};
-    bool blastPending_ = false;
     void stepShots(double dt, Vec3 eye);
     void renderToys(Renderer& r, Vec3 eye);
-    void drawItem(Renderer& r, int kind, const Mat4& base, float glow);
+    struct ToysContext { City* city; Renderer* renderer; };
+    SfParksToysHostV1 toysHost(ToysContext* context);
     void renderBoxM(Renderer& r, const Mat4& m, Vec3 neon);
     mutable bool netBuilt_ = false;
     mutable std::vector<NetRoute> net_;

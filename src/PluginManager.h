@@ -14,6 +14,7 @@ struct Plugin {
     bool enabled = true;
     bool running = false;
     std::function<bool(std::string&)> prepare;
+    std::function<void()> cancelPrepare;
 };
 
 // Built-in plugins are trusted; external script callbacks must enforce their own runtime limits.

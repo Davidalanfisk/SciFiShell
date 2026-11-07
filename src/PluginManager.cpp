@@ -162,7 +162,11 @@ bool PluginManager::setEnabled(const std::string& id, bool enabled) {
         }
         auto next = state_;
         next[id] = enabled;
-        if (!save(next)) { std::fprintf(stderr, "%s\n", error_.c_str()); return false; }
+        if (!save(next)) {
+            if (enabled && p.cancelPrepare) p.cancelPrepare();
+            std::fprintf(stderr, "%s\n", error_.c_str());
+            return false;
+        }
         state_ = std::move(next);
         error_.clear();
         p.enabled = enabled;

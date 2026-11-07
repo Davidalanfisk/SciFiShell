@@ -324,7 +324,6 @@ private:
     bool onTrack_ = false, carBoostOn_ = false;  // car is riding the race track
     float trackS_ = 0, trackD_ = 0, trackV_ = 0, trackFade_ = 0, trackCool_ = 0, railYaw_ = 0;
     Vec3 railT_{0, 0, -1}, railU_{0, 1, 0};
-    void updateRail(float dt, float throttle, float steer, bool boost, float lookX, float lookY);
     std::unordered_map<int, std::shared_ptr<GpuLabel>> speedLabels_;
     std::shared_ptr<GpuLabel> kmhLabel_;
     void toggleCar();

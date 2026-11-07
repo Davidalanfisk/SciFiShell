@@ -90,6 +90,7 @@ set(SOURCES
     src/PluginManager.cpp
     src/PluginPackage.cpp
     src/PluginScript.cpp
+    src/NativePlugin.cpp
     src/SettingsPanel.cpp
     src/SettingsHub.cpp
     src/UiKit.cpp
@@ -108,6 +109,7 @@ set(SOURCES
     src/VRSystem.cpp
     src/XInputController.cpp
     src/Utils.cpp
+    src/Math.cpp
     src/City.cpp
     src/plugins/Parks.cpp
     src/plugins/CarRender.cpp
@@ -152,6 +154,14 @@ if(WIN32)
     list(APPEND SOURCES assets/icon/app.rc)
 endif()
 add_executable(SciFiShell ${SOURCES})
+add_library(TrackSamplingModule MODULE src/plugins/TrackSamplingModule.cpp src/plugins/TrackGenerationModule.cpp src/plugins/TrackRenderingModule.cpp src/plugins/DrivingModule.cpp src/plugins/CarRenderingModule.cpp src/Math.cpp)
+add_library(ParksSceneModule MODULE src/plugins/ParksSceneModule.cpp src/plugins/ParksSceneRendering.cpp src/plugins/ParksToysModule.cpp src/Math.cpp)
+target_include_directories(TrackSamplingModule PRIVATE src)
+target_include_directories(ParksSceneModule PRIVATE src)
+add_dependencies(SciFiShell TrackSamplingModule ParksSceneModule)
+target_compile_definitions(SciFiShell PRIVATE SCIFI_TRACK_MODULE_FILENAME="$<TARGET_FILE_NAME:TrackSamplingModule>"
+    SCIFI_PARKS_MODULE_FILENAME="$<TARGET_FILE_NAME:ParksSceneModule>")
+target_link_libraries(SciFiShell PRIVATE ${CMAKE_DL_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
@@ -167,6 +177,31 @@ if(BUILD_TESTING)
     target_include_directories(PluginScriptTest PRIVATE src)
     target_link_libraries(PluginScriptTest PRIVATE scifi_lua)
     add_test(NAME PluginScriptTest COMMAND PluginScriptTest)
+    add_library(NativePluginFixture MODULE tests/NativePluginFixture.cpp)
+    target_include_directories(NativePluginFixture PRIVATE src)
+    foreach(mode IN ITEMS BAD_ABI FAIL_CREATE FAIL_START)
+        add_library(NativePluginFixture_${mode} MODULE tests/NativePluginFixture.cpp)
+        target_include_directories(NativePluginFixture_${mode} PRIVATE src)
+        target_compile_definitions(NativePluginFixture_${mode} PRIVATE FIXTURE_${mode})
+    endforeach()
+    add_executable(NativePluginTest tests/NativePluginTest.cpp src/NativePlugin.cpp)
+    target_include_directories(NativePluginTest PRIVATE src)
+    target_link_libraries(NativePluginTest PRIVATE ${CMAKE_DL_LIBS})
+    add_dependencies(NativePluginTest NativePluginFixture NativePluginFixture_BAD_ABI
+        NativePluginFixture_FAIL_CREATE NativePluginFixture_FAIL_START)
+    add_test(NAME NativePluginTest COMMAND NativePluginTest
+        $<TARGET_FILE:NativePluginFixture> $<TARGET_FILE:NativePluginFixture_BAD_ABI>
+        $<TARGET_FILE:NativePluginFixture_FAIL_CREATE> $<TARGET_FILE:NativePluginFixture_FAIL_START>)
+    add_executable(TrackSamplingTest tests/TrackSamplingTest.cpp src/NativePlugin.cpp)
+    target_include_directories(TrackSamplingTest PRIVATE src)
+    target_link_libraries(TrackSamplingTest PRIVATE ${CMAKE_DL_LIBS})
+    add_dependencies(TrackSamplingTest TrackSamplingModule ParksSceneModule)
+    add_test(NAME TrackSamplingTest COMMAND TrackSamplingTest $<TARGET_FILE:TrackSamplingModule> $<TARGET_FILE:ParksSceneModule>)
+    add_executable(ParksSceneTest tests/ParksSceneTest.cpp src/NativePlugin.cpp)
+    target_include_directories(ParksSceneTest PRIVATE src)
+    target_link_libraries(ParksSceneTest PRIVATE ${CMAKE_DL_LIBS})
+    add_dependencies(ParksSceneTest ParksSceneModule)
+    add_test(NAME ParksSceneTest COMMAND ParksSceneTest $<TARGET_FILE:ParksSceneModule>)
     add_executable(PluginThemeTest tests/PluginThemeTest.cpp src/Theme.cpp)
     target_include_directories(PluginThemeTest PRIVATE src)
     add_test(NAME PluginThemeTest COMMAND PluginThemeTest)

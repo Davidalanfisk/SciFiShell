@@ -110,6 +110,21 @@ int main() {
         fs::remove(parentFile);
     }
     {
+        const fs::path parentFile = dir / "not-a-directory";
+        { std::ofstream out(parentFile); out << "keep"; }
+        sf::PluginManager manager(parentFile / "plugins.ini");
+        int prepared = 0, cancelled = 0, started = 0;
+        sf::Plugin plugin{"org.test.prepared", "Prepared", "", "1", [&] { ++started; }, [] {}, false};
+        plugin.prepare = [&](std::string&) { ++prepared; return true; };
+        plugin.cancelPrepare = [&] { ++cancelled; };
+        check(manager.add(std::move(plugin)) && manager.initialize(), "prepare rollback setup");
+        check(!manager.setEnabled("org.test.prepared", true), "prepared plugin save failure reported");
+        check(prepared == 1 && cancelled == 1 && started == 0 && !manager.plugins()[0].enabled,
+              "failed save cancels preparation");
+        manager.shutdown();
+        fs::remove(parentFile);
+    }
+    {
         fs::remove(file);
         sf::PluginManager manager(file);
         sf::Plugin plugin{"com.example.script", "Script", "", "1", [&] { events.push_back("script start"); },

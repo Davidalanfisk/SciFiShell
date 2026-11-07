@@ -80,6 +80,70 @@ City::City(Renderer& renderer) : renderer_(renderer) {
 
 City::~City() { data_.stop(); }
 
+bool City::prepareDrivingModule(const std::filesystem::path& path, std::string& error) {
+    if (!trackSamplingModule_.load(path, "org.scifishell.track-sampling", error)) return false;
+    if (!trackSamplingModule_.start(error)) { releaseDrivingModule(); return false; }
+    const auto* api = static_cast<const SfTrackSamplingV1*>(trackSamplingModule_.getInterface(SF_TRACK_SAMPLING_INTERFACE));
+    if (!api || api->size != sizeof(*api) || api->abi != SF_TRACK_SAMPLING_ABI ||
+        !api->sample || !api->build || !api->render || !api->drive || !api->render_car) {
+        error = "Driving module track sampling interface is incompatible";
+        releaseDrivingModule();
+        return false;
+    }
+    trackSampling_ = api;
+    return true;
+}
+
+void City::releaseDrivingModule() {
+    trackSampling_ = nullptr;
+    trackSamplingModule_.unload();
+}
+
+bool City::prepareParksModule(const std::filesystem::path& path, std::string& error) {
+    if (!parksModule_.load(path, "org.scifishell.parks-scene", error)) return false;
+    if (!parksModule_.start(error)) { releaseParksModule(); return false; }
+    const auto* api = static_cast<const SfParksSceneV1*>(parksModule_.getInterface(SF_PARKS_SCENE_INTERFACE));
+    const auto* toys = static_cast<const SfParksToysV1*>(parksModule_.getInterface(SF_PARKS_TOYS_INTERFACE));
+    if (!api || api->size != sizeof(*api) || api->abi != SF_PARKS_SCENE_ABI || !api->render ||
+        !toys || toys->size != sizeof(*toys) || toys->abi != SF_PARKS_SCENE_ABI || !toys->context ||
+        !toys->give || !toys->holding || !toys->set_look || !toys->throw_held ||
+        !toys->step || !toys->render || !toys->take_blast) {
+        error = "Parks module scene interface is incompatible";
+        releaseParksModule();
+        return false;
+    }
+    parksScene_ = api;
+    parksToys_ = toys;
+    return true;
+}
+
+void City::releaseParksModule() {
+    parksScene_ = nullptr;
+    parksToys_ = nullptr;
+    parksModule_.unload();
+}
+
+bool City::trackSample(float s, TrackFrame& out) const {
+    if (!trackSampling_) return false;
+    const SfTrackSourceV1 source{
+        sizeof(SfTrackSourceV1), SF_TRACK_SAMPLING_ABI, this,
+        [](const void* context) -> uint64_t { return static_cast<const City*>(context)->track_.size(); },
+        [](const void* context, uint64_t index, SfTrackFrame* frame) -> int {
+            const auto& tracks = static_cast<const City*>(context)->track_;
+            if (!frame || index >= tracks.size()) return 0;
+            const auto& f = tracks[static_cast<size_t>(index)];
+            *frame = {{f.p.x, f.p.y, f.p.z}, {f.t.x, f.t.y, f.t.z},
+                      {f.u.x, f.u.y, f.u.z}, {f.flat.x, f.flat.y, f.flat.z}, f.s};
+            return 1;
+        }
+    };
+    SfTrackFrame f{};
+    if (!trackSampling_->sample(&source, s, &f)) return false;
+    out = {{f.p.x, f.p.y, f.p.z}, {f.t.x, f.t.y, f.t.z}, {f.u.x, f.u.y, f.u.z},
+           {f.flat.x, f.flat.y, f.flat.z}, f.s};
+    return true;
+}
+
 float City::emergeProgress() const { return (float)std::min(1.0, clock_ / 8.0); }
 
 Vec3 City::tintColor(int i) const {
