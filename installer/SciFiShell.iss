@@ -2,6 +2,12 @@
 #ifndef AppVersion
   #define AppVersion "0.1.0"
 #endif
+#ifndef StageDir
+  #define StageDir "stage"
+#endif
+#ifndef InstallerOutputDir
+  #define InstallerOutputDir "Output"
+#endif
 
 [Setup]
 AppId={{6C1E2B7A-4F5D-4B58-9A0B-5C1F3E2D7A11}
@@ -10,7 +16,7 @@ AppVersion={#AppVersion}
 AppPublisher=David Fisk
 DefaultDirName={autopf}\SciFiShell
 DefaultGroupName=SciFi Shell
-OutputDir=Output
+OutputDir={#InstallerOutputDir}
 OutputBaseFilename=SciFiShell-Setup-{#AppVersion}
 Compression=lzma2/max
 SolidCompression=yes
@@ -30,7 +36,7 @@ WizardStyle=modern
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
 
 [Files]
-Source: "stage\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion createallsubdirs
+Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion createallsubdirs
 
 [Icons]
 Name: "{group}\SciFi Shell"; Filename: "{app}\SciFiShell.exe"; WorkingDir: "{app}"
