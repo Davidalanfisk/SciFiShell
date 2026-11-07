@@ -109,6 +109,67 @@ int main() {
         manager.shutdown();
         fs::remove(parentFile);
     }
+    {
+        fs::remove(file);
+        sf::PluginManager manager(file);
+        sf::Plugin plugin{"com.example.script", "Script", "", "1", [&] { events.push_back("script start"); },
+                          [&] { events.push_back("script stop"); }, false};
+        bool ready = false;
+        plugin.prepare = [&](std::string& error) { if (!ready) error = "script failed"; return ready; };
+        check(manager.add(std::move(plugin)) && manager.initialize(), "script setup");
+        check(!manager.setEnabled("com.example.script", true), "failed start rejected");
+        check(!manager.plugins()[0].enabled && !manager.plugins()[0].running && !fs::exists(file), "failed start does not persist");
+        ready = true;
+        check(manager.setEnabled("com.example.script", true) && manager.plugins()[0].running, "successful start");
+        check(manager.remove("com.example.script") && manager.plugins().empty(), "remove stops plugin");
+        std::ifstream in(file);
+        std::string line;
+        std::getline(in, line);
+        check(line == "com.example.script=0", "removed plugin remains disabled after reinstall");
+    }
+    {
+        { std::ofstream out(file, std::ios::trunc); out << "com.example.script=1\n"; }
+        sf::PluginManager manager(file);
+        sf::Plugin plugin{"com.example.script", "Script", "", "1", [] {}, [] {}, false};
+        plugin.prepare = [](std::string& error) { error = "script failed"; return false; };
+        check(manager.add(std::move(plugin)) && manager.initialize(), "startup with failing plugin");
+        check(manager.plugins()[0].enabled && !manager.plugins()[0].running && !manager.error().empty(), "startup failure surfaced");
+        check(manager.setEnabled("com.example.script", false), "failed plugin can be disabled");
+        manager.shutdown();
+    }
+    {
+        { std::ofstream out(file, std::ios::trunc); out << "com.example.bad=1\ncom.example.good=1\n"; }
+        sf::PluginManager manager(file);
+        sf::Plugin bad{"com.example.bad", "Bad", "", "1", [] {}, [] {}, false};
+        bad.prepare = [](std::string& error) { error = "script failed"; return false; };
+        sf::Plugin good{"com.example.good", "Good", "", "1", [] {}, [] {}, false};
+        good.prepare = [](std::string& error) { error.clear(); return true; };
+        check(manager.add(std::move(bad)) && manager.add(std::move(good)) && manager.initialize(), "mixed script startup");
+        check(manager.error().find("com.example.bad: script failed") != std::string::npos, "successful start preserves previous error");
+        check(!manager.plugins()[0].running && manager.plugins()[1].running, "other scripts still start");
+        manager.shutdown();
+    }
+    {
+        { std::ofstream out(file, std::ios::trunc); out << "invalid\n"; }
+        sf::PluginManager manager(file);
+        sf::Plugin good{"com.example.good", "Good", "", "1", [] {}, [] {}};
+        good.prepare = [](std::string& error) { error.clear(); return true; };
+        check(manager.add(std::move(good)) && !manager.initialize(), "invalid storage with script");
+        check(manager.error().find("preferences are invalid") != std::string::npos, "successful start preserves storage error");
+        manager.shutdown();
+    }
+    {
+        { std::ofstream out(file, std::ios::trunc); out << "com.example.script=1\n"; }
+        sf::PluginManager manager(file);
+        check(manager.initialize(), "initialize before installing retained script");
+        sf::Plugin plugin{"com.example.script", "Script", "", "1", [] {}, [] {}, false};
+        plugin.prepare = [](std::string& error) { error = "script failed"; return false; };
+        check(manager.add(std::move(plugin)), "failed retained script remains registered");
+        check(manager.plugins().size() == 1 && manager.plugins()[0].enabled && !manager.plugins()[0].running &&
+              manager.error().find("script failed") != std::string::npos, "failed retained script shown as error");
+        check(manager.setEnabled("com.example.script", false), "failed retained script can be disabled");
+        manager.shutdown();
+    }
     fs::remove(file);
     fs::remove(dir);
     return failures == 0 ? 0 : 1;

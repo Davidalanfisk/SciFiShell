@@ -4,6 +4,9 @@
 #include <fstream>
 #include <map>
 #include <vector>
+#include <cstring>
+
+#include "miniz.h"
 
 namespace sf {
 namespace {
@@ -80,8 +83,8 @@ bool colour(const std::string& s) {
 }
 }
 
-PluginPackageStore::PluginPackageStore(std::filesystem::path directory, Register reg)
-    : dir_(std::move(directory)), register_(std::move(reg)) {}
+PluginPackageStore::PluginPackageStore(std::filesystem::path directory, Register reg, RegisterScript script)
+    : dir_(std::move(directory)), register_(std::move(reg)), registerScript_(std::move(script)) {}
 
 bool PluginPackageStore::parse(const std::string& text, ThemePackage& out, std::string& error) {
     std::map<std::string, Value> fields;
@@ -102,6 +105,87 @@ bool PluginPackageStore::parse(const std::string& text, ThemePackage& out, std::
     }
     error.clear();
     return true;
+}
+
+bool PluginPackageStore::parseScript(const std::string& text, ScriptPackage& out, std::string& error) {
+    std::map<std::string, Value> fields;
+    if (text.size() > kMaxBytes || !Parser(text).parse(fields)) { error = "Invalid script manifest JSON"; return false; }
+    const char* keys[] = {"id", "name", "version", "author", "description", "entry", "type", "platforms", "permissions", "min_shell_version"};
+    if (fields.size() != sizeof(keys) / sizeof(keys[0])) { error = "Unexpected or missing script manifest fields"; return false; }
+    for (const char* key : keys) if (!fields.count(key)) { error = "Missing script manifest field"; return false; }
+    for (const auto& [key, value] : fields)
+        if (value.array != (key == "platforms" || key == "permissions")) { error = "Invalid manifest field type"; return false; }
+    out = {fields["id"].text, fields["name"].text, fields["version"].text, fields["author"].text, fields["description"].text, {}};
+    if (!validId(out.id) || !version(out.version) || out.name.empty() || out.name.size() > 40 ||
+        out.author.empty() || out.author.size() > 80 || out.description.empty() || out.description.size() > 160 ||
+        fields["type"].text != "script" || fields["entry"].text != "scripts/main.lua" ||
+        fields["platforms"].items != std::vector<std::string>{"any"} || !fields["permissions"].items.empty() ||
+        fields["min_shell_version"].text != "0.1.0") {
+        error = "Unsupported or invalid script manifest";
+        return false;
+    }
+    error.clear();
+    return true;
+}
+
+bool PluginPackageStore::readZip(const std::string& data, ScriptPackage& out, std::string& error) {
+    if (data.empty() || data.size() > 262144) { error = "ZIP is empty or exceeds 256 KiB"; return false; }
+    mz_zip_archive zip{};
+    if (!mz_zip_reader_init_mem(&zip, data.data(), data.size(), 0)) { error = "Invalid ZIP"; return false; }
+    auto done = [&](const std::string& message) {
+        mz_zip_reader_end(&zip);
+        error = message;
+        return message.empty();
+    };
+    const auto count = mz_zip_reader_get_num_files(&zip);
+    if (count < 2 || count > 3) return done("ZIP must contain only plugin.json and scripts/main.lua");
+    std::string manifest, script;
+    bool seenManifest = false, seenScript = false, seenDirectory = false;
+    for (mz_uint i = 0; i < count; ++i) {
+        mz_zip_archive_file_stat stat{};
+        if (!mz_zip_reader_file_stat(&zip, i, &stat)) return done("Invalid ZIP entry");
+        char name[256]{};
+        const auto length = mz_zip_reader_get_filename(&zip, i, nullptr, 0);
+        if (!length || length > sizeof(name) ||
+            mz_zip_reader_get_filename(&zip, i, name, sizeof(name)) != length || std::strlen(name) + 1 != length)
+            return done("Invalid ZIP entry name");
+        const std::string path(name);
+        const auto type = (stat.m_external_attr >> 16) & 0170000;
+        const bool directory = path == "scripts/" && stat.m_is_directory;
+        if ((type && type != (directory ? 0040000 : 0100000)) || stat.m_is_encrypted || !stat.m_is_supported ||
+            stat.m_uncomp_size > kMaxBytes || (stat.m_is_directory && !directory))
+            return done("Unsupported ZIP entry type or size");
+        if (directory) {
+            if (seenDirectory || stat.m_uncomp_size) return done("Duplicate or invalid directory");
+            seenDirectory = true;
+            continue;
+        }
+        std::string* target = nullptr;
+        if (path == "plugin.json" && !seenManifest) { seenManifest = true; target = &manifest; }
+        else if (path == "scripts/main.lua" && !seenScript) { seenScript = true; target = &script; }
+        else return done("Unexpected or duplicate ZIP path");
+        target->resize(static_cast<size_t>(stat.m_uncomp_size));
+        if (!mz_zip_reader_extract_to_mem(&zip, i, target->data(), target->size(), 0))
+            return done("Cannot extract ZIP entry or CRC mismatch");
+    }
+    if (!seenManifest || !seenScript || script.empty()) return done("ZIP is missing required files");
+    if (!parseScript(manifest, out, error)) { mz_zip_reader_end(&zip); return false; }
+    out.script = std::move(script);
+    return done({});
+}
+
+bool PluginPackageStore::loadZip(const std::filesystem::path& path, ScriptPackage& out) {
+    std::error_code ec;
+    const auto st = std::filesystem::symlink_status(path, ec);
+    if (ec || !std::filesystem::is_regular_file(st)) { error_ = "ZIP must be a regular file"; return false; }
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec || size > 262144) { error_ = "ZIP is unreadable or too large"; return false; }
+    std::ifstream in(path, std::ios::binary);
+    std::string data(static_cast<size_t>(size), '\0');
+    if (!in || !in.read(data.data(), static_cast<std::streamsize>(data.size())) || in.peek() != std::ifstream::traits_type::eof()) {
+        error_ = "Cannot read ZIP"; return false;
+    }
+    return readZip(data, out, error_);
 }
 
 bool PluginPackageStore::load(const std::filesystem::path& path, ThemePackage& out) {
@@ -128,7 +212,7 @@ void PluginPackageStore::discover() {
     std::vector<std::filesystem::path> paths;
     std::filesystem::directory_iterator it(dir_, ec), end;
     while (!ec && it != end) {
-        if (it->path().extension() == ".sfplugin") paths.push_back(it->path());
+        if (it->path().extension() == ".sfplugin" || it->path().extension() == ".zip") paths.push_back(it->path());
         it.increment(ec);
         if (paths.size() > kMaxPackages) { error_ = "Too many installed packages"; return; }
     }
@@ -136,8 +220,15 @@ void PluginPackageStore::discover() {
     std::sort(paths.begin(), paths.end());
     std::string errors;
     for (const auto& path : paths) {
-        ThemePackage pkg;
-        if (!load(path, pkg) || path.filename().string() != pkg.id + ".sfplugin" || !register_(pkg)) {
+        bool ok = false;
+        if (path.extension() == ".zip") {
+            ScriptPackage pkg;
+            ok = loadZip(path, pkg) && path.filename().string() == pkg.id + ".zip" && registerScript_ && registerScript_(pkg);
+        } else {
+            ThemePackage pkg;
+            ok = load(path, pkg) && path.filename().string() == pkg.id + ".sfplugin" && register_(pkg);
+        }
+        if (!ok) {
             if (!errors.empty()) errors += "; ";
             errors += "Invalid or duplicate package: " + path.filename().string();
         }
@@ -147,30 +238,52 @@ void PluginPackageStore::discover() {
 
 bool PluginPackageStore::install(const std::filesystem::path& source) {
     if (dir_.empty()) { error_ = "Plugin package directory is unavailable"; return false; }
-    if (source.extension() != ".sfplugin") { error_ = "Select a .sfplugin package"; return false; }
+    const bool zip = source.extension() == ".zip";
+    if (!zip && source.extension() != ".sfplugin") { error_ = "Select a .zip or .sfplugin package"; return false; }
     ThemePackage input;
-    if (!load(source, input)) return false;
+    ScriptPackage script;
+    if (zip ? !loadZip(source, script) : !load(source, input)) return false;
+    const std::string id = zip ? script.id : input.id;
     std::error_code ec;
     std::filesystem::create_directories(dir_, ec);
     if (ec) { error_ = "Cannot create plugin directory: " + ec.message(); return false; }
     size_t count = 0;
     std::filesystem::directory_iterator it(dir_, ec), end;
     while (!ec && it != end) {
-        if (it->path().extension() == ".sfplugin") ++count;
+        if (it->path().extension() == ".sfplugin" || it->path().extension() == ".zip") ++count;
         it.increment(ec);
     }
     if (ec || count >= kMaxPackages) { error_ = "Cannot install: package directory unreadable or full"; return false; }
-    const auto target = dir_ / (input.id + ".sfplugin");
+    const auto target = dir_ / (id + (zip ? ".zip" : ".sfplugin"));
     if (!std::filesystem::copy_file(source, target, std::filesystem::copy_options::none, ec)) {
         error_ = "Cannot install package (already installed or inaccessible): " + ec.message();
         return false;
     }
     ThemePackage copied;
-    if (!load(target, copied) || copied.id != input.id || !register_(copied)) {
+    ScriptPackage copiedScript;
+    const bool registered = zip
+        ? loadZip(target, copiedScript) && copiedScript.id == id && registerScript_ && registerScript_(copiedScript)
+        : load(target, copied) && copied.id == id && register_(copied);
+    if (!registered) {
         std::error_code cleanup;
         std::filesystem::remove(target, cleanup);
         error_ = cleanup ? "Package rejected; could not remove copied file: " + cleanup.message() : "Package changed or plugin ID already exists";
         return false;
+    }
+    error_.clear();
+    return true;
+}
+
+bool PluginPackageStore::uninstall(const std::string& id) {
+    if (!validId(id)) { error_ = "Invalid package ID"; return false; }
+    std::error_code ec;
+    const auto theme = dir_ / (id + ".sfplugin"), script = dir_ / (id + ".zip");
+    const bool haveTheme = std::filesystem::exists(theme, ec);
+    if (ec) { error_ = "Cannot inspect package: " + ec.message(); return false; }
+    const bool haveScript = std::filesystem::exists(script, ec);
+    if (ec || haveTheme == haveScript) { error_ = "Package not found or ambiguous"; return false; }
+    if (!std::filesystem::remove(haveTheme ? theme : script, ec) || ec) {
+        error_ = "Cannot remove package: " + ec.message(); return false;
     }
     error_.clear();
     return true;

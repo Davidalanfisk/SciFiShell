@@ -14,6 +14,9 @@
 #include "Settings.h"
 #include "PluginManager.h"
 #include "PluginPackage.h"
+#include <map>
+#include <set>
+#include <chrono>
 #include "MediaLibrary.h"
 #include "MediaPlayer.h"
 #include "MediaApp.h"
@@ -86,6 +89,11 @@ private:
     Sfx sfx_;
     PluginManager plugins_{PluginManager::defaultStatePath()};
     std::unique_ptr<PluginPackageStore> pluginPackages_;
+    std::map<std::string, std::string> pluginScripts_;
+    std::map<std::string, std::string> pluginMessages_;
+    std::set<std::string> installedPluginIds_;
+    std::string uninstallConfirm_;
+    std::chrono::steady_clock::time_point uninstallDeadline_{};
     InputSystem input_;
     MediaSeekGesture mediaSeek_;
     std::string mediaSeekPath_;

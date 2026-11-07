@@ -131,7 +131,11 @@ An installable example is in `examples/plugins/twilight.sfplugin`.
 {"id":"com.example.twilight","name":"TWILIGHT","version":"1.0.0","author":"Example","description":"A violet theme","type":"theme","platforms":["any"],"permissions":[],"accent":"#aa22ff","alt":"#12ccdd"}
 ```
 
-Installing never overwrites an existing package. To remove an installed theme, disable it first and delete its `.sfplugin` file from the per-user plugins directory. ZIP manifests, scripts, native DLL loading, permission grants, updates and an app store are not implemented. Do not treat native code as sandboxed.
+**Restricted script plugins.** Settings > Plugins > Install Package also accepts a `.zip` containing exactly `plugin.json` and `scripts/main.lua` (an optional `scripts/` directory entry is allowed). An example is in `examples/plugins/clock`; ZIP the *contents* of that folder, not the folder itself. The manifest requires the fields shown in that example: `type` is `script`, `entry` is `scripts/main.lua`, `platforms` is `["any"]`, `permissions` is `[]`, and `min_shell_version` is currently exactly `0.1.0`. Unknown fields and other capabilities are rejected. The archive is limited to 256 KiB and each file to 16 KiB; duplicate, unexpected, absolute, traversal and link entries are rejected. Files are read from the archive into memory, never extracted to archive-specified paths.
+
+Scripts contribute a **Run** card to Settings > Plugins. Enable the plugin, then select Run to display its returned message in Settings. The Lua source must return 1–160 printable ASCII characters; long messages can be truncated to fit the panel. Each execution uses a fresh Lua 5.4 state with no standard libraries, module loader, filesystem, network, OS, input, or native-code API. Its only host function is `unix_time()`. Execution is limited to 100,000 Lua instructions and 1 MiB of Lua allocations; errors are displayed, and a failed enable does not persist an enabled state. This is a restricted in-process runtime, not OS-level isolation or a guarantee against interpreter vulnerabilities. Native and other executable extension types are not supported.
+
+Installed packages start disabled unless a retained preference says otherwise. Installing never overwrites an existing package. To uninstall an installed theme or script, select its **Remove** card twice within 15 seconds; this disables it first and removes the package file, leaving other user data untouched. Built-in plugins cannot be uninstalled. ZIP themes, arbitrary ZIP layouts, permission grants, plugin data storage, updates and an app store are not implemented. Do not treat native code as sandboxed.
 
 To add a built-in plugin, implement its feature code and factory in `src/plugins`, include it in `CMakeLists.txt`, and register the factory in `AppShell::init`. The manager discovers built-in registrations and validated theme packages, starts enabled ones after loading preferences, stops them in reverse order on shutdown, and calls the same hooks for Settings toggles. A stop callback must remove active effects and input handling safely; it must not delete user data. The gameplay plugins currently share `AppShell`/`City` state and are tightly coupled to those internal APIs; this in-process interface gives them the application's privileges and is intended only for code built with the shell.
 
@@ -320,6 +324,7 @@ This is only the first lap. The grid is about to get **gnarly**:
 | CMake >= 3.20, C++17 compiler, git, Python 3 (needed by Diligent's build) | system |
 | Diligent Engine (DiligentCore) | fetched automatically by CMake (`FetchContent`, needs network) |
 | OpenXR loader | fetched automatically (OpenXR-SDK) |
+| Lua 5.4.8 and miniz 3.1.2 | fetched automatically at pinned revisions for restricted script plugins |
 | SDL2 (dev package) | Windows: `vcpkg install sdl2`; Linux: `libsdl2-dev`; macOS: `brew install sdl2` |
 
 Backends: **Direct3D 12** (Windows), **Vulkan** (Linux, X11 session or XWayland; needs the Vulkan SDK/drivers),

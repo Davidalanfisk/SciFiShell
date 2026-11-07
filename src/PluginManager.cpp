@@ -41,7 +41,15 @@ bool PluginManager::add(Plugin plugin) {
     if (initialized_) {
         const auto it = state_.find(plugin.id);
         if (it != state_.end()) plugin.enabled = it->second;
-        if (plugin.enabled) { plugin.start(); plugin.running = true; }
+        if (plugin.enabled) {
+            std::string startError;
+            if (plugin.prepare && !plugin.prepare(startError)) {
+                error_ = plugin.id + ": " + startError;
+                std::fprintf(stderr, "%s\n", error_.c_str());
+            } else {
+                plugin.start(); plugin.running = true;
+            }
+        }
     }
     plugins_.push_back(std::move(plugin));
     return true;
@@ -84,7 +92,17 @@ bool PluginManager::initialize() {
     for (auto& p : plugins_) {
         const auto it = state_.find(p.id);
         if (it != state_.end()) p.enabled = it->second;
-        if (p.enabled) { p.start(); p.running = true; }
+        if (p.enabled) {
+            std::string startError;
+            if (p.prepare && !p.prepare(startError)) {
+                const std::string message = p.id + ": " + startError;
+                if (!error_.empty()) error_ += "; ";
+                error_ += message;
+                std::fprintf(stderr, "%s\n", message.c_str());
+                continue;
+            }
+            p.start(); p.running = true;
+        }
     }
     return storageReady_;
 }
@@ -137,6 +155,11 @@ bool PluginManager::setEnabled(const std::string& id, bool enabled) {
     for (auto& p : plugins_) {
         if (p.id != id) continue;
         if (p.enabled == enabled) return true;
+        if (enabled && p.prepare && !p.prepare(error_)) {
+            error_ = p.id + ": " + error_;
+            std::fprintf(stderr, "%s\n", error_.c_str());
+            return false;
+        }
         auto next = state_;
         next[id] = enabled;
         if (!save(next)) { std::fprintf(stderr, "%s\n", error_.c_str()); return false; }
@@ -144,9 +167,20 @@ bool PluginManager::setEnabled(const std::string& id, bool enabled) {
         error_.clear();
         p.enabled = enabled;
         if (enabled) { p.start(); p.running = true; }
-        else { p.stop(); p.running = false; }
+        else { if (p.running) p.stop(); p.running = false; }
         return true;
     }
+    return false;
+}
+
+bool PluginManager::remove(const std::string& id) {
+    for (auto it = plugins_.begin(); it != plugins_.end(); ++it) {
+        if (it->id != id) continue;
+        if (it->enabled && !setEnabled(id, false)) return false;
+        plugins_.erase(it);
+        return true;
+    }
+    error_ = "Plugin not found";
     return false;
 }
 

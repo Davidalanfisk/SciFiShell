@@ -72,7 +72,7 @@ void SettingsHub::refreshValues() {
 
 std::string SettingsHub::signature() const {
     std::string s = std::to_string(page_) + ":" + std::to_string(sel_) + ":" + std::to_string(scrollRow_) + ":" + currentThemeKey() + ":" +
-                    std::to_string(hoverBtn_) + (fullscreen_ ? "F" : "W");
+                    std::to_string(hoverBtn_) + (fullscreen_ ? "F" : "W") + notice_;
     for (const std::string& v : vals_) s += "|" + v;
     return s;
 }
@@ -130,6 +130,11 @@ void SettingsHub::rebuild() {
         const Rect br{kPad, 132, kPad + 260, 212};
         rects_.push_back(br);
         ui::button(bm, ui::Rect{br.x0, br.y0, br.x1, br.y1}, "< BACK", sel_ == 0 ? ui::State::Selected : ui::State::Normal, false, 30);
+        float noticeY = 160.0f;
+        for (const auto& line : wrapText(notice_, 18, FontFace::UI, static_cast<float>(W_ - kPad - 320), 2)) {
+            drawText(bm, 320, noticeY, line, 18, FontFace::UI, tk.text);
+            noticeY += 22.0f;
+        }
         const float cw = static_cast<float>(W_ - 2 * kPad - kGap) / 2;
         const int n = static_cast<int>(c.items.size());
         for (int i = 0; i < n; ++i) {
@@ -350,6 +355,7 @@ void SettingsHub::activateSelected() {
             page_ = sel_;
             sel_ = 1;
             scrollRow_ = 0;
+            notice_.clear();
             dirty_ = true;
         }
         return;
@@ -359,7 +365,10 @@ void SettingsHub::activateSelected() {
         return;
     }
     const auto& items = cats_[static_cast<size_t>(page_)].items;
-    if (sel_ - 1 < static_cast<int>(items.size()) && items[static_cast<size_t>(sel_ - 1)].act) items[static_cast<size_t>(sel_ - 1)].act();
+    if (sel_ - 1 < static_cast<int>(items.size())) {
+        auto action = items[static_cast<size_t>(sel_ - 1)].act;
+        if (action) action();
+    }
     dirty_ = true;
 }
 
@@ -373,7 +382,8 @@ bool SettingsHub::scriptActivate(const std::string& category, const std::string&
             page_ = static_cast<int>(i);
             sel_ = static_cast<int>(j) + 1;
             ensureSelectionVisible();
-            items[j].act();
+            auto action = items[j].act;
+            action();
             dirty_ = true;
             return true;
         }
@@ -429,6 +439,7 @@ bool SettingsHub::back() {
     if (page_ < 0) return false;
     page_ = -1;
     scrollRow_ = 0;
+    notice_.clear();
     sel_ = homeSel_;
     dirty_ = true;
     return true;

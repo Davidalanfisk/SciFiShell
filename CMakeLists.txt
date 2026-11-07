@@ -10,6 +10,24 @@ endif()
 
 include(FetchContent)
 
+# Restricted script extensions and ZIP package reader.
+FetchContent_Declare(scifi_lua
+    GIT_REPOSITORY https://github.com/lua/lua.git
+    GIT_TAG 6e22fedb74cf0c9b6656e9fce8b7331db847c605)
+FetchContent_MakeAvailable(scifi_lua)
+set(SCIFI_LUA_CORE lapi lauxlib lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate lstring ltable ltm lundump lvm lzio)
+set(SCIFI_LUA_SOURCES)
+foreach(source IN LISTS SCIFI_LUA_CORE)
+    list(APPEND SCIFI_LUA_SOURCES "${scifi_lua_SOURCE_DIR}/${source}.c")
+endforeach()
+add_library(scifi_lua STATIC ${SCIFI_LUA_SOURCES})
+target_include_directories(scifi_lua PUBLIC "${scifi_lua_SOURCE_DIR}")
+
+FetchContent_Declare(scifi_miniz
+    GIT_REPOSITORY https://github.com/richgel999/miniz.git
+    GIT_TAG 77d0dce8627735138c51770d1799a1ef48f2117d)
+FetchContent_MakeAvailable(scifi_miniz)
+
 # ---- Diligent Engine (core + engine backends) -------------------------------------------------
 # Override with -DSCIFI_DILIGENT_TAG=<tag> to pin a specific release.
 set(SCIFI_DILIGENT_TAG "master" CACHE STRING "DiligentCore git tag/branch")
@@ -71,6 +89,7 @@ set(SOURCES
     src/Settings.cpp
     src/PluginManager.cpp
     src/PluginPackage.cpp
+    src/PluginScript.cpp
     src/SettingsPanel.cpp
     src/SettingsHub.cpp
     src/UiKit.cpp
@@ -142,7 +161,12 @@ if(BUILD_TESTING)
     add_test(NAME PluginManagerTest COMMAND PluginManagerTest)
     add_executable(PluginPackageTest tests/PluginPackageTest.cpp src/PluginPackage.cpp)
     target_include_directories(PluginPackageTest PRIVATE src)
+    target_link_libraries(PluginPackageTest PRIVATE miniz)
     add_test(NAME PluginPackageTest COMMAND PluginPackageTest)
+    add_executable(PluginScriptTest tests/PluginScriptTest.cpp src/PluginScript.cpp)
+    target_include_directories(PluginScriptTest PRIVATE src)
+    target_link_libraries(PluginScriptTest PRIVATE scifi_lua)
+    add_test(NAME PluginScriptTest COMMAND PluginScriptTest)
     add_executable(PluginThemeTest tests/PluginThemeTest.cpp src/Theme.cpp)
     target_include_directories(PluginThemeTest PRIVATE src)
     add_test(NAME PluginThemeTest COMMAND PluginThemeTest)
@@ -167,6 +191,7 @@ else()
 endif()
 
 target_link_libraries(SciFiShell PRIVATE
+    scifi_lua miniz
     sqlite3_static
     OpenXR::openxr_loader
     Diligent-Common

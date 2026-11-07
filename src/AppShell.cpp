@@ -12,6 +12,7 @@
 
 #include "TextRender.h"
 #include "Theme.h"
+#include "PluginScript.h"
 #include "stb_image_write.h"
 #ifdef _WIN32
 #include <windows.h>
@@ -181,9 +182,22 @@ bool AppShell::init() {
         statePath.empty() ? std::filesystem::path{} : statePath.parent_path() / "plugins",
         [this](const ThemePackage& p) {
             const Vec3 accent = pluginColour(p.accent), alt = pluginColour(p.alt);
-            return plugins_.add({p.id, p.name, p.description, p.version,
+            const bool added = plugins_.add({p.id, p.name, p.description, p.version,
                                  [p, accent, alt] { registerPluginTheme(p.id, p.name, accent, alt); },
                                  [id = p.id] { unregisterPluginTheme(id); }, false});
+            if (added) installedPluginIds_.insert(p.id);
+            return added;
+        },
+        [this](const ScriptPackage& p) {
+            Plugin plugin{p.id, p.name, p.description, p.version, [] {}, [] {}, false};
+            plugin.prepare = [script = p.script](std::string& error) {
+                std::string result;
+                return runPluginScript(script, result, error);
+            };
+            if (!plugins_.add(std::move(plugin))) return false;
+            installedPluginIds_.insert(p.id);
+            pluginScripts_[p.id] = p.script;
+            return true;
         });
     pluginPackages_->discover();
     if (!pluginPackages_->error().empty()) std::fprintf(stderr, "%s\n", pluginPackages_->error().c_str());
@@ -585,8 +599,8 @@ void AppShell::buildSettingsHub() {
                         [this, save] { settings_.snapWins = !settings_.snapWins; save(); }});
     cats.push_back(std::move(wm));
 
-    SettingsCategory plugins{"PLUGINS", "Built-in features and theme packages", "SHELL", {}};
-    plugins.items.push_back({"INSTALL THEME PACKAGE", "Choose a .sfplugin file (no permissions)",
+    SettingsCategory plugins{"PLUGINS", "Built-in features, themes and restricted scripts", "SHELL", {}};
+    plugins.items.push_back({"INSTALL PACKAGE", "Choose a .zip script or .sfplugin theme (no permissions)",
                              nullptr, [this] {
                                  openPanel(files2d_.get());
                                  files2d_->pickHandler = [this](const std::string& path) {
@@ -594,20 +608,65 @@ void AppShell::buildSettingsHub() {
                                      buildSettingsHub();
                                      openSettingsWin();
                                      settingsPanel_->openPage("PLUGINS");
-                                     menu_->setStatus(installed ? "THEME INSTALLED - enable it in Plugins" : pluginPackages_->error());
+                                     settingsPanel_->setNotice(installed ? "PLUGIN INSTALLED - manage it in Plugins" : pluginPackages_->error());
                                  };
                              }});
     for (const auto& plugin : plugins_.plugins()) {
         const auto id = plugin.id;
-        plugins.items.push_back({plugin.name, plugin.description + " - v" + plugin.version,
+        if (pluginScripts_.count(id)) {
+            plugins.items.push_back({"RUN " + plugin.name, id + " - run this restricted script",
+                                 [this, id] {
+                                     const auto it = pluginMessages_.find(id);
+                                     return it == pluginMessages_.end() ? std::string("SELECT TO RUN") : it->second;
+                                 }, [this, id] {
+                                     bool running = false;
+                                     for (const auto& p : plugins_.plugins()) if (p.id == id) running = p.running;
+                                     if (!running) { settingsPanel_->setNotice("ENABLE THE PLUGIN FIRST"); return; }
+                                     std::string result, error;
+                                     if (runPluginScript(pluginScripts_.at(id), result, error)) pluginMessages_[id] = result;
+                                     else pluginMessages_[id] = "ERROR: " + error;
+                                     settingsPanel_->setNotice(pluginMessages_[id]);
+                                 }});
+        }
+        if (installedPluginIds_.count(id)) {
+            plugins.items.push_back({"REMOVE " + plugin.name, id + " - click twice to uninstall",
+                                 [this, id] {
+                                     return uninstallConfirm_ == id && std::chrono::steady_clock::now() < uninstallDeadline_
+                                         ? std::string("CONFIRM REMOVE") : std::string();
+                                 },
+                                 [this, id] {
+                                     if (uninstallConfirm_ != id || std::chrono::steady_clock::now() >= uninstallDeadline_) {
+                                         uninstallConfirm_ = id;
+                                         uninstallDeadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+                                         settingsPanel_->setNotice("CLICK REMOVE AGAIN WITHIN 15 SECONDS");
+                                         return;
+                                     }
+                                     uninstallConfirm_.clear();
+                                     if (!plugins_.setEnabled(id, false)) { settingsPanel_->setNotice(plugins_.error()); return; }
+                                     if (!pluginPackages_->uninstall(id)) { settingsPanel_->setNotice(pluginPackages_->error()); return; }
+                                     if (!plugins_.remove(id)) { settingsPanel_->setNotice(plugins_.error()); return; }
+                                     pluginScripts_.erase(id);
+                                     pluginMessages_.erase(id);
+                                     installedPluginIds_.erase(id);
+                                     buildSettingsHub();
+                                     settingsPanel_->openPage("PLUGINS");
+                                     settingsPanel_->setNotice("PLUGIN UNINSTALLED");
+                                 }});
+        }
+        plugins.items.push_back({plugin.name, plugin.description + " - v" + plugin.version + " - " + id,
                                  [this, id, onOff] {
-                                     for (const auto& p : plugins_.plugins()) if (p.id == id) return onOff(p.running);
+                                     for (const auto& p : plugins_.plugins()) if (p.id == id)
+                                         return p.enabled && !p.running ? std::string("ERROR") : onOff(p.running);
                                      return std::string("UNAVAILABLE");
                                  },
                                  [this, id] {
                                      for (const auto& p : plugins_.plugins()) {
                                          if (p.id == id) {
-                                             if (!plugins_.setEnabled(id, !p.enabled)) menu_->setStatus(plugins_.error());
+                                             if (!plugins_.setEnabled(id, !p.enabled)) settingsPanel_->setNotice(plugins_.error());
+                                             else {
+                                                 if (!p.enabled) pluginMessages_.erase(id);
+                                                 settingsPanel_->setNotice(p.running ? "PLUGIN ENABLED" : "PLUGIN DISABLED");
+                                             }
                                              break;
                                          }
                                      }
@@ -1348,6 +1407,15 @@ bool AppShell::scriptExec(const std::string& line) {
         const bool ok = pluginPackages_->install(std::filesystem::u8path(path));
         scriptLog(ok ? "plugin install ok" : "plugin install failed: " + pluginPackages_->error());
         buildSettingsHub();
+    } else if (cmd == "pluginmessage") {
+        std::string id;
+        is >> id;
+        const auto it = pluginMessages_.find(id);
+        scriptLog(it == pluginMessages_.end() ? "plugin message unavailable" : "plugin message " + it->second);
+    } else if (cmd == "pluginerror") {
+        scriptLog("plugin error " + plugins_.error());
+    } else if (cmd == "pluginnotice") {
+        scriptLog("plugin notice " + settingsPanel_->notice());
     } else if (cmd == "pluginclick") {
         std::string title;
         std::getline(is, title);

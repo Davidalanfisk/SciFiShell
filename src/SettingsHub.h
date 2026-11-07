@@ -37,12 +37,14 @@ public:
         cats_ = std::move(cats);
         dirty_ = true;
     }
+    void setNotice(std::string text) { notice_ = std::move(text); dirty_ = true; }
+    const std::string& notice() const { return notice_; }
 
     void open(Vec3 eye, Vec3 forward);
     void close();
     void openPage(const std::string& name) {
         for (size_t i = 0; i < cats_.size(); ++i)
-            if (cats_[i].name == name) { page_ = static_cast<int>(i); sel_ = 0; scrollRow_ = 0; dirty_ = true; }
+            if (cats_[i].name == name) { page_ = static_cast<int>(i); sel_ = 0; scrollRow_ = 0; notice_.clear(); dirty_ = true; }
     }
     bool isOpen() const { return open_; }
     void hide();  // minimise: keeps the current page; open() brings it back
@@ -108,6 +110,7 @@ public:
     std::shared_ptr<GpuLabel> label_;
     Mat4 base_;
     std::string sig_;
+    std::string notice_;
     float aspect_ = 1.9f;
     int page_ = -1;  // -1 home, otherwise a category index
     int sel_ = 0;

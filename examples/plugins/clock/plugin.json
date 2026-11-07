@@ -1,0 +1,1 @@
+{"id":"com.example.clock","name":"CLOCK","version":"1.0.0","author":"Example","description":"Show the current Unix time","entry":"scripts/main.lua","type":"script","platforms":["any"],"permissions":[],"min_shell_version":"0.1.0"}

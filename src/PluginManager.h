@@ -13,15 +13,17 @@ struct Plugin {
     std::function<void()> start, stop;
     bool enabled = true;
     bool running = false;
+    std::function<bool(std::string&)> prepare;
 };
 
-// Trusted, statically linked plugins only. No external code is loaded.
+// Built-in plugins are trusted; external script callbacks must enforce their own runtime limits.
 class PluginManager {
 public:
     explicit PluginManager(std::filesystem::path statePath);
     bool add(Plugin plugin);
     bool initialize();
     bool setEnabled(const std::string& id, bool enabled);
+    bool remove(const std::string& id);
     void shutdown();
     const std::vector<Plugin>& plugins() const { return plugins_; }
     const std::string& error() const { return error_; }
