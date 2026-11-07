@@ -399,9 +399,25 @@ bool AppShell::init() {
         enterFileRoom();
         if (std::getenv("SCIFI_OPEN_START")) toggleStart();  // debugging aid
 #ifdef _WIN32
-        // Installed builds quietly check GitHub for a newer release; the script only prompts if one exists.
-        if (!std::getenv("SCIFI_NO_UPDATE") && std::filesystem::exists("update.ps1"))
-            ShellExecuteA(nullptr, "open", "powershell.exe", "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File update.ps1", nullptr, SW_HIDE);
+        // Source builds have no updater; installed builds keep it next to the executable.
+        if (!std::getenv("SCIFI_NO_UPDATE")) {
+            char* executableDir = SDL_GetBasePath();
+            if (executableDir) {
+                const auto script = std::filesystem::u8path(executableDir) / "update.ps1";
+                SDL_free(executableDir);
+                std::error_code ec;
+                if (std::filesystem::exists(script, ec)) {
+                    const std::wstring args = L"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + script.wstring() + L"\"";
+                    const auto result = ShellExecuteW(nullptr, L"open", L"powershell.exe", args.c_str(), nullptr, SW_HIDE);
+                    if (reinterpret_cast<INT_PTR>(result) <= 32)
+                        std::fprintf(stderr, "Cannot start update check (ShellExecute error %lld)\n", static_cast<long long>(reinterpret_cast<INT_PTR>(result)));
+                } else if (ec) {
+                    std::fprintf(stderr, "Cannot inspect updater: %s\n", ec.message().c_str());
+                }
+            } else {
+                std::fprintf(stderr, "Cannot determine executable directory for update check: %s\n", SDL_GetError());
+            }
+        }
 #endif
         if (std::getenv("SCIFI_OPEN_SETTINGS")) settingsPanel_->open(head_.eye, head_.forward);  // debugging aid
         if (!std::getenv("SCIFI_START_PATH") && !std::getenv("SCIFI_NO_CITY")) toggleCity(true);  // SCIFI_NO_CITY: skip the city build when testing UI  // the city is the home view
@@ -777,15 +793,19 @@ void AppShell::saveScreenshot() {
                 std::swap(px[i * 4], px[i * 4 + 2]);
                 px[i * 4 + 3] = 255;
             }
-            const char* pics = std::getenv("USERPROFILE");
-            std::filesystem::path dir = std::filesystem::path(pics ? pics : ".") / "Pictures" / "SciFiShell";
-            std::error_code ec;
-            std::filesystem::create_directories(dir, ec);
-            SYSTEMTIME t;
-            GetLocalTime(&t);
-            char name[64];
-            std::snprintf(name, sizeof(name), "SciFiShell-%04d%02d%02d-%02d%02d%02d.png", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
-            const std::filesystem::path out = shotPath_.empty() ? dir / name : std::filesystem::path(shotPath_);
+            std::filesystem::path out = shotPath_;
+            if (out.empty()) {
+                const char* pics = std::getenv("USERPROFILE");
+                const std::filesystem::path dir = std::filesystem::path(pics ? pics : ".") / "Pictures" / "SciFiShell";
+                std::error_code ec;
+                std::filesystem::create_directories(dir, ec);
+                if (ec) std::fprintf(stderr, "Cannot create screenshot directory: %s\n", ec.message().c_str());
+                SYSTEMTIME t;
+                GetLocalTime(&t);
+                char name[64];
+                std::snprintf(name, sizeof(name), "SciFiShell-%04d%02d%02d-%02d%02d%02d.png", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+                out = dir / name;
+            }
             shotPath_.clear();
             ok = stbi_write_png(out.string().c_str(), w, h, 4, bits, w * 4) != 0;
             if (ok) std::fprintf(stderr, "Screenshot saved: %s\n", out.string().c_str());
