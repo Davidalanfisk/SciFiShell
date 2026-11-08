@@ -39,11 +39,12 @@
 
 namespace fs = std::filesystem;
 
-std::string archive(const std::vector<std::pair<std::string, std::string>>& files) {
+std::string archive(const std::vector<std::pair<std::string, std::string>>& files,
+                    int compression = MZ_DEFAULT_COMPRESSION) {
     mz_zip_archive zip{};
     if (!mz_zip_writer_init_heap(&zip, 0, 0)) return {};
     for (const auto& [name, contents] : files)
-        if (!mz_zip_writer_add_mem(&zip, name.c_str(), contents.data(), contents.size(), MZ_DEFAULT_COMPRESSION)) {
+        if (!mz_zip_writer_add_mem(&zip, name.c_str(), contents.data(), contents.size(), compression)) {
             mz_zip_writer_end(&zip);
             return {};
         }
@@ -143,7 +144,18 @@ int main() {
     bad(good, "\"platforms\":[\"any\"]", "\"platforms\":[\"windows\"]");
     check(!sf::PluginPackageStore::parse(good + "garbage", p, error), "trailing data accepted");
     check(!sf::PluginPackageStore::parse(good.substr(0, good.size() - 1), p, error), "truncated data accepted");
-    check(!sf::PluginPackageStore::parse(std::string(17000, 'x'), p, error), "oversize accepted");
+    {
+        std::string large = good;
+        large.resize(sf::kPluginTextLimit, ' ');
+        check(sf::PluginPackageStore::parse(large, p, error), "theme manifest accepts exactly 10 MiB");
+        large.push_back(' ');
+        check(!sf::PluginPackageStore::parse(large, p, error), "theme manifest rejects 10 MiB plus one byte");
+        large = good;
+        large.replace(large.find("A violet theme"), std::string("A violet theme").size(),
+                      std::string(sf::kPluginTextLimit - good.size(), 'x'));
+        check(!sf::PluginPackageStore::parse(large, p, error),
+              "larger JSON file cap does not permit oversized metadata strings");
+    }
     const std::string manifest = R"({"id":"com.example.clock","name":"CLOCK","version":"1.0.0","author":"Example","description":"Clock message","entry":"scripts/main.lua","type":"script","platforms":["any"],"permissions":[],"min_shell_version":"0.1.0"})";
     const std::string code = "return 'CLOCK ' .. unix_time()";
     const auto zip = archive({{"plugin.json", manifest}, {"scripts/main.lua", code}});
@@ -162,7 +174,27 @@ int main() {
         check(!hostile.empty() && !sf::PluginPackageStore::readZip(hostile, script, error), "hostile path rejected");
     }
     check(!sf::PluginPackageStore::readZip(archive({{"plugin.json", manifest}, {"scripts/main.lua", code}, {"plugin.json", manifest}}), script, error), "duplicate rejected");
-    check(!sf::PluginPackageStore::readZip(archive({{"plugin.json", manifest}, {"scripts/main.lua", std::string(17000, 'x')}}), script, error), "oversized entry rejected");
+    {
+        std::string largeManifest = manifest, largeScript = code;
+        largeManifest.resize(sf::kPluginTextLimit, ' ');
+        largeScript.resize(sf::kPluginTextLimit, ' ');
+        check(sf::PluginPackageStore::parseScript(largeManifest, script, error),
+              "script manifest parser accepts exactly 10 MiB");
+        check(sf::PluginPackageStore::readZip(archive({{"plugin.json", largeManifest}, {"scripts/main.lua", largeScript}}),
+                                             script, error) && script.script == largeScript,
+              "script ZIP accepts both text files at exactly 10 MiB");
+        largeManifest.push_back(' ');
+        check(!sf::PluginPackageStore::parseScript(largeManifest, script, error) &&
+              !sf::PluginPackageStore::readZip(archive({{"plugin.json", largeManifest}, {"scripts/main.lua", code}}),
+                                              script, error),
+              "script manifest parser and ZIP reject 10 MiB plus one byte");
+        largeScript.push_back(' ');
+        check(!sf::PluginPackageStore::readZip(archive({{"plugin.json", manifest}, {"scripts/main.lua", largeScript}}),
+                                              script, error),
+              "script ZIP source rejects 10 MiB plus one byte");
+        check(!sf::PluginPackageStore::readZip(std::string(sf::kScriptArchiveLimit + 1, 'x'), script, error) &&
+              error.find("20 MiB") != std::string::npos, "script ZIP disk cap remains bounded");
+    }
     auto symlink = zip;
     const auto central = symlink.find(std::string("PK\x01\x02", 4));
     if (central == std::string::npos) { ++failures; }
@@ -803,6 +835,74 @@ int main() {
     const fs::path dir = fs::temp_directory_path() / ("scifi-package-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::create_directory(dir);
     const fs::path source = dir / "source.sfplugin", installed = dir / "installed";
+    {
+        const auto path = dir / "large-text.zip";
+        const auto write = [&](const std::string& bytes) {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            check(bool(out), "write large text ZIP fixture");
+        };
+        std::string largeManifest = gameplayManifest;
+        largeManifest.erase(largeManifest.find(",\"world\""), std::string(",\"world\"").size());
+        largeManifest.resize(sf::kPluginTextLimit, ' ');
+        std::string largeSource = "return {on_tick=function(dt) if dt<0 then missing() end end}";
+        largeSource.resize(sf::kPluginTextLimit, ' ');
+        sf::GameplayPackage largeGame;
+        check(sf::PluginPackageStore::parseGameplayManifest(largeManifest, largeGame, error),
+              "gameplay manifest parser accepts exactly 10 MiB");
+        write(archive({{"plugin.json", largeManifest}, {"scripts/main.lua", largeSource}}, MZ_NO_COMPRESSION));
+        check(sf::readGameplayPackageFile(path, largeGame, error) &&
+              largeGame.script == largeSource, "file-backed gameplay accepts both text files at exactly 10 MiB");
+        sf::GameplayDigest digest;
+        sf::GameplayConsent consent(dir / "large-consent");
+        sf::GameplaySession session;
+        check(sf::gameplayDigestFile(path, digest, error) &&
+              consent.grantFile("com.example.game", path, digest, error) &&
+              session.startFile(path, digest, consent, nullptr, error) &&
+              session.tick(0.01, error) && session.stop(error),
+              "10 MiB installed-path script validates, receives consent, loads and runs");
+        largeManifest.push_back(' ');
+        check(!sf::PluginPackageStore::parseGameplayManifest(largeManifest, largeGame, error),
+              "gameplay manifest parser rejects 10 MiB plus one byte");
+        write(archive({{"plugin.json", largeManifest}, {"scripts/main.lua", "return {}"}}));
+        check(!sf::readGameplayPackageFile(path, largeGame, error) && largeGame.id.empty(),
+              "file-backed gameplay rejects manifest one byte over without partial output");
+        largeSource.push_back(' ');
+        write(archive({{"plugin.json", gameplayManifest}, {"scripts/main.lua", largeSource}}));
+        check(!sf::readGameplayPackageFile(path, largeGame, error) && largeGame.id.empty(),
+              "file-backed gameplay rejects source one byte over without partial output");
+
+        largeManifest = manifest;
+        largeManifest.resize(sf::kPluginTextLimit, ' ');
+        largeSource = code;
+        largeSource.resize(sf::kPluginTextLimit, ' ');
+        const auto bytes = archive({{"plugin.json", largeManifest}, {"scripts/main.lua", largeSource}},
+                                   MZ_NO_COMPRESSION);
+        write(bytes);
+        check(bytes.size() > 20 * 1024 * 1024 && bytes.size() <= sf::kScriptArchiveLimit &&
+              sf::PluginPackageStore::readZip(bytes, script, error),
+              "script ZIP disk cap fits two uncompressed 10 MiB files");
+        sf::PluginPackageStore largeStore(dir / "large-installed",
+            [](const sf::ThemePackage&) { return true; },
+            [&](const sf::ScriptPackage& pkg) { return pkg.script == largeSource; });
+        check(largeStore.install(path), "script disk loader and installation accept uncompressed boundary ZIP");
+        const auto themePath = dir / "large.sfplugin";
+        std::string largeTheme = good;
+        largeTheme.resize(sf::kPluginTextLimit, ' ');
+        { std::ofstream out(themePath, std::ios::binary); out << largeTheme; }
+        check(largeStore.install(themePath), "theme disk loader accepts exactly 10 MiB");
+        largeTheme.push_back(' ');
+        { std::ofstream out(themePath, std::ios::binary | std::ios::trunc); out << largeTheme; }
+        check(!largeStore.install(themePath) && largeStore.error().find("too large") != std::string::npos,
+              "theme disk loader rejects 10 MiB plus one byte");
+        check(largeStore.uninstall("com.example.clock") &&
+              largeStore.uninstall("com.example.twilight"), "remove large installed packages");
+        check(consent.revoke("com.example.game", error), "remove large package consent");
+        fs::remove(dir / "large-installed");
+        fs::remove(dir / "large-consent");
+        fs::remove(themePath);
+        fs::remove(path);
+    }
     {
         sf::GameplayDigest abc;
         const std::array<unsigned char, 32> expected = {

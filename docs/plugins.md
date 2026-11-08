@@ -1,6 +1,14 @@
 # Plugins
 
-This guide targets the **SciFi Shell v0.9.21 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+This guide targets the **SciFi Shell v0.9.22 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+
+## v0.9.22 changelog
+
+Plugin Lua source, gameplay/script `plugin.json`, and theme `.sfplugin` files now accept **10 MiB (10,485,760 bytes) each**, inclusively, instead of 16 KiB. Message-script ZIPs now allow **20 MiB + 64 KiB (21,037,056 bytes)** on disk so both files fit even without compression. The shell's read-only code viewer also reads up to 10 MiB instead of 2 MiB; its rendered-line cap remains 4,000 characters. Gameplay ZIP disk/expanded totals remain 1 GiB and encoded binary assets remain 100 MiB.
+
+Lua compilation now has a **128 MiB allocation ceiling** per state. After compilation, compiler scratch is collected and the loaded code/constants establish a fixed baseline; the chunk and callbacks share at most **1 MiB of additional Lua allocations above that baseline**, never exceeding 128 MiB total. The 100,000-instruction budget for the chunk and each callback is unchanged. A source within the file cap can still fail explicitly if its compiled representation exceeds the compilation ceiling, Lua syntax limits, or execution budgets. Compilation and package validation are synchronous and can pause the shell.
+
+Manifest schemas and field-length limits are unchanged: the larger file allowance permits formatting, not arbitrary extra metadata or 10 MiB field values. Names remain at most 40 printable ASCII characters, authors 80, descriptions 160, IDs 80, and versions 24. Decoded/GPU memory, archive-entry/metadata, storage, messaging, voice and other behavior/resource limits are unchanged. Installer staging excludes test executables and test-only native fixtures; Windows shared-SDL builds copy the required SDL2 runtime alongside the shell.
 
 ## Alpha gameplay API additions
 
@@ -8,7 +16,7 @@ The following APIs are available in v0.9.21, **not in the v0.9.20 installer**. T
 
 ### Gameplay package limits
 
-Gameplay ZIP files may be at most **1 GiB (1,073,741,824 bytes)** on disk and their entries may total at most **1 GiB uncompressed**. Each uncompressed asset may be at most **100 MiB (104,857,600 bytes)**; the existing 16 KiB per text file and 34-entry limits remain. Installed ZIP files share a 4 GiB disk quota when installing either a gameplay or script package; do not install concurrently from multiple shell processes. ZIP metadata is also bounded. Assets are read one at a time rather than unpacked to disk, but loading a large asset still temporarily uses memory proportional to its encoded size. Installation, approval and startup read and validate packages synchronously, so large files can pause the shell. Decoded assets share a separate 16 MiB per-package budget, and each format has additional geometry, dimension, or duration limits. The in-memory archive interface remains capped at 8 MiB and is not the package installation path.
+Gameplay ZIP files may be at most **1 GiB (1,073,741,824 bytes)** on disk and their entries may total at most **1 GiB uncompressed**. Each uncompressed binary asset may be at most **100 MiB (104,857,600 bytes)**; `plugin.json` and `scripts/main.lua` may each be at most **10 MiB (10,485,760 bytes)**. The 34-entry limit remains. Installed ZIP files share a 4 GiB disk quota when installing either a gameplay or script package; do not install concurrently from multiple shell processes. ZIP metadata is also bounded. Assets are read one at a time rather than unpacked to disk, but loading a large asset still temporarily uses memory proportional to its encoded size. Installation, approval and startup read and validate packages synchronously, so large files can pause the shell. Decoded assets share a separate 16 MiB per-package budget, and each format has additional geometry, dimension, or duration limits. GLB parsing has an 8 MiB allocator budget, separate from the encoded-file cap. The internal in-memory archive interface remains capped at 8 MiB on disk and expanded, so it cannot load a 10 MiB source; Settings installation, consent and startup use the file-backed path and accept the full text limit.
 
 The allowed asset extensions now include `.wav` and `.ogg` as well as `.png` and `.glb`. Nested paths such as `assets/ships/fighter.glb` are supported: the portion after `assets/` is at most 80 characters, lowercase ASCII letters, digits, `_`, `-`, `.`, and `/`. Components cannot be empty or begin with `.`, and `..` is forbidden. Include files only: directory entries, links, duplicate paths, backslashes, and traversal are rejected. Existing consent records remain valid for unchanged packages; newer consent records store a SHA-256 digest and size instead of another copy of the ZIP. Packages changed after approval require new consent. These checks do not protect against a hostile process running as the same user.
 
@@ -79,7 +87,7 @@ Use `scene_mesh(handle, texture, x, y, z, width, height, depth, red, green, blue
 
 ## Start here
 
-You do not need to build the shell to make a plugin: install [v0.9.21](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.21), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
+You do not need to build the shell to make a plugin: install [v0.9.22](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.22), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
 
 | What you want | Package | Start with |
 |---|---|---|
@@ -151,7 +159,7 @@ The gameplay plugins use two trusted native modules built alongside the applicat
 
 ## Theme packages
 
-A `.sfplugin` is one UTF-8/ASCII JSON file of at most 16 KiB, not a ZIP. All fields below are required; unknown fields, duplicate keys, permissions other than an empty array, and types other than `theme` are rejected. Strings use printable ASCII; `\"`, `\\` and `\/` are the supported escapes. IDs are lowercase reverse-domain-style letters, digits, dots and hyphens; `org.scifishell.*` is reserved. Colours are `#RRGGBB`.
+A `.sfplugin` is one UTF-8/ASCII JSON file of at most 10 MiB, not a ZIP. All fields below are required; unknown fields, duplicate keys, permissions other than an empty array, and types other than `theme` are rejected. Strings use printable ASCII; `\"`, `\\` and `\/` are the supported escapes. IDs are lowercase reverse-domain-style letters, digits, dots and hyphens; `org.scifishell.*` is reserved. Colours are `#RRGGBB`.
 
 An installable example is [`examples/plugins/twilight.sfplugin`](../examples/plugins/twilight.sfplugin).
 
@@ -174,7 +182,7 @@ plugin.json
 scripts/main.lua
 ```
 
-An empty `scripts/` directory entry is optional; no other entries are allowed. ZIP the **contents** of the example directory, not the containing directory. The archive is limited to 256 KiB; each uncompressed file is limited to 16 KiB, and the script must not be empty. Duplicate paths, absolute paths, traversal, backslashes, symlinks, encryption, unsupported ZIP entries and corrupt CRCs are rejected. Archive paths are read into memory, never extracted to the filesystem.
+An empty `scripts/` directory entry is optional; no other entries are allowed. ZIP the **contents** of the example directory, not the containing directory. The archive is limited to 20 MiB + 64 KiB (21,037,056 bytes); each uncompressed file is limited to 10 MiB, and the script must not be empty. Duplicate paths, absolute paths, traversal, backslashes, symlinks, encryption, unsupported ZIP entries and corrupt CRCs are rejected. Archive paths are read into memory, never extracted to the filesystem.
 
 The manifest must contain exactly the following fields; extra and duplicate keys are rejected:
 
@@ -212,7 +220,7 @@ JSON strings accept printable ASCII only; `\"`, `\\` and `\/` are the only suppo
 return "UNIX TIME: " .. unix_time()
 ```
 
-The chunk must return a **string of 1–160 printable ASCII characters**; it may be truncated visually to fit the panel. `unix_time()` is the only supplied host function and returns the current Unix timestamp as an integer. Lua language operators, local variables, conditionals, loops and functions work subject to the budget, but **no standard libraries or base functions** are opened: for example `print`, `tostring`, `string`, `math`, `io`, `os`, `require`, `load` and `debug` are unavailable. Each execution starts a fresh state, with no persistence between runs. It is limited to 100,000 Lua VM instructions and 1 MiB of Lua allocations.
+The chunk must return a **string of 1–160 printable ASCII characters**; it may be truncated visually to fit the panel. `unix_time()` is the only supplied host function and returns the current Unix timestamp as an integer. Lua language operators, local variables, conditionals, loops and functions work subject to the budget, but **no standard libraries or base functions** are opened: for example `print`, `tostring`, `string`, `math`, `io`, `os`, `require`, `load` and `debug` are unavailable. Each execution starts a fresh state, with no persistence between runs. It is limited to 100,000 Lua VM instructions and 1 MiB of additional Lua allocations above the compiled-code baseline, with the separate 128 MiB compilation/total ceiling described in the [changelog](#v0922-changelog).
 
 To package the example on Windows with Python, run this from the repository root:
 
@@ -260,7 +268,7 @@ The manifest has exactly `id`, `name`, `version`, `author`, `description`, `entr
 
 Install through **Settings > Plugins > Install Package**. New packages start disabled. Selecting a gameplay plugin without a matching grant displays its ID and requested permissions; select it again within 30 seconds to consent and enable it. Consent is stored against the exact ZIP contents, so changed contents require consent again. Disabling releases its objects and GPU resources but retains consent for re-enabling; uninstall revokes consent. Use **Disable** to stop a failed plugin, or select its name to retry. An enabled plugin can restart automatically if its unchanged package still has consent. Callback errors stop the plugin and are reported in Settings and stderr. Do not approve packages you do not trust: Lua and image/model decoders run in the shell process, not an OS sandbox.
 
-The script chunk returns a table with optional `on_start()`, `on_tick(dt)`, `on_input(control, value)` and `on_stop()` functions. The host calls `on_start` when enabling, `on_tick` each frame, `on_input` for permitted input changes and `on_stop` when stopping normally. State in local variables persists while the plugin runs, but a restart creates a fresh Lua state. The chunk and each callback have a 100,000-instruction budget; each plugin has 1 MiB of Lua allocations. `dt` is seconds, capped by the host at 0.1 per frame. Only Lua's `math` library and the functions below are opened: there is no base library, filesystem, network, module loader or operating-system API. Callbacks run on the application thread; exceeding the budget or raising an error stops the plugin and releases its scene.
+The script chunk returns a table with optional `on_start()`, `on_tick(dt)`, `on_input(control, value)` and `on_stop()` functions. The host calls `on_start` when enabling, `on_tick` each frame, `on_input` for permitted input changes and `on_stop` when stopping normally. State in local variables persists while the plugin runs, but a restart creates a fresh Lua state. The chunk and each callback have a 100,000-instruction budget; each plugin has 1 MiB of additional Lua allocations above its compiled-code baseline, with a 128 MiB compilation/total ceiling. `dt` is seconds, capped by the host at 0.1 per frame. Only Lua's `math` library and the functions below are opened: there is no base library, filesystem, network, module loader or operating-system API. Callbacks run on the application thread; exceeding the budget or raising an error stops the plugin and releases its scene.
 
 * `scene_box(x,y,z,width,height,depth,r,g,b)` and `scene_model(model,texture,x,y,z,width,height,depth,r,g,b)` return owned integer handles. Texture `0` uses the GLB's embedded texture or white; otherwise use `asset_texture(path)`. `asset_model(path)` and `asset_texture(path)` return a package-local numeric asset ID or raise an error for an unknown path.
 * `scene_move(handle,x,y,z)`, `scene_rotate(handle,x,y,z)` (radians), `scene_resize(handle,width,height,depth)`, `scene_colour(handle,r,g,b)` and `scene_remove(handle)` update owned objects. Coordinates are world-space, with Y vertical; box positions are their centres. Positions and rotations must be finite and at most 10,000 in magnitude, sizes must be in `(0,1000]`, and colour components in `[0,1]`. Up to 128 boxes and model instances combined are allowed.

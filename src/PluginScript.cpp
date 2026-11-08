@@ -1,4 +1,5 @@
 #include "PluginScript.h"
+#include "PluginLimits.h"
 #include "GameplayRay.h"
 #include "GameplayStorage.h"
 
@@ -20,8 +21,9 @@ extern "C" {
 namespace sf {
 namespace {
 constexpr size_t kMemoryLimit = 1024 * 1024;
+constexpr size_t kCompileMemoryLimit = 128 * 1024 * 1024;
 constexpr int kInstructionLimit = 100000;
-struct Memory { size_t used = 0; };
+struct Memory { size_t used = 0; size_t limit = kMemoryLimit; };
 
 void* limitedAlloc(void* ud, void* ptr, size_t oldSize, size_t newSize) {
     auto& memory = *static_cast<Memory*>(ud);
@@ -31,10 +33,22 @@ void* limitedAlloc(void* ud, void* ptr, size_t oldSize, size_t newSize) {
         memory.used -= oldSize;
         return nullptr;
     }
-    if (newSize > oldSize && newSize - oldSize > kMemoryLimit - memory.used) return nullptr;
+    if (newSize > oldSize && newSize - oldSize > memory.limit - memory.used) return nullptr;
     void* next = std::realloc(ptr, newSize);
     if (next) memory.used = memory.used - oldSize + newSize;
     return next;
+}
+
+int loadSource(lua_State* state, Memory& memory, const std::string& source) {
+    memory.limit = kCompileMemoryLimit;
+    const int status = luaL_loadbufferx(state, source.data(), source.size(), "plugin", "t");
+    if (status == LUA_OK) {
+        // Discard compiler scratch before fixing the loaded-code baseline. Execution
+        // gets only 1 MiB of additional allocations, never the compilation budget.
+        lua_gc(state, LUA_GCCOLLECT);
+        memory.limit = memory.used + std::min(kMemoryLimit, kCompileMemoryLimit - memory.used);
+    }
+    return status;
 }
 
 void instructionLimit(lua_State* state, lua_Debug*) {
@@ -1122,6 +1136,7 @@ struct PluginScriptRuntime::Impl {
     void close() {
         if (state) lua_close(state);
         state = nullptr;
+        memory = {};
         scene = {};
         models = {};
         meshes = {};
@@ -1200,7 +1215,7 @@ bool PluginScriptRuntime::start(const std::string& source, std::string& error, b
                                 bool controlGranted, bool inputGranted, GameplayStorage* storage, bool messagingGranted,
                                 std::uint64_t initialFrame) {
     if (impl_->state) { error = "Script runtime is already running"; return false; }
-    if (source.empty() || source.size() > 16384) { error = "Script is empty or too large"; return false; }
+    if (source.empty() || source.size() > kPluginTextLimit) { error = "Script is empty or exceeds 10 MiB"; return false; }
     if (world && (!world->floor || !world->resolve || !world->available)) { error = "Invalid world query service"; return false; }
     if (view && !view->pose) { error = "Invalid view service"; return false; }
     if (layout && !layout->cell) { error = "Invalid layout service"; return false; }
@@ -1309,7 +1324,7 @@ bool PluginScriptRuntime::start(const std::string& source, std::string& error, b
         lua_pushcfunction(state, Impl::initializeMessaging);
         status = lua_pcall(state, 0, 0, 0);
     }
-    if (status == LUA_OK) status = luaL_loadbufferx(state, source.data(), source.size(), "plugin", "t");
+    if (status == LUA_OK) status = loadSource(state, impl_->memory, source);
     if (status == LUA_OK) status = lua_pcall(state, 0, 1, 0);
     if (status != LUA_OK) {
         const char* message = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : nullptr;
@@ -1483,14 +1498,14 @@ bool PluginScriptRuntime::setControlActive(bool active, std::string& error) {
 bool runPluginScript(const std::string& source, std::string& result, std::string& error) {
     result.clear();
     error.clear();
-    if (source.empty() || source.size() > 16384) { error = "Script is empty or too large"; return false; }
+    if (source.empty() || source.size() > kPluginTextLimit) { error = "Script is empty or exceeds 10 MiB"; return false; }
     Memory memory;
     lua_State* state = lua_newstate(limitedAlloc, &memory);
     if (!state) { error = "Cannot allocate script runtime"; return false; }
     lua_sethook(state, instructionLimit, LUA_MASKCOUNT, kInstructionLimit);
     lua_pushcfunction(state, initialize);
     int status = lua_pcall(state, 0, 0, 0);
-    if (status == LUA_OK) status = luaL_loadbufferx(state, source.data(), source.size(), "plugin", "t");
+    if (status == LUA_OK) status = loadSource(state, memory, source);
     if (status == LUA_OK) status = lua_pcall(state, 0, 1, 0);
     if (status != LUA_OK) {
         const char* message = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : nullptr;

@@ -1,4 +1,5 @@
 #include "CodeEditor.h"
+#include "PluginLimits.h"
 
 #include <SDL.h>
 
@@ -22,7 +23,7 @@ namespace fs = std::filesystem;
 
 constexpr float kFontPx = 24.0f;
 constexpr int kGutter = 96, kPad = 18, kTop = 18, kRightMargin = 30, kTabWidth = 4;
-constexpr size_t kMaxBytes = 2u * 1024 * 1024, kMaxRenderedLine = 4000;
+constexpr size_t kMaxBytes = kPluginTextLimit, kMaxRenderedLine = 4000;
 
 enum Cls : uint8_t { Plain, Keyword, String, Comment, Number, Func, Type, Special };
 enum LangFlags { kCaseInsensitive = 1, kMarkup = 2, kJson = 4, kMarkdown = 8, kPreproc = 16 };

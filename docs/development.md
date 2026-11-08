@@ -53,6 +53,8 @@ cmake --build build --config Release
 build\Release\SciFiShell.exe
 ```
 
+For a release, ensure CEF 156 is present at `third_party\cef` or pass `-DSCIFI_CEF_ROOT=<extracted-CEF-directory>` when configuring; otherwise the browser is omitted. Use a Windows x64 generator and the `Release` configuration. Run `ctest --test-dir build -C Release --output-on-failure` before packaging; the explicit `GameplayArchiveLargeTest --expanded-limit` target also checks the 1 GiB archive and 100 MiB asset boundaries. The [v0.9.22 plugin changelog](plugins.md#v0922-changelog) describes authoring limits and their separate runtime budgets. `build-installer.ps1` writes the supplied version into the staged `version.txt` and excludes test binaries/fixtures from the installer.
+
 Linux:
 ```
 sudo apt install build-essential cmake libsdl2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libvulkan-dev

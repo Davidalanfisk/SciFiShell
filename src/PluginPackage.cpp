@@ -15,9 +15,10 @@
 
 namespace sf {
 namespace {
-constexpr size_t kMaxBytes = 16384, kMaxPackages = 64;
+constexpr size_t kMaxBytes = kPluginTextLimit, kMaxPackages = 64;
 
 struct Value { bool array = false; std::string text; std::vector<std::string> items; };
+// Bound parsed metadata separately from the larger source/formatting allowance.
 class Parser {
 public:
     explicit Parser(const std::string& s) : s_(s) {}
@@ -31,11 +32,15 @@ public:
             if (take('[')) {
                 value.array = true;
                 if (!take(']')) {
-                    do { std::string v; if (!string(v)) return false; value.items.push_back(v); } while (take(','));
+                    do {
+                        std::string v;
+                        if (value.items.size() >= 12 || !string(v)) return false;
+                        value.items.push_back(v);
+                    } while (take(','));
                     if (!take(']')) return false;
                 }
             } else if (!string(value.text)) return false;
-            if (!out.emplace(key, value).second) return false;
+            if (out.size() >= 10 || !out.emplace(key, value).second) return false;
             if (take('}')) return finish();
         } while (take(','));
         return false;
@@ -55,6 +60,7 @@ private:
                 c = static_cast<unsigned char>(s_[i_++]);
                 if (c != '"' && c != '\\' && c != '/') return false;
             }
+            if (out.size() >= 160) return false;
             out += static_cast<char>(c);
         }
         return false;
@@ -227,7 +233,7 @@ bool PluginPackageStore::parseGameplayManifest(const std::string& text, Gameplay
 }
 
 bool PluginPackageStore::readZip(const std::string& data, ScriptPackage& out, std::string& error) {
-    if (data.empty() || data.size() > 262144) { error = "ZIP is empty or exceeds 256 KiB"; return false; }
+    if (data.empty() || data.size() > kScriptArchiveLimit) { error = "Script ZIP is empty or exceeds 20 MiB + 64 KiB"; return false; }
     mz_zip_archive zip{};
     if (!mz_zip_reader_init_mem(&zip, data.data(), data.size(), 0)) { error = "Invalid ZIP"; return false; }
     auto done = [&](const std::string& message) {
@@ -277,7 +283,7 @@ bool PluginPackageStore::loadZip(const std::filesystem::path& path, ScriptPackag
     const auto st = std::filesystem::symlink_status(path, ec);
     if (ec || !std::filesystem::is_regular_file(st)) { error_ = "ZIP must be a regular file"; return false; }
     const auto size = std::filesystem::file_size(path, ec);
-    if (ec || size > 262144) { error_ = "ZIP is unreadable or too large"; return false; }
+    if (ec || size > kScriptArchiveLimit) { error_ = "Script ZIP is unreadable or exceeds 20 MiB + 64 KiB"; return false; }
     std::ifstream in(path, std::ios::binary);
     std::string data(static_cast<size_t>(size), '\0');
     if (!in || !in.read(data.data(), static_cast<std::streamsize>(data.size())) || in.peek() != std::ifstream::traits_type::eof()) {
@@ -387,8 +393,8 @@ bool PluginPackageStore::install(const std::filesystem::path& source) {
     const auto incomingZipSize = isGameplay ? gameplayDigest.size :
         zip ? std::filesystem::file_size(source, ec) : 0;
     if (ec) { error_ = "Cannot inspect source ZIP: " + ec.message(); return false; }
-    if (zip && !isGameplay && incomingZipSize > 262144) {
-        error_ = "Script ZIP changed or exceeds 256 KiB"; return false;
+    if (zip && !isGameplay && incomingZipSize > kScriptArchiveLimit) {
+        error_ = "Script ZIP changed or exceeds 20 MiB + 64 KiB"; return false;
     }
     if (zip && incomingZipSize > kGameplayInstalledZipLimit - zipBytes) {
         error_ = "Installed ZIP storage limit exceeded"; return false;

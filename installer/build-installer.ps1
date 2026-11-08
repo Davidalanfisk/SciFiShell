@@ -1,5 +1,5 @@
 <#
- Builds the installer from build\Release and optionally publishes it as a private GitHub release.
+ Builds the installer from build\Release and optionally publishes it as a public GitHub release.
    .\installer\build-installer.ps1 -Version 0.2.0            # installer\Output\SciFiShell-Setup-0.2.0.exe
    .\installer\build-installer.ps1 -Version 0.2.0 -Publish   # ...and gh release create v0.2.0 (the updater picks it up)
 #>
@@ -15,7 +15,8 @@ if (-not (Test-Path (Join-Path $rel 'SciFiShell.exe'))) { throw "Build first: cm
 
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item $stage -ItemType Directory | Out-Null
-robocopy $rel $stage /E /XF *.lib *.pdb *.log *.exp *.ilk /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy $rel $stage /E /XF *.lib *.pdb *.log *.exp *.ilk *Test.exe NativePluginFixture*.dll /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "Cannot stage release files: robocopy failed ($LASTEXITCODE)" }
 Copy-Item (Join-Path $PSScriptRoot 'update.ps1') $stage
 Copy-Item (Join-Path $root 'third_party\alpha-plugin-licenses.txt') $stage
 Set-Content (Join-Path $stage 'version.txt') $Version -NoNewline

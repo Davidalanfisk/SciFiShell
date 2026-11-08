@@ -1,4 +1,5 @@
 #include "PluginScript.h"
+#include "PluginLimits.h"
 #include "GameplayCellGrid.h"
 #include "GameplayControlLease.h"
 #include "GameplayControlMotion.h"
@@ -64,6 +65,41 @@ int main() {
     check(!sf::runPluginScript(std::string("\x1bLua", 4), result, error), "bytecode rejected");
     check(sf::runPluginScript("return 'AFTER FAILURE'", result, error), "fresh runtime after failure");
     sf::PluginScriptRuntime runtime;
+    {
+        std::string large = "return 'LARGE'";
+        large.resize(sf::kPluginTextLimit, ' ');
+        check(sf::runPluginScript(large, result, error) && result == "LARGE",
+              "message source accepts exactly 10 MiB");
+        large.push_back(' ');
+        check(!sf::runPluginScript(large, result, error) && error.find("10 MiB") != std::string::npos,
+              "message source rejects 10 MiB plus one byte");
+
+        // Thousands of nested prototypes exercise compilation, not just whitespace.
+        large = "local function catalog() return {";
+        for (int i = 0; i < 30000; ++i) large += "function() return 7 end,\n";
+        large += "} end return {on_tick=function() "
+                 "if time_frame()<0 then catalog() end end}";
+        large.resize(sf::kPluginTextLimit, ' ');
+        check(runtime.start(large, error) && runtime.tick(0.01, error) && runtime.stop(error),
+              "10 MiB gameplay source compiles substantial bytecode and runs a callback");
+        large.push_back(' ');
+        check(!runtime.start(large, error) && !runtime.running() && error.find("10 MiB") != std::string::npos,
+              "gameplay source rejects 10 MiB plus one byte");
+        large = "local big='" + std::string(2 * 1024 * 1024, 'x') +
+                "' return {on_tick=function() if big=='' then missing() end end}";
+        check(runtime.start(large, error) && runtime.tick(0.01, error) && runtime.stop(error),
+              "large source literal loads beyond old 1 MiB compile allocation limit");
+        large = "local big='" + std::string(2 * 1024 * 1024, 'x') +
+                "' return {on_tick=function() big=big..big end}";
+        check(runtime.start(large, error) && !runtime.tick(0.01, error) &&
+              !runtime.running() && error.find("memory") != std::string::npos,
+              "loaded-code allowance does not grant unbounded callback allocations");
+        large = "return {on_tick=function() while true do end end}";
+        large.resize(sf::kPluginTextLimit, ' ');
+        check(runtime.start(large, error) && !runtime.tick(0.01, error) &&
+              !runtime.running() && error.find("instruction limit") != std::string::npos,
+              "10 MiB script retains callback instruction budget");
+    }
     check(runtime.start(
               "local t=time_elapsed() local wall=time_unix() "
               "math.randomseed(42,1) local n=math.random(1,100) local f=math.random() "

@@ -304,6 +304,17 @@ endif()
 
 if(TARGET SDL2::SDL2)
     target_link_libraries(SciFiShell PRIVATE SDL2::SDL2)
+    get_target_property(SCIFI_SDL2_TYPE SDL2::SDL2 TYPE)
+    if(WIN32 AND SCIFI_SDL2_TYPE STREQUAL "SHARED_LIBRARY")
+        add_custom_command(TARGET SciFiShell POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:SciFiShell>)
+        if(BUILD_TESTING)
+            add_custom_command(TARGET GameplaySoundTest POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:GameplaySoundTest>)
+        endif()
+    endif()
 else()
     target_include_directories(SciFiShell PRIVATE ${SDL2_INCLUDE_DIRS})
     target_link_libraries(SciFiShell PRIVATE ${SDL2_LIBRARIES})
