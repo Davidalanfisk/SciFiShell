@@ -1,0 +1,1 @@
+{"id":"com.example.park-cell","name":"PARK CELL","version":"1.0.0","author":"SciFi Shell","description":"Place a small park in a vacant city cell","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","world","layout","view","hud"],"api_version":"1"}

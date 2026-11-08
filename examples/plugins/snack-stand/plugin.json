@@ -1,0 +1,1 @@
+{"id":"com.example.snack-stand","name":"SNACK STAND","version":"1.0.0","author":"SciFi Shell","description":"Throw snacks at a duck for points","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","world","input","view","sound","hud","impulse"],"api_version":"1"}

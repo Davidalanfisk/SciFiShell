@@ -1,4 +1,5 @@
 #include "SettingsHub.h"
+#include "SettingsNoticeLayout.h"
 
 #include <algorithm>
 #include <cmath>
@@ -130,10 +131,12 @@ void SettingsHub::rebuild() {
         const Rect br{kPad, 132, kPad + 260, 212};
         rects_.push_back(br);
         ui::button(bm, ui::Rect{br.x0, br.y0, br.x1, br.y1}, "< BACK", sel_ == 0 ? ui::State::Selected : ui::State::Normal, false, 30);
-        float noticeY = 160.0f;
-        for (const auto& line : wrapText(notice_, 18, FontFace::UI, static_cast<float>(W_ - kPad - 320), 2)) {
-            drawText(bm, 320, noticeY, line, 18, FontFace::UI, tk.text);
-            noticeY += 22.0f;
+        float noticeY = 143.0f;
+        for (const auto& line : wrapText(notice_, kSettingsNoticeFontSize, FontFace::UI,
+                                         static_cast<float>(W_ - kSettingsNoticeRightPadding - kSettingsNoticeLeft),
+                                         kSettingsNoticeLines)) {
+            drawText(bm, kSettingsNoticeLeft, noticeY, line, kSettingsNoticeFontSize, FontFace::UI, tk.text);
+            noticeY += 19.0f;
         }
         const float cw = static_cast<float>(W_ - 2 * kPad - kGap) / 2;
         const int n = static_cast<int>(c.items.size());
@@ -162,7 +165,7 @@ void SettingsHub::rebuild() {
                 drawText(bm, x + cw - 28 - measureText(v, 30, FontFace::UIBold), y + 60, v, 30, FontFace::UIBold, tk.accent);
             }
         }
-        if (n > kVisibleRows * 2)
+        if (notice_.empty() && n > kVisibleRows * 2)
             ui::labelRight(bm, static_cast<float>(W_ - kPad), 203, "SCROLL / ARROWS  " + std::to_string(scrollRow_ + 1) + " - " +
                            std::to_string(std::min(scrollRow_ + kVisibleRows, (n + 1) / 2)) + " / " + std::to_string((n + 1) / 2),
                            20, FontFace::UI, tk.dim);
@@ -280,6 +283,8 @@ void SettingsHub::close() {
     dragging_ = false;
     open_ = false;
     hidden_ = false;
+    notice_.clear();
+    dirty_ = true;
 }
 
 void SettingsHub::hide() {
@@ -288,6 +293,8 @@ void SettingsHub::hide() {
     dragging_ = false;
     open_ = false;
     hidden_ = true;
+    notice_.clear();
+    dirty_ = true;
 }
 
 void SettingsHub::step(int delta) {

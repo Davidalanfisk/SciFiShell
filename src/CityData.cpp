@@ -94,6 +94,22 @@ static std::atomic<long long> g_lastSave{0};
 void CityData::start() {
     if (started_) return;
     started_ = true;
+#ifdef SCIFI_TEST_SYNTHETIC_CITY
+    CityDrive drive;
+    drive.root = "synthetic-city";
+    drive.name = "TEST CITY";
+    drive.listed = drive.done = true;
+    drive.total = 1000000;
+    drive.freeBytes = 500000;
+    CityFolder folder;
+    folder.name = "TEST BLOCK";
+    folder.done = true;
+    folder.subs.push_back({"TEST TOWER", 1, 100, true, {}});
+    drive.folders.push_back(std::move(folder));
+    drives_.push_back(std::move(drive));
+    pending_ = 0;
+    return;
+#endif
     std::vector<std::string> roots;
 #ifdef _WIN32
     DWORD mask = GetLogicalDrives();
@@ -586,6 +602,10 @@ bool CityData::snapshot(std::vector<CityDrive>& out, uint64_t& version, bool& re
 }
 
 void CityData::pollDrives(double dt) {
+#ifdef SCIFI_TEST_SYNTHETIC_CITY
+    (void)dt;
+    return;
+#endif
 #ifdef _WIN32
     if (!started_ || stop_) return;
     driveAccum_ += dt;
@@ -647,6 +667,10 @@ void CityData::takeChanges(std::vector<CityChange>& out) {
 }
 
 void CityData::pollStats(double dt) {
+#ifdef SCIFI_TEST_SYNTHETIC_CITY
+    (void)dt;
+    return;
+#endif
 #ifdef _WIN32
     statAccum_ += dt;
     if (statAccum_ < 0.5) return;

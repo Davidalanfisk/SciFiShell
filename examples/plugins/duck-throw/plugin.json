@@ -1,0 +1,1 @@
+{"id":"com.example.duck-throw","name":"DUCK THROW","version":"1.0.0","author":"SciFi Shell","description":"Throw animated ducks in the city","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","world","input","view","sound","hud"],"api_version":"1"}

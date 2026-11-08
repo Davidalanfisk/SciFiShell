@@ -1,4 +1,5 @@
 #include "Renderer.h"
+#include "GameplayGpuValidation.h"
 #include "ModelLoader.h"
 
 #include <SDL.h>
@@ -6,6 +7,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <limits>
+#include <new>
 
 #include "MapHelper.hpp"
 
@@ -50,6 +53,8 @@ void Renderer::waitIdle() {
 
 void Renderer::shutdown() {
     waitIdle();
+    gameplayModels_.clear();
+    gameplayBytes_ = 0;
     msaa_[0] = {};
     msaa_[1] = {};
     msaa_[2] = {};
@@ -647,22 +652,24 @@ std::shared_ptr<GpuLabel> Renderer::createLabel(const Bitmap& bm, bool srgbImage
     TextureData data{subs.data(), static_cast<Uint32>(subs.size())};
     device_->CreateTexture(td, &data, &label->texture);
     label->aspect = bm.h ? static_cast<float>(bm.w) / static_cast<float>(bm.h) : 1.0f;
-    bindLabel(*label);
+    if (!bindLabel(*label)) return {};
     return label;
 }
 
-void Renderer::bindLabel(GpuLabel& label) {
+bool Renderer::bindLabel(GpuLabel& label) {
+    if (!label.texture || !label.texture->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE)) return false;
     auto bind = [&](Pipeline& p, Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding>& srb) {
+        if (!p.pso) return false;
         p.pso->CreateShaderResourceBinding(&srb, true);
+        if (!srb) return false;
         if (auto* var = srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_Tex"))
             var->Set(label.texture->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
         if (auto* var = srb->GetVariableByName(SHADER_TYPE_PIXEL, "g_Refl"))
             var->Set(label.texture->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+        return true;
     };
-    bind(panelPipeline_, label.panelSRB);
-    bind(solidPipeline_, label.solidSRB);
-    bind(webPipeline_, label.webSRB);
-    bind(floorPipeline_, label.floorSRB);
+    return bind(panelPipeline_, label.panelSRB) && bind(solidPipeline_, label.solidSRB) &&
+           bind(webPipeline_, label.webSRB) && bind(floorPipeline_, label.floorSRB);
 }
 
 void Renderer::draw(Pipeline& pipeline, IShaderResourceBinding* srb, const Mesh& mesh, const Mat4& world,
@@ -827,6 +834,105 @@ void Renderer::drawModel(int id, const GpuLabel& any, const Mat4& world, Vec3 ne
     draw(solidPipeline_, textured ? modelTex_[id]->solidSRB : any.solidSRB, models_[id], world, color, params, eyeL);
 }
 
+bool Renderer::createGameplayModel(uint64_t owner, const GameplayModel& model, const GameplayTexture* overrideTexture,
+                                   uint64_t& handle, std::string& error) {
+    handle = 0;
+    if (!owner || !device_ || !context_ || !solidPipeline_.pso) {
+        error = "Gameplay renderer is unavailable";
+        return false;
+    }
+    size_t bytes = 0;
+    if (!gameplayGpuBytes(model, overrideTexture, bytes, error)) return false;
+    size_t ownerBytes = 0, ownerCount = 0;
+    for (const auto& entry : gameplayModels_) {
+        if (entry.second.owner == owner) {
+            ownerBytes += entry.second.bytes;
+            ++ownerCount;
+        }
+    }
+    if (ownerCount >= kGameplayGpuModelLimit || gameplayModels_.size() >= kGameplayGpuTotalModelLimit ||
+        bytes > kGameplayGpuOwnerLimit - ownerBytes ||
+        bytes > kGameplayGpuTotalLimit - gameplayBytes_) {
+        error = "Gameplay GPU resource budget exceeded";
+        return false;
+    }
+    if (!nextGameplayHandle_ || nextGameplayHandle_ == std::numeric_limits<uint64_t>::max()) {
+        error = "Gameplay GPU handle limit reached";
+        return false;
+    }
+    try {
+        GameplayGpuModel resource;
+        resource.owner = owner;
+        resource.bytes = bytes;
+        std::copy(model.baseColour, model.baseColour + 3, resource.baseColour);
+        resource.mesh = createMesh(model.vertices, model.indices);
+        if (!resource.mesh.vb || !resource.mesh.ib) {
+            error = "Cannot allocate gameplay GPU buffers";
+            return false;
+        }
+        const auto& texture = overrideTexture ? *overrideTexture : model.embeddedTexture;
+        const uint8_t white[] = {255, 255, 255, 255};
+        const bool present = !texture.rgba.empty();
+        TextureDesc td;
+        td.Name = "Gameplay model texture";
+        td.Type = RESOURCE_DIM_TEX_2D;
+        td.Width = present ? static_cast<Uint32>(texture.width) : 1;
+        td.Height = present ? static_cast<Uint32>(texture.height) : 1;
+        td.MipLevels = 1;
+        td.Format = TEX_FORMAT_RGBA8_UNORM_SRGB;
+        td.BindFlags = BIND_SHADER_RESOURCE;
+        td.Usage = USAGE_IMMUTABLE;
+        TextureSubResData sub{present ? texture.rgba.data() : white, static_cast<Uint64>(td.Width) * 4};
+        TextureData data{&sub, 1};
+        device_->CreateTexture(td, &data, &resource.texture);
+        if (!resource.texture) { error = "Cannot allocate gameplay GPU texture"; return false; }
+        auto* view = resource.texture->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+        if (!view) { error = "Cannot create gameplay texture view"; return false; }
+        solidPipeline_.pso->CreateShaderResourceBinding(&resource.binding, true);
+        if (!resource.binding) { error = "Cannot create gameplay shader binding"; return false; }
+        auto* variable = resource.binding->GetVariableByName(SHADER_TYPE_PIXEL, "g_Tex");
+        if (!variable) { error = "Gameplay shader texture binding is unavailable"; return false; }
+        variable->Set(view);
+        if (auto* reflection = resource.binding->GetVariableByName(SHADER_TYPE_PIXEL, "g_Refl"))
+            reflection->Set(view);
+        gameplayModels_.emplace(nextGameplayHandle_, std::move(resource));
+        gameplayBytes_ += bytes;
+        handle = nextGameplayHandle_++;
+        error.clear();
+        return true;
+    } catch (const std::bad_alloc&) {
+        error = "Cannot allocate gameplay GPU resource";
+        return false;
+    }
+}
+
+bool Renderer::drawGameplayModel(uint64_t owner, uint64_t handle, const Mat4& world, Vec3 colour) {
+    const auto it = gameplayModels_.find(handle);
+    if (!owner || it == gameplayModels_.end() || it->second.owner != owner) return false;
+    const float color[4] = {colour.x * it->second.baseColour[0], colour.y * it->second.baseColour[1],
+                            colour.z * it->second.baseColour[2], 0};
+    const float params[4] = {0, 0, 0, 11.0f};
+    const Vec3 eye = view_.rigidInverse().transformPoint({0, 0, 0});
+    const float eyeL[4] = {eye.x, eye.y, eye.z, 0};
+    draw(solidPipeline_, it->second.binding, it->second.mesh, world, color, params, eyeL);
+    return true;
+}
+
+void Renderer::releaseGameplayModels(uint64_t owner) {
+    if (!owner) return;
+    bool found = false;
+    for (const auto& entry : gameplayModels_) if (entry.second.owner == owner) { found = true; break; }
+    if (!found) return;
+    waitIdle();
+    context_->InvalidateState();
+    for (auto it = gameplayModels_.begin(); it != gameplayModels_.end();) {
+        if (it->second.owner == owner) {
+            gameplayBytes_ -= it->second.bytes;
+            it = gameplayModels_.erase(it);
+        } else ++it;
+    }
+}
+
 void Renderer::drawPointer(const GpuLabel& label, const Mat4& world, Vec3 c) {
     const float color[4] = {c.x, c.y, c.z, 1.0f};
     const float params[4] = {0.6f, 0.0f, 1, 0};
@@ -870,7 +976,7 @@ std::shared_ptr<GpuLabel> Renderer::createDynamicLabel(int w, int h) {
     TextureData data{&sub, 1};
     device_->CreateTexture(td, &data, &label->texture);
     label->aspect = static_cast<float>(w) / static_cast<float>(h);
-    bindLabel(*label);
+    if (!bindLabel(*label)) return {};
     return label;
 }
 

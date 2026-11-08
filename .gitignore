@@ -7,4 +7,5 @@ installer/stage/
 __pycache__/
 *.png
 !assets/**/*.png
+!examples/plugins/car-track/assets/paint.png
 .vs/

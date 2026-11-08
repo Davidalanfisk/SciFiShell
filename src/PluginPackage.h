@@ -6,6 +6,8 @@
 
 namespace sf {
 
+struct GameplayPackage;
+
 struct ThemePackage {
     std::string id, name, version, author, description, accent, alt;
 };
@@ -18,20 +20,25 @@ class PluginPackageStore {
 public:
     using Register = std::function<bool(const ThemePackage&)>;
     using RegisterScript = std::function<bool(const ScriptPackage&)>;
-    PluginPackageStore(std::filesystem::path directory, Register registerTheme, RegisterScript registerScript = {});
+    using RegisterGameplay = std::function<bool(const GameplayPackage&, const std::string&)>;
+    PluginPackageStore(std::filesystem::path directory, Register registerTheme, RegisterScript registerScript = {},
+                       RegisterGameplay registerGameplay = {});
     void discover();
     bool install(const std::filesystem::path& source);
     bool uninstall(const std::string& id);
     const std::string& error() const { return error_; }
     static bool parse(const std::string& text, ThemePackage& out, std::string& error);
     static bool parseScript(const std::string& text, ScriptPackage& out, std::string& error);
+    static bool parseGameplayManifest(const std::string& text, GameplayPackage& out, std::string& error);
     static bool readZip(const std::string& data, ScriptPackage& out, std::string& error);
 private:
     bool load(const std::filesystem::path& path, ThemePackage& out);
     bool loadZip(const std::filesystem::path& path, ScriptPackage& out);
+    bool loadGameplayZip(const std::filesystem::path& path, GameplayPackage& out, std::string& bytes);
     std::filesystem::path dir_;
     Register register_;
     RegisterScript registerScript_;
+    RegisterGameplay registerGameplay_;
     std::string error_;
 };
 

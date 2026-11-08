@@ -1,0 +1,1 @@
+{"id":"com.example.parks-toys","name":"SCRIPTED PARKS AND TOYS","version":"1.0.0","author":"SciFi Shell","description":"Nearby parks and throwable snacks","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","world","layout","input","view","sound","hud","impulse"],"api_version":"1"}

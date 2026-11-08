@@ -1,0 +1,1 @@
+{"id":"com.example.gameplay-duck","name":"GAMEPLAY DUCK","version":"1.0.0","author":"SciFi Shell","description":"An animated duck and platform","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene"],"api_version":"1"}

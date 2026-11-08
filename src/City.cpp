@@ -1,4 +1,6 @@
 #include "City.h"
+#include "GameplayCellGrid.h"
+#include "GameplayTrackClearance.h"
 
 #include <algorithm>
 #include <queue>
@@ -79,6 +81,32 @@ City::City(Renderer& renderer) : renderer_(renderer) {
 }
 
 City::~City() { data_.stop(); }
+
+bool City::gameplayTrackClearance(float x, float z, float radius, double* result) const {
+    if (!built_ || !result) return false;
+    std::vector<Box> monuments;
+    monumentBoxes(monuments);
+    return sf::gameplayTrackClearance(platforms_, monuments, x, z, radius, *result);
+}
+
+int City::gameplayCell(float x, float z, double* result) const noexcept {
+    if (!built_ || !result || !std::isfinite(x) || !std::isfinite(z)) return -1;
+    size_t visited = 0, visitedPlatforms = 0;
+    for (const auto& p : platforms_) {
+        if (++visitedPlatforms > 4096) return -1;
+        if (p.gone || p.grow <= 0.95f) continue;
+        if (!std::isfinite(p.pitch) || p.pitch <= 0) return -1;
+        for (const auto& b : p.blocks) {
+            if (++visited > 4096) return -1;
+            const int found = gameplayCellInGrid(x, z, b.cx, b.cz, p.pitch, b.g, b.towers, result);
+            if (found < 0) return -1;
+            if (!found) continue;
+            result[1] = kSlabH + kPlateH;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 bool City::prepareDrivingModule(const std::filesystem::path& path, std::string& error) {
     if (!trackSamplingModule_.load(path, "org.scifishell.track-sampling", error)) return false;

@@ -398,6 +398,11 @@ float3 buildingColor(PSInput In)
         col = tex * (0.3 + 0.7 * diff) * (1.0 - emis) + tex * emis * 2.2 + neon * fres * 0.25;
         return col;  // skip the city haze: the model sits in lit rooms
     }
+    else if (kind == 11)
+    {
+        float diff = saturate(dot(n, normalize(float3(0.4, 0.8, 0.5))));
+        return g_Tex.Sample(g_Tex_sampler, In.UV).rgb * neon * (0.3 + 0.7 * diff);
+    }
     else
     {
         float sweep = 0.6 + 0.4 * sin(In.WPos.y * 0.7 - tm * 6.0);

@@ -1,4 +1,6 @@
 #include "PluginPackage.h"
+#include "GameplayPackage.h"
+#include "GameplayLimits.h"
 
 #include <algorithm>
 #include <fstream>
@@ -83,8 +85,10 @@ bool colour(const std::string& s) {
 }
 }
 
-PluginPackageStore::PluginPackageStore(std::filesystem::path directory, Register reg, RegisterScript script)
-    : dir_(std::move(directory)), register_(std::move(reg)), registerScript_(std::move(script)) {}
+PluginPackageStore::PluginPackageStore(std::filesystem::path directory, Register reg, RegisterScript script,
+                                       RegisterGameplay gameplay)
+    : dir_(std::move(directory)), register_(std::move(reg)), registerScript_(std::move(script)),
+      registerGameplay_(std::move(gameplay)) {}
 
 bool PluginPackageStore::parse(const std::string& text, ThemePackage& out, std::string& error) {
     std::map<std::string, Value> fields;
@@ -124,6 +128,56 @@ bool PluginPackageStore::parseScript(const std::string& text, ScriptPackage& out
         error = "Unsupported or invalid script manifest";
         return false;
     }
+    error.clear();
+    return true;
+}
+
+bool PluginPackageStore::parseGameplayManifest(const std::string& text, GameplayPackage& out, std::string& error) {
+    out = {};
+    std::map<std::string, Value> fields;
+    if (text.size() > kMaxBytes || !Parser(text).parse(fields)) { error = "Invalid gameplay manifest JSON"; return false; }
+    const char* keys[] = {"id", "name", "version", "author", "description", "entry", "type",
+                          "platforms", "permissions", "api_version"};
+    if (fields.size() != sizeof(keys) / sizeof(keys[0])) { error = "Unexpected or missing gameplay manifest fields"; return false; }
+    for (const char* key : keys) if (!fields.count(key)) { error = "Missing gameplay manifest field"; return false; }
+    for (const auto& [key, value] : fields)
+        if (value.array != (key == "platforms" || key == "permissions")) { error = "Invalid gameplay manifest field type"; return false; }
+    const auto& permissions = fields["permissions"].items;
+    bool scene = false, world = false, layout = false, impulse = false, control = false,
+         input = false, view = false, sound = false, hud = false, invalidPermission = false;
+    for (const auto& permission : permissions) {
+        bool* flag = permission == "scene" ? &scene : permission == "world" ? &world :
+                     permission == "input" ? &input : permission == "view" ? &view :
+                     permission == "sound" ? &sound : permission == "hud" ? &hud :
+                     permission == "layout" ? &layout : permission == "impulse" ? &impulse :
+                     permission == "control" ? &control : nullptr;
+        if (!flag || *flag) invalidPermission = true;
+        else *flag = true;
+    }
+    if (!validId(fields["id"].text) || !version(fields["version"].text) ||
+        fields["name"].text.empty() || fields["name"].text.size() > 40 ||
+        fields["author"].text.empty() || fields["author"].text.size() > 80 ||
+        fields["description"].text.empty() || fields["description"].text.size() > 160 ||
+        fields["type"].text != "gameplay" || fields["entry"].text != "scripts/main.lua" ||
+        fields["platforms"].items != std::vector<std::string>{"any"} || fields["api_version"].text != "1" ||
+        !scene || ((layout || impulse) && !world) || (control && (!world || !input || !view)) || invalidPermission) {
+        error = "Unsupported or invalid gameplay manifest";
+        return false;
+    }
+    out.id = fields["id"].text;
+    out.name = fields["name"].text;
+    out.version = fields["version"].text;
+    out.author = fields["author"].text;
+    out.description = fields["description"].text;
+    out.scene = true;
+    out.world = world;
+    out.layout = layout;
+    out.impulse = impulse;
+    out.control = control;
+    out.input = input;
+    out.view = view;
+    out.sound = sound;
+    out.hud = hud;
     error.clear();
     return true;
 }
@@ -188,6 +242,21 @@ bool PluginPackageStore::loadZip(const std::filesystem::path& path, ScriptPackag
     return readZip(data, out, error_);
 }
 
+bool PluginPackageStore::loadGameplayZip(const std::filesystem::path& path, GameplayPackage& out, std::string& bytes) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(path, ec);
+    if (ec || !std::filesystem::is_regular_file(status)) { error_ = "Gameplay ZIP must be a regular file"; return false; }
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec || size == 0 || size > kGameplayArchiveLimit) { error_ = "Gameplay ZIP is unreadable or too large"; return false; }
+    std::ifstream in(path, std::ios::binary);
+    bytes.resize(static_cast<size_t>(size));
+    if (!in || !in.read(bytes.data(), static_cast<std::streamsize>(bytes.size())) ||
+        in.peek() != std::ifstream::traits_type::eof()) {
+        error_ = "Cannot read gameplay ZIP"; return false;
+    }
+    return readGameplayPackage(bytes, out, error_);
+}
+
 bool PluginPackageStore::load(const std::filesystem::path& path, ThemePackage& out) {
     std::error_code ec;
     auto st = std::filesystem::symlink_status(path, ec);
@@ -224,6 +293,12 @@ void PluginPackageStore::discover() {
         if (path.extension() == ".zip") {
             ScriptPackage pkg;
             ok = loadZip(path, pkg) && path.filename().string() == pkg.id + ".zip" && registerScript_ && registerScript_(pkg);
+            if (!ok && registerGameplay_) {
+                GameplayPackage game;
+                std::string bytes;
+                ok = loadGameplayZip(path, game, bytes) && path.filename().string() == game.id + ".zip" &&
+                     registerGameplay_(game, bytes);
+            }
         } else {
             ThemePackage pkg;
             ok = load(path, pkg) && path.filename().string() == pkg.id + ".sfplugin" && register_(pkg);
@@ -242,8 +317,16 @@ bool PluginPackageStore::install(const std::filesystem::path& source) {
     if (!zip && source.extension() != ".sfplugin") { error_ = "Select a .zip or .sfplugin package"; return false; }
     ThemePackage input;
     ScriptPackage script;
-    if (zip ? !loadZip(source, script) : !load(source, input)) return false;
-    const std::string id = zip ? script.id : input.id;
+    GameplayPackage gameplay;
+    std::string gameplayBytes;
+    bool isGameplay = false;
+    if (zip) {
+        if (!loadZip(source, script)) {
+            if (!registerGameplay_ || !loadGameplayZip(source, gameplay, gameplayBytes)) return false;
+            isGameplay = true;
+        }
+    } else if (!load(source, input)) return false;
+    const std::string id = isGameplay ? gameplay.id : zip ? script.id : input.id;
     std::error_code ec;
     std::filesystem::create_directories(dir_, ec);
     if (ec) { error_ = "Cannot create plugin directory: " + ec.message(); return false; }
@@ -261,7 +344,12 @@ bool PluginPackageStore::install(const std::filesystem::path& source) {
     }
     ThemePackage copied;
     ScriptPackage copiedScript;
-    const bool registered = zip
+    GameplayPackage copiedGameplay;
+    std::string copiedBytes;
+    const bool registered = isGameplay
+        ? loadGameplayZip(target, copiedGameplay, copiedBytes) && copiedGameplay.id == id &&
+          copiedBytes == gameplayBytes && registerGameplay_ && registerGameplay_(copiedGameplay, copiedBytes)
+        : zip
         ? loadZip(target, copiedScript) && copiedScript.id == id && registerScript_ && registerScript_(copiedScript)
         : load(target, copied) && copied.id == id && register_(copied);
     if (!registered) {

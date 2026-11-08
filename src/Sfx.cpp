@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <new>
 
 namespace sf {
 
@@ -41,6 +42,10 @@ void Sfx::shutdown() {
     if (!dev_) return;
     SDL_CloseAudioDevice(dev_);
     dev_ = 0;
+    std::lock_guard<std::mutex> lk(mu_);
+    voices_.clear();
+    pluginEngines_.clear();
+    carEngine_ = {};
 }
 
 void Sfx::play(SfxId id, float volume) {
@@ -54,11 +59,66 @@ void Sfx::play(SfxId id, float volume) {
     voices_.push_back(v);
 }
 
+bool Sfx::playOwned(std::uint64_t owner, SfxId id, float volume) {
+    if (!owner || !dev_ || !std::isfinite(volume) || volume < 0 || volume > 1) return false;
+    if (volume <= 0.01f) return true;
+    std::lock_guard<std::mutex> lk(mu_);
+    if (voices_.size() >= 25) return false;
+    Voice v;
+    v.id = id;
+    v.vol = volume;
+    v.owner = owner;
+    v.seed = 977u + static_cast<unsigned>(SDL_GetTicks()) * 31u;
+    try { voices_.push_back(v); }
+    catch (const std::bad_alloc&) { return false; }
+    return true;
+}
+
+void Sfx::stopOwner(std::uint64_t owner) {
+    if (!owner) return;
+    std::lock_guard<std::mutex> lk(mu_);
+    voices_.erase(std::remove_if(voices_.begin(), voices_.end(),
+                                 [owner](const Voice& v) { return v.owner == owner; }), voices_.end());
+    pluginEngines_.erase(std::remove_if(pluginEngines_.begin(), pluginEngines_.end(),
+                                        [owner](const Engine& e) { return e.owner == owner; }), pluginEngines_.end());
+}
+
+#ifdef SCIFI_TEST_SYNTHETIC_CITY
+bool Sfx::testHasOwnedEngine(std::uint64_t owner) {
+    std::lock_guard<std::mutex> lk(mu_);
+    return std::any_of(pluginEngines_.begin(), pluginEngines_.end(),
+                       [owner](const Engine& e) { return e.owner == owner; });
+}
+#endif
+
+bool Sfx::setOwnedEngine(std::uint64_t owner, bool active, float speed, bool boost) {
+    if (!owner || !std::isfinite(speed) || speed < 0 || speed > 110) return false;
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = std::find_if(pluginEngines_.begin(), pluginEngines_.end(),
+                           [owner](const Engine& e) { return e.owner == owner; });
+    if (!active) {
+        if (it != pluginEngines_.end()) pluginEngines_.erase(it);
+        return true;
+    }
+    if (!dev_) return false;
+    if (it == pluginEngines_.end()) {
+        if (pluginEngines_.size() >= 4) return false;
+        try { pluginEngines_.push_back({}); }
+        catch (const std::bad_alloc&) { return false; }
+        it = pluginEngines_.end() - 1;
+        it->owner = owner;
+    }
+    it->target = 1;
+    it->speedTarget = speed;
+    it->boostTarget = boost ? 1.0f : 0.0f;
+    return true;
+}
+
 void Sfx::setCar(bool driving, float speed, bool boost) {
     std::lock_guard<std::mutex> lk(mu_);
-    carTarget_ = driving ? 1.0f : 0.0f;
-    carSpeedTarget_ = std::min(std::fabs(speed), 110.0f);
-    carBoostTarget_ = boost ? 1.0f : 0.0f;
+    carEngine_.target = driving ? 1.0f : 0.0f;
+    carEngine_.speedTarget = std::min(std::fabs(speed), 110.0f);
+    carEngine_.boostTarget = boost ? 1.0f : 0.0f;
 }
 
 void Sfx::callback(void* user, unsigned char* stream, int len) {
@@ -136,6 +196,22 @@ float Sfx::voiceSample(Voice& v, bool& alive) {
     return s * v.vol;
 }
 
+float Sfx::engineSample(Engine& engine) {
+    const float k = 1.0f / kRate;
+    engine.gain += (engine.target - engine.gain) * 3.0f * k;
+    engine.speed += (engine.speedTarget - engine.speed) * 2.5f * k;
+    engine.boost += (engine.boostTarget - engine.boost) * 4.0f * k;
+    if (engine.gain <= 0.002f) return 0;
+    const float sp = engine.speed / 100.0f;
+    const float f = 42.0f + sp * 78.0f + engine.boost * 8.0f;
+    engine.phase1 += kTau * f * k;
+    engine.phase2 += kTau * f * 2.0f * k;
+    const float raw = std::sin(engine.phase1) * 0.7f + std::sin(engine.phase2) * 0.25f * (0.3f + sp);
+    engine.lowpass += (raw - engine.lowpass) * 0.04f;
+    const float idle = 0.45f + 0.55f * std::min(1.0f, sp * 1.6f);
+    return engine.lowpass * idle * 0.2f * engine.gain * (1.0f + engine.boost * 0.2f);
+}
+
 void Sfx::fill(short* out, int frames) {
     std::lock_guard<std::mutex> lk(mu_);
     for (int i = 0; i < frames; ++i) {
@@ -145,21 +221,8 @@ void Sfx::fill(short* out, int frames) {
             s += voiceSample(v, alive);
             if (!alive) v.vol = 0.0f;
         }
-        // Electric hum: two detuned triangles that climb with speed, a faint whine and a touch of air at the top end.
-        const float k = 1.0f / kRate;
-        carGain_ += (carTarget_ - carGain_) * 3.0f * k;
-        carSpeed_ += (carSpeedTarget_ - carSpeed_) * 2.5f * k;
-        carBoost_ += (carBoostTarget_ - carBoost_) * 4.0f * k;
-        if (carGain_ > 0.002f) {
-            const float sp = carSpeed_ / 100.0f;
-            const float f = 42.0f + sp * 78.0f + carBoost_ * 8.0f;
-            ph1_ += kTau * f * k;
-            ph2_ += kTau * f * 2.0f * k;
-            const float raw = std::sin(ph1_) * 0.7f + std::sin(ph2_) * 0.25f * (0.3f + sp);
-            whineLp_ += (raw - whineLp_) * 0.04f;  // one-pole low-pass keeps everything warm and low
-            const float idle = 0.45f + 0.55f * std::min(1.0f, sp * 1.6f);
-            s += whineLp_ * idle * 0.2f * carGain_ * (1.0f + carBoost_ * 0.2f);
-        }
+        s += engineSample(carEngine_);
+        for (auto& engine : pluginEngines_) s += engineSample(engine);
         s *= master_;
         s = std::tanh(s * 1.2f);
         out[i] = static_cast<short>(std::clamp(s, -1.0f, 1.0f) * 30000.0f);

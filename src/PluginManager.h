@@ -24,6 +24,8 @@ public:
     bool add(Plugin plugin);
     bool initialize();
     bool setEnabled(const std::string& id, bool enabled);
+    // Stops a running plugin after a runtime failure without silently changing its saved preference.
+    bool markFailed(const std::string& id, const std::string& reason);
     bool remove(const std::string& id);
     void shutdown();
     const std::vector<Plugin>& plugins() const { return plugins_; }

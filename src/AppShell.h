@@ -14,6 +14,13 @@
 #include "Settings.h"
 #include "PluginManager.h"
 #include "PluginPackage.h"
+#include "GameplayConsent.h"
+#include "GameplayInput.h"
+#include "GameplayClickRouter.h"
+#include "GameplayControlLease.h"
+#include "GameplayImpulse.h"
+#include "GameplaySoundBudget.h"
+#include "GameplaySceneRenderer.h"
 #include <map>
 #include <set>
 #include <chrono>
@@ -79,8 +86,23 @@ private:
     void tick(double dt);
     void handleSwitcher(FrameInput& in, PadState& pad);
     void switchTo(int id);
-    void updateCamera(double dt, float moveX, float moveY, float moveZ, float lookX, float lookY, float speedMul = 1.0f);
+    void updateCamera(double dt, float moveX, float moveY, float moveZ, float lookX, float lookY,
+                      float speedMul = 1.0f, bool gameplayMotion = false);
     void renderScene(const Mat4& view, const Mat4& proj, const Vec3& eye, bool desktopPass);
+    bool registerGameplay(const GameplayPackage& package, const std::string& bytes);
+    bool gameplayWorldAvailable() const;
+    bool gameplayWindowFocused() const;
+#ifdef SCIFI_TEST_SYNTHETIC_CITY
+    bool syntheticGameplayFocus_ = false;
+#endif
+    void toggleGameplay(const std::string& id);
+    void tickGameplay(double dt, const FrameInput& input, bool allowInput);
+    uint64_t gameplayClickTarget(const Vec3& origin, const Vec3& direction) const;
+    void releaseGameplayControl();
+    void acquireGameplayControl();
+    std::string nearbyGameplayControl() const;
+    void prepareGameplay();
+    void renderGameplay();
     Node& activeRoot();
     Vec3 mouseRayDirection(int mx, int my) const;
 
@@ -92,6 +114,34 @@ private:
     std::map<std::string, std::string> pluginScripts_;
     std::map<std::string, std::string> pluginMessages_;
     std::set<std::string> installedPluginIds_;
+    struct GameplayEntry {
+        std::string bytes;
+        bool world = false;
+        bool layout = false;
+        bool impulse = false;
+        bool control = false;
+        bool input = false;
+        bool view = false;
+        bool sound = false;
+        bool hud = false;
+        uint64_t owner = 0;
+        GameplaySoundBudget soundBudget;
+        GameplayImpulse motion;
+        std::shared_ptr<GpuLabel> hudLabel;
+        std::uint64_t hudRevision = 0;
+        double hudDelay = 0;
+        GameplaySession session;
+        std::unique_ptr<GameplaySceneRenderer> scene;
+        std::string pendingError;
+        GameplayInput inputState;
+    };
+    std::map<std::string, std::shared_ptr<GameplayEntry>> gameplay_;
+    GameplayControlLease gameplayControl_;
+    GameplayClickRouter gameplayClicks_;
+    std::unique_ptr<GameplayConsent> gameplayConsent_;
+    uint64_t nextGameplayOwner_ = 1;
+    std::string gameplayConfirm_;
+    std::chrono::steady_clock::time_point gameplayDeadline_{};
     std::string uninstallConfirm_;
     std::chrono::steady_clock::time_point uninstallDeadline_{};
     InputSystem input_;

@@ -153,6 +153,35 @@ int main() {
         manager.shutdown();
     }
     {
+        fs::remove(file);
+        sf::PluginManager manager(file);
+        int starts = 0, stops = 0;
+        bool ready = true;
+        sf::Plugin plugin{"com.example.game", "Game", "", "1", [&] { ++starts; }, [&] { ++stops; }, false};
+        plugin.prepare = [&](std::string& error) { if (!ready) error = "still broken"; return ready; };
+        check(manager.add(std::move(plugin)) && manager.initialize() &&
+              manager.setEnabled("com.example.game", true), "runtime failure setup");
+        check(!manager.markFailed("com.example.game", ""), "empty runtime failure rejected");
+        check(manager.markFailed("com.example.game", "tick failed") &&
+              manager.plugins()[0].enabled && !manager.plugins()[0].running && stops == 1 &&
+              manager.error().find("tick failed") != std::string::npos, "runtime failure stops and reports");
+        check(!manager.markFailed("com.example.game", "duplicate") && stops == 1, "runtime failure stops once");
+        {
+            std::ifstream in(file);
+            std::string line;
+            std::getline(in, line);
+            check(line == "com.example.game=1", "runtime failure preserves enabled preference");
+        }
+        ready = false;
+        check(!manager.setEnabled("com.example.game", true) && starts == 1 &&
+              manager.error().find("still broken") != std::string::npos, "failed retry remains stopped");
+        ready = true;
+        check(manager.setEnabled("com.example.game", true) && manager.plugins()[0].running &&
+              starts == 2 && manager.error().empty(), "retry restarts enabled failed plugin");
+        manager.shutdown();
+        check(stops == 2, "retried plugin stops at shutdown");
+    }
+    {
         { std::ofstream out(file, std::ios::trunc); out << "com.example.bad=1\ncom.example.good=1\n"; }
         sf::PluginManager manager(file);
         sf::Plugin bad{"com.example.bad", "Bad", "", "1", [] {}, [] {}, false};

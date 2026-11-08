@@ -50,6 +50,9 @@ public:
     bool exitSpawn(Vec3& pos) const;
     bool debugPond(Vec3& pos);  // nearest pond park to the hub, for scripted checks
     bool debugStreet(Vec3& pos) const;  // debugging aid: street in front of the first grown tower
+    // Returns -1 on unavailable/over-budget, 0 outside a grid cell, 1 with center, pitch and occupancy.
+    int gameplayCell(float x, float z, double* result) const noexcept;
+    bool gameplayTrackClearance(float x, float z, float radius, double* result) const;
     void setParksEnabled(bool enabled);
     void setDrivingEnabled(bool enabled);
     bool prepareDrivingModule(const std::filesystem::path& path, std::string& error);

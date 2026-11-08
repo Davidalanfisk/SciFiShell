@@ -1,0 +1,1 @@
+{"id":"com.example.control-fixture","name":"CONTROL FIXTURE","version":"1.0.0","author":"Test","description":"Synthetic city control integration fixture","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","world","input","view","control"],"api_version":"1"}

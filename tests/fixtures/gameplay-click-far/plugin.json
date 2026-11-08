@@ -1,0 +1,1 @@
+{"id":"com.example.a-far","name":"FAR TARGET","version":"1.0.0","author":"Tests","description":"Far interaction target","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","world","input","hud"],"api_version":"1"}

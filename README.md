@@ -131,7 +131,7 @@ Ground-level fog drifts between the towers (tune it with the fog sliders in Sett
 
 **The car.** Press `F10` anywhere in the city to summon a neon hologram sports car, and `F10` again to leave it. `C` swaps first and third person; `Space` drifts and `Shift` boosts. A speedo appears on the HUD. The wheels steer and spin, and a quiet electric hum rises with speed. Parked, it is solid: you can stand on it. Ramps on every region let you drive up onto the platforms.
 
-**Plugins.** Car and Track and Parks and Toys can be enabled or disabled in Settings. See the [plugin guide](docs/plugins.md) for installing themes, writing restricted Lua plugins and the native trust boundary.
+**Plugins.** Car and Track and Parks and Toys can be enabled or disabled in Settings. Experimental Lua gameplay plugins can add packaged models and textures, but the scripted examples are simplified, not equivalent replacements for the native features. Download [scripted car and track](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-car-track.zip) and [scripted parks and toys](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-parks-toys.zip), or see the [plugin guide](docs/plugins.md) for installation, permissions and the authoring specification. Plugins execute in-process, not in an OS sandbox; only enable packages you trust.
 
 ![Plugins settings](docs/screenshot-plugins-2026.jpg)
 

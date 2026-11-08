@@ -147,6 +147,10 @@ bool AppShell::init() {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         return false;
     }
+#ifdef SCIFI_TEST_SYNTHETIC_CITY
+    SDL_SetWindowTitle(window_, "SciFi Shell - synthetic city test only");
+    std::fprintf(stderr, "Synthetic city integration test build; not for normal use\n");
+#endif
 #ifdef _WIN32
     SDL_SetWindowKeyboardGrab(window_, SDL_TRUE);  // lets us see Alt+Tab (and the Win key) for the task switcher
 #endif
@@ -178,6 +182,8 @@ bool AppShell::init() {
         return false;
     }
     const auto statePath = PluginManager::defaultStatePath();
+    gameplayConsent_ = std::make_unique<GameplayConsent>(
+        statePath.empty() ? std::filesystem::path{} : statePath.parent_path() / "plugin-consents");
     pluginPackages_ = std::make_unique<PluginPackageStore>(
         statePath.empty() ? std::filesystem::path{} : statePath.parent_path() / "plugins",
         [this](const ThemePackage& p) {
@@ -198,7 +204,8 @@ bool AppShell::init() {
             installedPluginIds_.insert(p.id);
             pluginScripts_[p.id] = p.script;
             return true;
-        });
+        },
+        [this](const GameplayPackage& p, const std::string& bytes) { return registerGameplay(p, bytes); });
     pluginPackages_->discover();
     if (!pluginPackages_->error().empty()) std::fprintf(stderr, "%s\n", pluginPackages_->error().c_str());
     plugins_.initialize();
@@ -616,7 +623,7 @@ void AppShell::buildSettingsHub() {
     cats.push_back(std::move(wm));
 
     SettingsCategory plugins{"PLUGINS", "Built-in features, themes and restricted scripts", "SHELL", {}};
-    plugins.items.push_back({"INSTALL PACKAGE", "Choose a .zip script or .sfplugin theme (no permissions)",
+    plugins.items.push_back({"INSTALL PACKAGE", "Choose a .zip script or .sfplugin theme; gameplay requires consent",
                              nullptr, [this] {
                                  openPanel(files2d_.get());
                                  files2d_->pickHandler = [this](const std::string& path) {
@@ -659,8 +666,13 @@ void AppShell::buildSettingsHub() {
                                      }
                                      uninstallConfirm_.clear();
                                      if (!plugins_.setEnabled(id, false)) { settingsPanel_->setNotice(plugins_.error()); return; }
+                                     if (gameplay_.count(id)) {
+                                         std::string error;
+                                         if (!gameplayConsent_->revoke(id, error)) { settingsPanel_->setNotice(error); return; }
+                                     }
                                      if (!pluginPackages_->uninstall(id)) { settingsPanel_->setNotice(pluginPackages_->error()); return; }
                                      if (!plugins_.remove(id)) { settingsPanel_->setNotice(plugins_.error()); return; }
+                                     gameplay_.erase(id);
                                      pluginScripts_.erase(id);
                                      pluginMessages_.erase(id);
                                      installedPluginIds_.erase(id);
@@ -669,13 +681,35 @@ void AppShell::buildSettingsHub() {
                                      settingsPanel_->setNotice("PLUGIN UNINSTALLED");
                                  }});
         }
-        plugins.items.push_back({plugin.name, plugin.description + " - v" + plugin.version + " - " + id,
+        const auto game = gameplay_.find(id);
+        std::string permissions;
+        if (game != gameplay_.end()) {
+            permissions = " - PERMISSIONS: SCENE";
+            if (game->second->world) permissions += ", CITY COLLISION";
+            if (game->second->layout) permissions += ", CITY LAYOUT";
+            if (game->second->impulse) permissions += ", PLAYER PUSH";
+            if (game->second->control) permissions += ", PLAYER AND CAMERA CONTROL";
+            if (game->second->input) permissions += ", MOVEMENT AND CLICK INPUT";
+            if (game->second->view) permissions += ", VIEW POSITION AND DIRECTION";
+            if (game->second->sound) permissions += ", SOUND EFFECTS";
+            if (game->second->hud) permissions += ", HUD TEXT";
+        }
+        if (game != gameplay_.end()) {
+            plugins.items.push_back({"DISABLE " + plugin.name, "Stop this gameplay plugin, including after an error",
+                                     nullptr, [this, id] {
+                                         gameplayConfirm_.clear();
+                                         if (!plugins_.setEnabled(id, false)) settingsPanel_->setNotice(plugins_.error());
+                                         else settingsPanel_->setNotice("PLUGIN DISABLED");
+                                     }});
+        }
+        plugins.items.push_back({plugin.name, plugin.description + " - v" + plugin.version + " - " + id + permissions,
                                  [this, id, onOff] {
                                      for (const auto& p : plugins_.plugins()) if (p.id == id)
                                          return p.enabled && !p.running ? std::string("ERROR") : onOff(p.running);
                                      return std::string("UNAVAILABLE");
                                  },
                                  [this, id] {
+                                     if (gameplay_.count(id)) { toggleGameplay(id); return; }
                                      for (const auto& p : plugins_.plugins()) {
                                          if (p.id == id) {
                                              if (!plugins_.setEnabled(id, !p.enabled)) settingsPanel_->setNotice(plugins_.error());
@@ -1434,6 +1468,92 @@ bool AppShell::scriptExec(const std::string& line) {
         scriptLog(it == pluginMessages_.end() ? "plugin message unavailable" : "plugin message " + it->second);
     } else if (cmd == "pluginerror") {
         scriptLog("plugin error " + plugins_.error());
+    } else if (cmd == "gameplaystatus") {
+        std::string id;
+        is >> id;
+        const auto it = gameplay_.find(id);
+        if (it == gameplay_.end()) scriptLog("gameplay unavailable " + id);
+        else scriptLog("gameplay " + id + " running=" + std::to_string(it->second->session.running()) +
+                       " boxes=" + std::to_string(it->second->session.boxes().size()) +
+                       " models=" + std::to_string(it->second->session.models().size()) +
+                       " hud_label=" + std::to_string(static_cast<bool>(it->second->hudLabel)));
+#ifdef SCIFI_TEST_SYNTHETIC_CITY
+    } else if (cmd == "testkey") {
+        std::string key;
+        is >> key;
+        SDL_Keycode code = key == "g" ? SDLK_g : (key == "escape" ? SDLK_ESCAPE : SDLK_UNKNOWN);
+        if (code == SDLK_UNKNOWN) scriptLog("test key invalid");
+        else {
+            SDL_Event event{};
+            event.type = SDL_KEYDOWN;
+            event.key.windowID = SDL_GetWindowID(window_);
+            event.key.state = SDL_PRESSED;
+            event.key.keysym.sym = code;
+            if (SDL_PushEvent(&event) != 1) scriptLog(std::string("test key failed: ") + SDL_GetError());
+        }
+    } else if (cmd == "testcontrol") {
+        scriptLog("test control owner=" + std::to_string(gameplayControl_.owner()) +
+                  " focus=" + std::to_string((SDL_GetWindowFlags(window_) & SDL_WINDOW_INPUT_FOCUS) != 0) +
+                  " simulated_focus=" + std::to_string(syntheticGameplayFocus_) +
+                  " city=" + std::to_string(gameplayWorldAvailable()) +
+                  " pos=" + std::to_string(camera_.position.x) + "," +
+                  std::to_string(camera_.position.y) + "," + std::to_string(camera_.position.z));
+    } else if (cmd == "testfocus") {
+        syntheticGameplayFocus_ = num(0) != 0;
+    } else if (cmd == "testclick") {
+        std::string action;
+        is >> action;
+        if (action != "down" && action != "up") scriptLog("test click invalid");
+        else {
+            SDL_Event event{};
+            event.type = action == "down" ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+            event.button.windowID = SDL_GetWindowID(window_);
+            event.button.button = SDL_BUTTON_LEFT;
+            event.button.state = action == "down" ? SDL_PRESSED : SDL_RELEASED;
+            if (SDL_PushEvent(&event) != 1) scriptLog(std::string("test click failed: ") + SDL_GetError());
+        }
+    } else if (cmd == "testgamehud") {
+        std::string id;
+        is >> id;
+        const auto it = gameplay_.find(id);
+        if (it == gameplay_.end()) scriptLog("test hud unavailable");
+        else scriptLog(std::string("test hud ") + it->second->session.hudText().text.data());
+    } else if (cmd == "testwindow") {
+        scriptLog("test window focus=" + std::to_string(focus_.p != nullptr));
+    } else if (cmd == "testgotooffer") {
+        std::string id;
+        is >> id;
+        const auto it = gameplay_.find(id);
+        if (it == gameplay_.end() || !it->second->session.running()) scriptLog("test offer unavailable");
+        else {
+            const auto offer = it->second->session.controlOffer();
+            if (!offer.available) scriptLog("test offer unavailable");
+            else {
+                camera_.position = {static_cast<float>(offer.x), static_cast<float>(offer.y),
+                                    static_cast<float>(offer.z)};
+                scriptLog("test offer reached");
+            }
+        }
+    } else if (cmd == "testaudio") {
+        std::string id;
+        is >> id;
+        const auto it = gameplay_.find(id);
+        if (it == gameplay_.end()) scriptLog("test audio unavailable");
+        else scriptLog("test audio engine=" + std::to_string(sfx_.testHasOwnedEngine(it->second->owner)));
+    } else if (cmd == "testclearance") {
+        std::string id;
+        is >> id;
+        const auto it = gameplay_.find(id);
+        double result = 0;
+        if (it == gameplay_.end() || !gameplayWorldAvailable() ||
+            !city_->gameplayTrackClearance(0, -55, 0, &result)) scriptLog("test clearance unavailable");
+        else {
+            const auto boxes = it->second->session.boxes();
+            if (boxes.empty()) scriptLog("test clearance marker missing");
+            else scriptLog("test clearance host=" + std::to_string(result) +
+                           " script=" + std::to_string(boxes.front().y));
+        }
+#endif
     } else if (cmd == "pluginnotice") {
         scriptLog("plugin notice " + settingsPanel_->notice());
     } else if (cmd == "pluginclick") {
@@ -1868,7 +1988,8 @@ Vec3 AppShell::mouseRayDirection(int mx, int my) const {
     return normalize(camera_.world().transformDir({ndcX * t * aspect, ndcY * t, -1.0f}));
 }
 
-void AppShell::updateCamera(double dt, float moveX, float moveY, float moveZ, float lookX, float lookY, float speedMul) {
+void AppShell::updateCamera(double dt, float moveX, float moveY, float moveZ, float lookX, float lookY,
+                            float speedMul, bool gameplayMotion) {
     const bool inVR = vrOn_ && head_.vr;
     if (inVR && lookX != 0.0f) {
         // Turn the tracking space about the head, not its own origin, so the view pivots in place.
@@ -1888,6 +2009,20 @@ void AppShell::updateCamera(double dt, float moveX, float moveY, float moveZ, fl
     Vec3 right{std::cos(moveYaw), 0, -std::sin(moveYaw)};
     Vec3 p = camera_.position + fwd * (moveY * speed * static_cast<float>(dt)) +
              right * (moveX * speed * static_cast<float>(dt));
+    double impulseX = 0, impulseY = 0, impulseZ = 0;
+    for (auto& item : gameplay_) {
+        if (gameplayMotion && item.second->session.running()) item.second->motion.step(dt, impulseX, impulseY, impulseZ);
+        else item.second->motion.clearMotion();
+    }
+    const double horizontal = std::hypot(impulseX, impulseZ);
+    const double horizontalCap = 12 * dt;
+    if (horizontal > horizontalCap && horizontal > 0) {
+        impulseX *= horizontalCap / horizontal;
+        impulseZ *= horizontalCap / horizontal;
+    }
+    p.x += static_cast<float>(impulseX);
+    p.y += static_cast<float>(std::min(impulseY, 8 * dt));
+    p.z += static_cast<float>(impulseZ);
     p.x += knock_.x * static_cast<float>(dt);
     p.z += knock_.z * static_cast<float>(dt);
     knock_ = knock_ * std::exp(-3.0f * static_cast<float>(dt));
@@ -2201,6 +2336,11 @@ void AppShell::tick(double dt) {
     const float fdt = static_cast<float>(dt);
     // Typing only captures the keyboard when a text field (page or address bar) has focus, so WASD walks otherwise.
     const bool typing = vEditing || winTypingNow || renaming_;
+    if (gameplayControl_.owner() && (in.escape || (in.gameplayControl && !typing))) {
+        releaseGameplayControl();
+        in.escape = false;
+        in.gameplayControl = false;
+    }
     // While typing, WASD belong to the text field; hold Alt to walk with the keyboard anyway (pad / VR sticks always walk).
     const bool kbMove = !typing || (SDL_GetModState() & KMOD_ALT) != 0;
     float kbX = kbMove ? in.moveX : 0.0f, kbY = kbMove ? in.moveY : 0.0f, kbZ = kbMove ? in.moveZ : 0.0f;
@@ -2274,6 +2414,7 @@ void AppShell::tick(double dt) {
         if (!wasOpen && start_->isOpen() && lastSource_ == 0) start_->focusSearch();  // typing goes straight to the search
     }
 
+    bool gameplayWorldInput = false;
     if (state_ == State::Menu) {
         Vec3 o = camera_.position, d = mouseRayDirection(in.mouseX, in.mouseY);
         if (vrPointer) {
@@ -2538,6 +2679,16 @@ void AppShell::tick(double dt) {
 #endif
         }
         const bool overWin = (top.p && !winModal) || oskHit;
+        gameplayWorldInput = !overWin && !winModal && !winFocus_ && recT_ < 0.0f;
+        const GameplayInputContext clickContext{
+            state_ == State::FileRoom, gameplayWindowFocused(), gameplayWorldInput, typing,
+            focus_.p != nullptr, input_.capturing, driving_, riding_, vrOn_, harvi_->panelOpen(),
+            settingsPanel_->isOpen(), start_->isOpen(), viewer_->active(), switcher_->isOpen(),
+            appsPanel_->isOpen(), osk_->isOpen()};
+        const bool clickAvailable = clickContext.available() && gameplayWorldAvailable();
+        gameplayClicks_.begin(clickAvailable, in.click,
+                              in.click && clickAvailable ? gameplayClickTarget(o, d) : 0);
+        if (gameplayClicks_.consume(in.click)) pointerSelect = false;
         if (appsPanel_->isOpen()) {
             updateCamera(dt, 0, 0, 0, lookX, lookY);
             room_->setHover(nullptr);
@@ -2649,7 +2800,16 @@ void AppShell::tick(double dt) {
                           clampf(moveX + scriptSteer_, -1, 1), ks[SDL_SCANCODE_SPACE] != 0 || pad.lbHeld,
                           in.shift || pad.rbHeld, lookX, lookY);
             } else {
-                updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed);
+                const GameplayInputContext motionContext{
+                    state_ == State::FileRoom, gameplayWindowFocused(),
+                    gameplayWorldInput, typing, focus_.p != nullptr, input_.capturing, driving_, riding_, vrOn_,
+                    harvi_->panelOpen(), settingsPanel_->isOpen(), start_->isOpen(), viewer_->active(),
+                    switcher_->isOpen(), appsPanel_->isOpen(), osk_->isOpen()};
+                const bool available = motionContext.available() && gameplayWorldAvailable();
+                if (!available && gameplayControl_.owner()) releaseGameplayControl();
+                if (available && in.gameplayControl) acquireGameplayControl();
+                if (!gameplayControl_.owner())
+                    updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed, available);
             }
             static bool dbgPlaced = std::getenv("SCIFI_CITY_STREET") == nullptr;
             if (cityMode_ && !dbgPlaced && city_ && city_->debugStreet(camera_.position)) {
@@ -2716,6 +2876,11 @@ void AppShell::tick(double dt) {
             }
             if (back || (in.escape && room_->inRoom())) menu_->setStatus(room_->goUp());
             else if (in.escape) toggleCity(true);
+            }
+            if (gameplayControl_.owner()) hudTarget_ = "SCRIPT CONTROL - ESC OR G TO EXIT";
+            else if (!typing && gameplayWorldInput && gameplayWindowFocused()) {
+                const auto nearby = nearbyGameplayControl();
+                if (!nearby.empty()) hudTarget_ = "G: ENTER " + nearby;
             }
 #ifdef SCIFI_HAS_CEF
             if (in.browser && browser_ && !winTypingNow) {
@@ -2801,6 +2966,14 @@ void AppShell::tick(double dt) {
         mediaStep();
         appsPanel_->update(dt, time_);
     }
+    const GameplayInputContext gameplayInputContext{
+        state_ == State::FileRoom, gameplayWindowFocused(), gameplayWorldInput,
+        typing, focus_.p != nullptr, input_.capturing, driving_, riding_, vrOn_, harvi_->panelOpen(),
+        settingsPanel_->isOpen(), start_->isOpen(), viewer_->active(), switcher_->isOpen(),
+        appsPanel_->isOpen(), osk_->isOpen()};
+    tickGameplay(dt, in, gameplayInputContext.available());
+    if (!gameplayInputContext.available() || !gameplayWorldAvailable()) gameplayClicks_.begin(false, false, 0);
+    gameplayClicks_.finish(in.clickUp);
     scriptTick(dt);
     {
         const Vec3 hEye = vrOn_ ? head_.eye : camera_.position;
@@ -2935,6 +3108,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
                 city_->render(renderer_, realEye);
                 if (riding_ && rideT_ > 0.3f) city_->renderPacket(renderer_, ridePos_, ridePath_, rideDist_);
             }
+            renderGameplay();
         }
         renderer_.setMirror(false);
         renderer_.endReflection();
@@ -2944,6 +3118,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
             city_->render(renderer_, realEye);
             if (riding_ && rideT_ > 0.3f) city_->renderPacket(renderer_, ridePos_, ridePath_, rideDist_);
         }
+    renderGameplay();
     if (cityMode_ && city_ && !dbgNoPost) renderer_.postWorld();  // effects are for the city; inside buildings and rooms text stays sharp
     if (state_ == State::FileRoom && viewer_->active()) {
         renderer_.clearDepth();
@@ -3008,6 +3183,22 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
             put(*hudTargetLabel_, gh, {0.0f, vrOn_ ? -0.22f : -halfH * 0.62f, -dist});
         }
     }
+    if (state_ == State::FileRoom) {
+        int row = 0;
+        const float dist = 1.2f, halfH = std::tan(kFovY * 0.5f) * dist;
+        const float halfW = halfH * renderer_.aspect();
+        for (const auto& [id, entry] : gameplay_) {
+            if (!entry->session.running() || !entry->hudLabel) continue;
+            renderer_.clearDepth();
+            const auto& label = *entry->hudLabel;
+            const float h = std::min(0.035f, halfW * 1.1f / std::max(label.aspect, 1.0f));
+            const float x = -halfW * 0.85f + h * label.aspect * 0.5f;
+            const float y = (vrOn_ ? 0.12f : halfH * 0.7f) - row * 0.045f;
+            renderer_.drawHudText(label, view.rigidInverse() * Mat4::translate({x, y, -dist}) *
+                                        Mat4::scale({h * label.aspect, h, 1.0f}));
+            ++row;
+        }
+    }
     if (settings_.showFps && fpsLabel_) {
         // Head-locked readout in the top-left of the view.
         renderer_.clearDepth();
@@ -3034,6 +3225,7 @@ int AppShell::run() {
         double dt = std::min(0.1, static_cast<double>(now - prev) / freq);
         prev = now;
         tick(dt);
+        prepareGameplay();
 
         if (vrOn_) {
             // In VR the rig is the tracking-space origin: at the player's position and heading, and at the flown altitude

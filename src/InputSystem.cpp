@@ -87,6 +87,8 @@ FrameInput InputSystem::poll() {
                 if (e.key.keysym.sym == SDLK_F10) in.carToggle = true;
                 if (e.key.keysym.sym == SDLK_F1) in.harvi = true;
                 if (e.key.keysym.sym == SDLK_c && !ctrl) in.carCam = true;
+                if (e.key.keysym.sym == SDLK_g && !(e.key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI | KMOD_SHIFT)))
+                    in.gameplayControl = true;
                 if (e.key.keysym.sym == arrangeKey) in.arrange = true;
                 if ((e.key.keysym.mod & KMOD_ALT) && e.key.keysym.sym == SDLK_LEFT) in.navBack = true;
                 if ((e.key.keysym.mod & KMOD_ALT) && e.key.keysym.sym == SDLK_RIGHT) in.navForward = true;

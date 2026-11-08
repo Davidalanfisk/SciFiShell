@@ -15,7 +15,7 @@ FetchContent_Declare(scifi_lua
     GIT_REPOSITORY https://github.com/lua/lua.git
     GIT_TAG 6e22fedb74cf0c9b6656e9fce8b7331db847c605)
 FetchContent_MakeAvailable(scifi_lua)
-set(SCIFI_LUA_CORE lapi lauxlib lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate lstring ltable ltm lundump lvm lzio)
+set(SCIFI_LUA_CORE lapi lauxlib lcode lctype ldebug ldo ldump lfunc lgc llex lmathlib lmem lobject lopcodes lparser lstate lstring ltable ltm lundump lvm lzio)
 set(SCIFI_LUA_SOURCES)
 foreach(source IN LISTS SCIFI_LUA_CORE)
     list(APPEND SCIFI_LUA_SOURCES "${scifi_lua_SOURCE_DIR}/${source}.c")
@@ -78,6 +78,7 @@ find_package(SDL2 REQUIRED CONFIG)
 set(SOURCES
     src/main.cpp
     src/AppShell.cpp
+    src/AppShellGameplay.cpp
     src/plugins/AppShellCar.cpp
     src/plugins/AppShellParks.cpp
     src/TaskSwitcher.cpp
@@ -90,6 +91,14 @@ set(SOURCES
     src/PluginManager.cpp
     src/PluginPackage.cpp
     src/PluginScript.cpp
+    src/GameplayArchive.cpp
+    src/GameplayTexture.cpp
+    src/GameplayModel.cpp
+    src/GameplayGpuValidation.cpp
+    src/GameplaySceneRenderer.cpp
+    src/GameplayPackage.cpp
+    src/GameplayConsent.cpp
+    src/GameplaySession.cpp
     src/NativePlugin.cpp
     src/SettingsPanel.cpp
     src/SettingsHub.cpp
@@ -154,6 +163,10 @@ if(WIN32)
     list(APPEND SOURCES assets/icon/app.rc)
 endif()
 add_executable(SciFiShell ${SOURCES})
+option(SCIFI_TEST_SYNTHETIC_CITY "Build an isolated synthetic-city integration test executable, not for normal use" OFF)
+if(SCIFI_TEST_SYNTHETIC_CITY)
+    target_compile_definitions(SciFiShell PRIVATE SCIFI_TEST_SYNTHETIC_CITY=1)
+endif()
 add_library(TrackSamplingModule MODULE src/plugins/TrackSamplingModule.cpp src/plugins/TrackGenerationModule.cpp src/plugins/TrackRenderingModule.cpp src/plugins/DrivingModule.cpp src/plugins/CarRenderingModule.cpp src/Math.cpp)
 add_library(ParksSceneModule MODULE src/plugins/ParksSceneModule.cpp src/plugins/ParksSceneRendering.cpp src/plugins/ParksToysModule.cpp src/Math.cpp)
 target_include_directories(TrackSamplingModule PRIVATE src)
@@ -165,14 +178,54 @@ target_link_libraries(SciFiShell PRIVATE ${CMAKE_DL_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(GameplaySoundTest tests/GameplaySoundTest.cpp src/Sfx.cpp)
+    target_include_directories(GameplaySoundTest PRIVATE src)
+    target_compile_definitions(GameplaySoundTest PRIVATE SDL_MAIN_HANDLED)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(GameplaySoundTest PRIVATE SDL2::SDL2)
+    else()
+        target_include_directories(GameplaySoundTest PRIVATE ${SDL2_INCLUDE_DIRS})
+        target_link_libraries(GameplaySoundTest PRIVATE ${SDL2_LIBRARIES})
+    endif()
+    add_test(NAME GameplaySoundTest COMMAND GameplaySoundTest)
+    add_executable(GameplayConsentLayoutTest tests/GameplayConsentLayoutTest.cpp src/TextRender.cpp src/StbImpl.cpp)
+    target_include_directories(GameplayConsentLayoutTest PRIVATE src third_party)
+    target_compile_definitions(GameplayConsentLayoutTest PRIVATE "SCIFI_TEST_FONT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts\"")
+    add_test(NAME GameplayConsentLayoutTest COMMAND GameplayConsentLayoutTest)
     add_executable(PluginManagerTest tests/PluginManagerTest.cpp src/PluginManager.cpp)
     target_include_directories(PluginManagerTest PRIVATE src)
     target_compile_definitions(PluginManagerTest PRIVATE NOMINMAX)
     add_test(NAME PluginManagerTest COMMAND PluginManagerTest)
-    add_executable(PluginPackageTest tests/PluginPackageTest.cpp src/PluginPackage.cpp)
-    target_include_directories(PluginPackageTest PRIVATE src)
-    target_link_libraries(PluginPackageTest PRIVATE miniz)
+    add_executable(PluginPackageTest tests/PluginPackageTest.cpp tests/CgltfTestImpl.cpp src/PluginPackage.cpp src/PluginManager.cpp src/GameplayArchive.cpp src/GameplayTexture.cpp src/GameplayModel.cpp src/GameplayGpuValidation.cpp src/GameplayPackage.cpp src/GameplayConsent.cpp src/GameplaySession.cpp src/PluginScript.cpp)
+    target_include_directories(PluginPackageTest PRIVATE src third_party)
+    target_compile_definitions(PluginPackageTest PRIVATE "SCIFI_TEST_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\"")
+    target_link_libraries(PluginPackageTest PRIVATE miniz scifi_lua)
     add_test(NAME PluginPackageTest COMMAND PluginPackageTest)
+    # Explicitly run on a graphics-capable isolated display; not part of headless CTest.
+    add_executable(GameplayRendererTest EXCLUDE_FROM_ALL tests/GameplayRendererTest.cpp src/Renderer.cpp
+        src/GameplayGpuValidation.cpp src/GameplayModel.cpp src/GameplayTexture.cpp
+        src/GameplaySceneRenderer.cpp src/GameplaySession.cpp src/GameplayPackage.cpp
+        src/GameplayArchive.cpp src/GameplayConsent.cpp src/PluginPackage.cpp src/PluginScript.cpp
+        src/ModelLoader.cpp src/StbImpl.cpp src/Math.cpp)
+    target_include_directories(GameplayRendererTest PRIVATE src third_party)
+    target_compile_definitions(GameplayRendererTest PRIVATE SDL_MAIN_HANDLED NOMINMAX
+        "SCIFI_TEST_SHADER_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/shaders\""
+        "SCIFI_TEST_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\""
+        "SCIFI_TEST_WORK_DIR=\"${CMAKE_CURRENT_BINARY_DIR}\"")
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(GameplayRendererTest PRIVATE SDL2::SDL2)
+    else()
+        target_include_directories(GameplayRendererTest PRIVATE ${SDL2_INCLUDE_DIRS})
+        target_link_libraries(GameplayRendererTest PRIVATE ${SDL2_LIBRARIES})
+    endif()
+    target_link_libraries(GameplayRendererTest PRIVATE miniz scifi_lua Diligent-Common Diligent-GraphicsTools Diligent-BuildSettings)
+    if(WIN32)
+        target_link_libraries(GameplayRendererTest PRIVATE Diligent-GraphicsEngineD3D12-static d3d12 dxgi)
+    elseif(APPLE)
+        target_link_libraries(GameplayRendererTest PRIVATE Diligent-GraphicsEngineMetal-static)
+    else()
+        target_link_libraries(GameplayRendererTest PRIVATE Diligent-GraphicsEngineVk-static)
+    endif()
     add_executable(PluginScriptTest tests/PluginScriptTest.cpp src/PluginScript.cpp)
     target_include_directories(PluginScriptTest PRIVATE src)
     target_link_libraries(PluginScriptTest PRIVATE scifi_lua)

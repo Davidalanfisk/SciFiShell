@@ -2,6 +2,7 @@
 // Diligent Engine wrapper: device/swapchain setup, two pipeline states (LCARS panel, lit 3D),
 // primitive meshes and a single dynamic constant buffer that is refreshed per draw call.
 #include <memory>
+#include <map>
 #include <string>
 
 #include "DeviceContext.h"
@@ -14,6 +15,9 @@
 struct SDL_Window;
 
 namespace sf {
+
+struct GameplayModel;
+struct GameplayTexture;
 
 // A small texture (text label) with one shader resource binding per pipeline.
 struct GpuLabel {
@@ -74,6 +78,12 @@ public:
     int model(const std::string& name);
     Vec3 modelSize(int id) const;  // x/z extents relative to the unit height
     void drawModel(int id, const GpuLabel& any, const Mat4& world, Vec3 neon, float seed, bool textured = false);
+    // Internal gameplay resources are owned by the renderer and revoked together by owner.
+    bool createGameplayModel(uint64_t owner, const GameplayModel& model, const GameplayTexture* texture,
+                             uint64_t& handle, std::string& error);
+    bool drawGameplayModel(uint64_t owner, uint64_t handle, const Mat4& world, Vec3 colour);
+    // Call between render targets; invalidates context bindings while releasing GPU references.
+    void releaseGameplayModels(uint64_t owner);
     // Theme colours used by the grid floor, card edge lights and the tool ring.
     void setTheme(Vec3 accent, Vec3 alt);
     void setTime(float t);
@@ -129,6 +139,14 @@ private:
     struct Pipeline {
         Diligent::RefCntAutoPtr<Diligent::IPipelineState> pso;
     };
+    struct GameplayGpuModel {
+        uint64_t owner = 0;
+        size_t bytes = 0;
+        float baseColour[3] = {1, 1, 1};
+        Mesh mesh;
+        Diligent::RefCntAutoPtr<Diligent::ITexture> texture;
+        Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> binding;
+    };
 
     bool createPipeline(Pipeline& out, const char* name, const char* vsFile, const char* psFile, bool blend, bool premul = false,
                         bool reflection = false, bool post = false, bool blit = false);
@@ -160,7 +178,7 @@ private:
     bool worldPosted_ = false;
     Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> blitSRB_;
     bool mirror_ = false;
-    void bindLabel(GpuLabel& label);
+    bool bindLabel(GpuLabel& label);
     uint32_t samples_ = 1;
     int msaaPref_ = 2;
     MsaaTargets msaa_[3];  // [0] desktop, [1] VR eye, [2] reflection
@@ -177,6 +195,9 @@ private:
     std::vector<std::shared_ptr<GpuLabel>> modelTex_;
     std::vector<Vec3> modelSizes_;
     std::vector<std::pair<std::string, int>> modelIds_;
+    std::map<uint64_t, GameplayGpuModel> gameplayModels_;
+    uint64_t nextGameplayHandle_ = 1;
+    size_t gameplayBytes_ = 0;
     std::shared_ptr<GpuLabel> glassLabel_;
     Mat4 view_ = Mat4::identity(), proj_ = Mat4::identity();
     mutable float frustumKey_[32] = {};

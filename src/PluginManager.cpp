@@ -154,7 +154,19 @@ bool PluginManager::setEnabled(const std::string& id, bool enabled) {
     if (!initialized_ || stopped_ || !storageReady_) return false;
     for (auto& p : plugins_) {
         if (p.id != id) continue;
-        if (p.enabled == enabled) return true;
+        if (p.enabled == enabled) {
+            if (!enabled || p.running) return true;
+            std::string startError;
+            if (p.prepare && !p.prepare(startError)) {
+                error_ = p.id + ": " + startError;
+                std::fprintf(stderr, "%s\n", error_.c_str());
+                return false;
+            }
+            p.start();
+            p.running = true;
+            error_.clear();
+            return true;
+        }
         if (enabled && p.prepare && !p.prepare(error_)) {
             error_ = p.id + ": " + error_;
             std::fprintf(stderr, "%s\n", error_.c_str());
@@ -172,6 +184,19 @@ bool PluginManager::setEnabled(const std::string& id, bool enabled) {
         p.enabled = enabled;
         if (enabled) { p.start(); p.running = true; }
         else { if (p.running) p.stop(); p.running = false; }
+        return true;
+    }
+    return false;
+}
+
+bool PluginManager::markFailed(const std::string& id, const std::string& reason) {
+    if (!initialized_ || stopped_ || reason.empty()) return false;
+    for (auto& p : plugins_) {
+        if (p.id != id || !p.running) continue;
+        p.stop();
+        p.running = false;
+        error_ = p.id + ": " + reason;
+        std::fprintf(stderr, "%s\n", error_.c_str());
         return true;
     }
     return false;

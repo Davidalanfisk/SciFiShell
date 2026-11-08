@@ -29,7 +29,16 @@ void main(in VSInput In, out PSInput Out)
 {
     float4 world = mul(g_World, float4(In.Pos, 1.0));
     Out.Pos  = mul(g_MVP, float4(In.Pos, 1.0));
-    Out.Nrm  = mul((float3x3)g_World, In.Nrm);
+    if (g_Params.w > 10.5 && g_Params.w < 11.5)
+    {
+        float3 x = float3(g_World[0][0], g_World[1][0], g_World[2][0]);
+        float3 y = float3(g_World[0][1], g_World[1][1], g_World[2][1]);
+        float3 z = float3(g_World[0][2], g_World[1][2], g_World[2][2]);
+        Out.Nrm = x * (In.Nrm.x / max(dot(x, x), 1e-12)) +
+                  y * (In.Nrm.y / max(dot(y, y), 1e-12)) +
+                  z * (In.Nrm.z / max(dot(z, z), 1e-12));
+    }
+    else Out.Nrm = mul((float3x3)g_World, In.Nrm);
     Out.UV   = In.UV;
     Out.WPos = world.xyz;
     Out.LN   = In.Nrm;
