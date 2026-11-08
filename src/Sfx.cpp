@@ -1,4 +1,5 @@
 #include "Sfx.h"
+#include "GameplayAudio.h"
 
 #include <SDL.h>
 
@@ -44,6 +45,7 @@ void Sfx::shutdown() {
     dev_ = 0;
     std::lock_guard<std::mutex> lk(mu_);
     voices_.clear();
+    samples_.clear();
     pluginEngines_.clear();
     carEngine_ = {};
 }
@@ -74,11 +76,49 @@ bool Sfx::playOwned(std::uint64_t owner, SfxId id, float volume) {
     return true;
 }
 
+bool Sfx::playOwnedSample(std::uint64_t owner, int voice, std::shared_ptr<const GameplayAudio> sample,
+                          float volume, bool loop) {
+    if (!owner || voice <= 0 || !dev_ || !sample || sample->samples.empty() ||
+        sample->sampleRate < 8000 || sample->sampleRate > 48000 ||
+        !std::isfinite(volume) || volume < 0 || volume > 1) return false;
+    std::lock_guard<std::mutex> lk(mu_);
+    if (samples_.size() >= 16 ||
+        std::count_if(samples_.begin(), samples_.end(), [owner](const SampleVoice& v) {
+            return v.owner == owner;
+        }) >= 4 ||
+        std::any_of(samples_.begin(), samples_.end(), [owner, voice](const SampleVoice& v) {
+            return v.owner == owner && v.id == voice;
+        })) return false;
+    try { samples_.push_back({owner, voice, std::move(sample), 0, volume, loop, false}); }
+    catch (const std::bad_alloc&) { return false; }
+    return true;
+}
+
+void Sfx::stopOwnedSample(std::uint64_t owner, int voice) {
+    std::lock_guard<std::mutex> lk(mu_);
+    samples_.erase(std::remove_if(samples_.begin(), samples_.end(), [owner, voice](const SampleVoice& v) {
+        return v.owner == owner && v.id == voice;
+    }), samples_.end());
+}
+
+bool Sfx::loopOwnedSample(std::uint64_t owner, int voice) {
+    std::lock_guard<std::mutex> lk(mu_);
+    for (auto& sample : samples_) {
+        if (sample.owner == owner && sample.id == voice) {
+            sample.loop = true;
+            return true;
+        }
+    }
+    return false;
+}
+
 void Sfx::stopOwner(std::uint64_t owner) {
     if (!owner) return;
     std::lock_guard<std::mutex> lk(mu_);
     voices_.erase(std::remove_if(voices_.begin(), voices_.end(),
                                  [owner](const Voice& v) { return v.owner == owner; }), voices_.end());
+    samples_.erase(std::remove_if(samples_.begin(), samples_.end(),
+                                  [owner](const SampleVoice& v) { return v.owner == owner; }), samples_.end());
     pluginEngines_.erase(std::remove_if(pluginEngines_.begin(), pluginEngines_.end(),
                                         [owner](const Engine& e) { return e.owner == owner; }), pluginEngines_.end());
 }
@@ -88,6 +128,11 @@ bool Sfx::testHasOwnedEngine(std::uint64_t owner) {
     std::lock_guard<std::mutex> lk(mu_);
     return std::any_of(pluginEngines_.begin(), pluginEngines_.end(),
                        [owner](const Engine& e) { return e.owner == owner; });
+}
+std::size_t Sfx::testOwnedSampleCount(std::uint64_t owner) {
+    std::lock_guard<std::mutex> lk(mu_);
+    return static_cast<std::size_t>(std::count_if(samples_.begin(), samples_.end(),
+        [owner](const SampleVoice& sample) { return sample.owner == owner; }));
 }
 #endif
 
@@ -221,6 +266,15 @@ void Sfx::fill(short* out, int frames) {
             s += voiceSample(v, alive);
             if (!alive) v.vol = 0.0f;
         }
+        for (auto& sample : samples_) {
+            if (sample.finished) continue;
+            s += sample.sample->samples[static_cast<size_t>(sample.position)] * (sample.volume / 32768.0f);
+            sample.position += static_cast<double>(sample.sample->sampleRate) / kRate;
+            if (sample.position >= sample.sample->samples.size()) {
+                if (sample.loop) sample.position = std::fmod(sample.position, sample.sample->samples.size());
+                else sample.finished = true;
+            }
+        }
         s += engineSample(carEngine_);
         for (auto& engine : pluginEngines_) s += engineSample(engine);
         s *= master_;
@@ -228,6 +282,8 @@ void Sfx::fill(short* out, int frames) {
         out[i] = static_cast<short>(std::clamp(s, -1.0f, 1.0f) * 30000.0f);
     }
     voices_.erase(std::remove_if(voices_.begin(), voices_.end(), [](const Voice& v) { return v.vol == 0.0f; }), voices_.end());
+    samples_.erase(std::remove_if(samples_.begin(), samples_.end(), [](const SampleVoice& v) { return v.finished; }),
+                   samples_.end());
 }
 
 }  // namespace sf

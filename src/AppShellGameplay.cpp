@@ -15,39 +15,12 @@
 
 namespace sf {
 namespace {
-constexpr size_t kGameplayStoredBytes = 64 * 1024 * 1024;
 constexpr size_t kGameplayRunningLimit = 4;
 
-bool sameInstalledPackage(const std::string& id, const std::string& bytes, std::string& error) {
-    const auto state = PluginManager::defaultStatePath();
-    if (state.empty()) { error = "Plugin package path is unavailable"; return false; }
-    const auto path = state.parent_path() / "plugins" / (id + ".zip");
-    std::error_code ec;
-    const auto status = std::filesystem::symlink_status(path, ec);
-    if (ec || !std::filesystem::is_regular_file(status)) {
-        error = "Gameplay package is missing or not a regular file";
-        return false;
-    }
-    const auto size = std::filesystem::file_size(path, ec);
-    if (ec || size != bytes.size() || size > kGameplayArchiveLimit) {
-        error = "Gameplay package changed; reinstall it before enabling";
-        return false;
-    }
-    std::ifstream in(path, std::ios::binary);
-    char buffer[8192];
-    for (size_t pos = 0; pos < bytes.size();) {
-        const auto count = std::min(sizeof(buffer), bytes.size() - pos);
-        if (!in.read(buffer, static_cast<std::streamsize>(count)) ||
-            std::memcmp(buffer, bytes.data() + pos, count) != 0) {
-            error = "Gameplay package changed; reinstall it before enabling";
-            return false;
-        }
-        pos += count;
-    }
-    if (in.peek() != std::ifstream::traits_type::eof() || in.bad()) {
-        error = "Cannot finish reading gameplay package";
-        return false;
-    }
+bool sameInstalledPackage(const std::filesystem::path& path, const GameplayDigest& expected, std::string& error) {
+    GameplayDigest actual;
+    if (!gameplayDigestFile(path, actual, error)) return false;
+    if (!(actual == expected)) { error = "Gameplay package changed; reinstall it before enabling"; return false; }
     return true;
 }
 }
@@ -64,18 +37,21 @@ bool AppShell::gameplayWindowFocused() const {
 #endif
 }
 
-bool AppShell::registerGameplay(const GameplayPackage& package, const std::string& bytes) {
-    size_t total = 0;
-    for (const auto& entry : gameplay_) total += entry.second->bytes.size();
-    if (bytes.size() > kGameplayStoredBytes - total || nextGameplayOwner_ == std::numeric_limits<uint64_t>::max())
+bool AppShell::registerGameplay(const GameplayPackage& package, const std::filesystem::path& path,
+                                const GameplayDigest& digest) {
+    if (nextGameplayOwner_ == std::numeric_limits<uint64_t>::max())
         return false;
     auto entry = std::make_shared<GameplayEntry>();
-    entry->bytes = bytes;
+    entry->path = path;
+    entry->digest = digest;
     entry->world = package.world;
     entry->layout = package.layout;
     entry->impulse = package.impulse;
     entry->control = package.control;
     entry->input = package.input;
+    entry->storage = package.storage;
+    entry->messaging = package.messaging;
+    entry->controller = package.controller;
     entry->view = package.view;
     entry->sound = package.sound;
     entry->hud = package.hud;
@@ -91,18 +67,20 @@ bool AppShell::registerGameplay(const GameplayPackage& package, const std::strin
         entry->scene->clear();
         sfx_.stopOwner(entry->owner);
         entry->soundBudget.reset();
+        entry->messageBudget.reset();
         entry->motion.reset();
         entry->hudLabel.reset();
         entry->hudRevision = 0;
         entry->hudDelay = 0;
         entry->pendingError.clear();
         entry->inputState.reset();
+        entry->controllerInput.reset();
     }, false};
     plugin.prepare = [this, entry, id = package.id](std::string& error) {
         size_t active = 0;
         for (const auto& item : gameplay_) if (item.second->session.running()) ++active;
         if (active >= kGameplayRunningLimit) { error = "At most four gameplay plugins may run"; return false; }
-        if (!sameInstalledPackage(id, entry->bytes, error)) return false;
+        if (!sameInstalledPackage(entry->path, entry->digest, error)) return false;
         PluginScriptRuntime::WorldQueries world;
         world.context = this;
         world.available = [](void* context) noexcept {
@@ -159,8 +137,12 @@ bool AppShell::registerGameplay(const GameplayPackage& package, const std::strin
             if (!app.gameplayWorldAvailable()) return -1;
             return app.city_->gameplayCell(static_cast<float>(x), static_cast<float>(z), out);
         };
-        if (!entry->session.start(entry->bytes, *gameplayConsent_, entry->world ? &world : nullptr, error,
-                                  entry->view ? &view : nullptr, entry->layout ? &layout : nullptr))
+        const auto preferences = PluginManager::defaultStatePath();
+        const auto storageDirectory = preferences.empty() ? std::filesystem::path{} :
+            preferences.parent_path() / "plugin-storage";
+        if (!entry->session.startFile(entry->path, entry->digest, *gameplayConsent_, entry->world ? &world : nullptr,
+                                      error, entry->view ? &view : nullptr, entry->layout ? &layout : nullptr,
+                                      storageDirectory, gameplayFrame_))
             return false;
         if (!entry->scene->prepare(entry->session, error)) {
             std::string stopError;
@@ -193,8 +175,8 @@ void AppShell::toggleGameplay(const std::string& id) {
     }
     std::string error;
     bool granted = false;
-    if (!sameInstalledPackage(id, entry->second->bytes, error) ||
-        !gameplayConsent_->matches(id, entry->second->bytes, granted, error)) {
+    if (!sameInstalledPackage(entry->second->path, entry->second->digest, error) ||
+        !gameplayConsent_->matchesDigest(id, entry->second->digest, granted, error)) {
         settingsPanel_->setNotice(error);
         return;
     }
@@ -202,7 +184,9 @@ void AppShell::toggleGameplay(const std::string& id) {
     if (!granted) {
         const auto notice = gameplayConsentNotice(id, entry->second->world, entry->second->input,
                                                   entry->second->view, entry->second->sound, entry->second->hud,
-                                                  entry->second->layout, entry->second->impulse, entry->second->control);
+                                                  entry->second->layout, entry->second->impulse, entry->second->control,
+                                                  entry->second->storage, entry->second->controller,
+                                                  entry->second->messaging);
         if (gameplayConfirm_ != id || std::chrono::steady_clock::now() >= gameplayDeadline_ ||
             settingsPanel_->notice() != notice) {
             gameplayConfirm_ = id;
@@ -211,7 +195,9 @@ void AppShell::toggleGameplay(const std::string& id) {
             return;
         }
         gameplayConfirm_.clear();
-        if (!gameplayConsent_->grant(id, entry->second->bytes, error)) { settingsPanel_->setNotice(error); return; }
+        if (!gameplayConsent_->grantFile(id, entry->second->path, entry->second->digest, error)) {
+            settingsPanel_->setNotice(error); return;
+        }
         newGrant = true;
     }
     if (!plugins_.setEnabled(id, true)) {
@@ -295,8 +281,33 @@ uint64_t AppShell::gameplayClickTarget(const Vec3& origin, const Vec3& direction
     return owner;
 }
 
-void AppShell::tickGameplay(double dt, const FrameInput& input, bool allowInput) {
+void AppShell::tickGameplay(double dt, const FrameInput& input, const PadState& pad, bool allowInput) {
+    if (gameplayFrame_ < static_cast<std::uint64_t>(INT64_MAX)) ++gameplayFrame_;
+    for (auto& [id, entry] : gameplay_)
+        if (entry->session.running()) entry->session.prepareFrame(gameplayFrame_);
     if (gameplayControl_.owner() && (!allowInput || !gameplayWorldAvailable())) releaseGameplayControl();
+    const auto incoming = gameplayMessages_.take();
+    for (size_t i = 0; i < incoming.count; ++i) {
+        const auto& message = incoming.messages[i];
+        bool senderRunning = false;
+        for (const auto& [id, entry] : gameplay_) {
+            if (entry->owner == message.owner && entry->session.running() &&
+                entry->session.generation() == message.generation) {
+                senderRunning = true;
+                break;
+            }
+        }
+        if (!senderRunning) continue;
+        for (const auto& [id, entry] : gameplay_) {
+            if (!entry->messaging || entry->owner == message.owner || !entry->session.running()) continue;
+            std::string error;
+            if (!entry->session.message(std::string_view(message.sender.data(), message.senderSize),
+                                        message.event, error)) {
+                plugins_.markFailed(id, error);
+                if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
+            }
+        }
+    }
     for (auto& [id, entry] : gameplay_) {
         if (!entry->session.running()) continue;
         std::string error;
@@ -307,6 +318,13 @@ void AppShell::tickGameplay(double dt, const FrameInput& input, bool allowInput)
             continue;
         }
         const bool pluginInput = allowInput && (!gameplayControl_.owner() || gameplayControl_.owner() == entry->owner);
+        const bool controllerOk = entry->controllerInput.update(entry->controller, pluginInput, pad,
+            [&](const char* name, double value) { return entry->session.input(name, value, error); });
+        if (!controllerOk) {
+            plugins_.markFailed(id, error);
+            if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
+            continue;
+        }
         bool ok = runGameplayFrame(entry->session, entry->inputState, entry->input, pluginInput,
                                    input.moveX, input.moveY, input.moveZ,
                                    input.click && gameplayClicks_.owner() == entry->owner, input.clickUp,
@@ -391,6 +409,55 @@ void AppShell::tickGameplay(double dt, const FrameInput& input, bool allowInput)
             if (engine.pending && !sfx_.setOwnedEngine(entry->owner, engine.active, engine.speed, engine.boost)) {
                 error = "Gameplay engine sound unavailable or audio voice limit exceeded";
                 ok = false;
+            }
+        }
+        if (ok) {
+            const auto samples = entry->session.takeSamples();
+            if (!entry->soundBudget.consume(0, samples.count)) {
+                error = "Gameplay sound rate limit exceeded";
+                ok = false;
+            } else {
+                for (size_t i = 0; i < samples.count && ok; ++i) {
+                    const auto& event = samples.events[i];
+                    if (event.stop) {
+                        sfx_.stopOwnedSample(entry->owner, event.voice);
+                        continue;
+                    }
+                    if (event.loopUpdate) {
+                        if (!sfx_.loopOwnedSample(entry->owner, event.voice)) {
+                            error = "Gameplay sample voice is no longer playing";
+                            ok = false;
+                        }
+                        continue;
+                    }
+                    const auto* package = entry->session.package();
+                    if (!package || event.asset < 0 || static_cast<size_t>(event.asset) >= package->audio.size()) {
+                        error = "Invalid gameplay audio asset";
+                        ok = false;
+                        break;
+                    }
+                    auto asset = package->audio.begin();
+                    std::advance(asset, event.asset);
+                    if (!sfx_.playOwnedSample(entry->owner, event.voice, asset->second, event.volume, event.loop)) {
+                        error = "Gameplay sample unavailable or audio voice limit exceeded";
+                        ok = false;
+                    }
+                }
+                if (ok && entry->messaging) {
+                    const auto messages = entry->session.takeMessages();
+                    if (!entry->messageBudget.consume(dt, messages.count)) {
+                        error = "Gameplay message rate limit exceeded";
+                        ok = false;
+                    } else {
+                        for (size_t i = 0; i < messages.count; ++i) {
+                            if (!gameplayMessages_.push(id, entry->owner, entry->session.generation(), messages.events[i])) {
+                                error = "Gameplay message queue limit exceeded";
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
         if (!ok) {

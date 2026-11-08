@@ -57,7 +57,7 @@ static std::string scaledModel() {
     return out;
 }
 
-int main() {
+int main(int argc, char** argv) {
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         std::fprintf(stderr, "SDL initialization failed: %s\n", SDL_GetError());
@@ -73,9 +73,30 @@ int main() {
     int result = 0;
     {
         sf::Renderer renderer;
+        const bool msaaResolveOnly = argc == 2 && std::string(argv[1]) == "--msaa-resolve-only";
+        if (msaaResolveOnly) renderer.setMsaaPreference(1);
         if (!renderer.init(window, SCIFI_TEST_SHADER_DIR)) {
             std::fprintf(stderr, "Renderer initialization failed\n");
             result = 1;
+        } else if (msaaResolveOnly) {
+            if (renderer.msaaSamples() <= 1) {
+                std::fprintf(stderr, "MSAA is unavailable; resolve test cannot run\n");
+                result = 1;
+            } else {
+                renderer.setPostFx(true);
+                renderer.beginDesktopFrame();
+                renderer.beginReflection();
+                renderer.endReflection();
+                renderer.postWorld();
+                renderer.endTarget();
+                renderer.waitIdle();
+                std::printf("MSAA post, desktop and reflection resolves completed (%u samples)\n",
+                            renderer.msaaSamples());
+            }
+            renderer.shutdown();
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return result;
         } else {
             sf::GameplayModel model;
             model.vertices = {-0.5f, -0.5f, 0, 0, 0, 1, 0, 0,
@@ -94,6 +115,38 @@ int main() {
                   "Foreign owner cannot draw");
             check(renderer.drawGameplayModel(1, handle, sf::Mat4::identity(), {1, 1, 1}),
                   "Owner can draw");
+            if (argc == 2 && std::string(argv[1]) == "--mesh-gpu-only") {
+                namespace fs = std::filesystem;
+                std::ifstream file(fs::path(SCIFI_TEST_ASSETS) / "models" / "Duck.glb", std::ios::binary);
+                const std::string bytes((std::istreambuf_iterator<char>(file)), {});
+                const auto zip = package(bytes,
+                    R"({"id":"com.example.meshtest","name":"MESH TEST","version":"1.0.0","author":"Test","description":"Test","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene"],"api_version":"1"})",
+                    "local files=asset_find('ships/*.glb') if #files~=1 then error('nested asset missing') end "
+                    "local mesh=mesh_create() local a=mesh_vertex(mesh,0,0,0) local b=mesh_vertex(mesh,1,0,0) "
+                    "local c=mesh_vertex(mesh,0,1,0) mesh_triangle(mesh,a,b,c) scene_mesh(mesh_upload(mesh)) return {}",
+                    "assets/ships/fighter.glb");
+                const auto directory = fs::path(SCIFI_TEST_WORK_DIR) /
+                    ("gameplay-mesh-gpu-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+                sf::GameplayConsent consent(directory);
+                sf::GameplaySession session;
+                sf::GameplaySceneRenderer scene(renderer, 10);
+                check(!zip.empty() && consent.grant("com.example.meshtest", zip, error) &&
+                      session.start(zip, consent, nullptr, error) && session.models().size() == 1 &&
+                      scene.prepare(session, error), "Prepare procedural mesh for GPU");
+                const auto label = renderer.createLabel(sf::Bitmap{1, 1, {255, 255, 255, 255}});
+                check(label && scene.draw(session, *label, error), "Draw procedural mesh on GPU");
+                renderer.waitIdle();
+                check(session.stop(error), "Stop procedural mesh session");
+                scene.clear();
+                check(consent.revoke("com.example.meshtest", error), "Revoke mesh test consent");
+                std::error_code cleanup;
+                fs::remove(directory, cleanup);
+                check(!cleanup, "Remove mesh test directory");
+                renderer.shutdown();
+                SDL_DestroyWindow(window);
+                SDL_Quit();
+                return result;
+            }
             renderer.present(false);
             renderer.releaseGameplayModels(1);
             check(!renderer.drawGameplayModel(1, handle, sf::Mat4::identity(), {1, 1, 1}),
@@ -120,6 +173,8 @@ int main() {
                     R"({"id":"com.example.gputest","name":"GPU TEST","version":"1.0.0","author":"Test","description":"Test","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","input"],"api_version":"1"})",
                     "local m\nreturn {on_start=function() "
                     "scene_box(0,0,0,1,1,1,1,1,1) "
+                    "local mesh=mesh_create({0,0,0,0,0,1,0,0, 1,0,0,0,0,1,1,0, 0,1,0,0,0,1,0,1},{1,2,3}) "
+                    "scene_mesh(mesh,0,1,0,0,1,1,1,1,1,1) "
                     "m=scene_model(asset_model('assets/duck.glb'),0,0,0,0,1,1,1,1,1,1) end, "
                     "on_input=function(k,v) if k=='remove' then scene_remove(m) "
                     "elseif k=='fail' then while true do end end end}");
@@ -131,10 +186,11 @@ int main() {
                 check(static_cast<bool>(label), "Create HUD-compatible label");
                 if (!label) return 1;
                 sf::GameplaySceneRenderer scene(renderer, 10);
-                check(scene.prepare(session, error), "Prepare scripted gameplay scene");
+                check(session.models().size() == 2 && scene.prepare(session, error),
+                      "Prepare scripted model and procedural mesh");
                 renderer.beginDesktopFrame();
                 renderer.drawHudText(*label, sf::Mat4::identity());
-                check(scene.draw(session, *label, error), "Draw scripted model and box");
+                check(scene.draw(session, *label, error), "Draw scripted model, mesh and box");
                 renderer.present(false);
                 check(session.input("remove", 1, error), "Remove scripted model");
                 check(scene.prepare(session, error), "Release removed scripted model");

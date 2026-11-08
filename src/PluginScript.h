@@ -2,12 +2,16 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <array>
 #include <cstdint>
 
+#include "GameplayModel.h"
+
 namespace sf {
 
+class GameplayStorage;
 // Each invocation gets a fresh Lua state with no standard libraries or ambient capabilities.
 bool runPluginScript(const std::string& source, std::string& result, std::string& error);
 
@@ -33,6 +37,22 @@ public:
     enum class Sound { Pickup, Throw, Boom, DuckPop, CarSummon, RailOn };
     struct SoundEvent { Sound sound; float volume; };
     struct SoundBatch { std::array<SoundEvent, 8> events{}; size_t count = 0; };
+    struct SampleEvent {
+        int voice = 0, asset = 0;
+        float volume = 0;
+        bool stop = false, loop = false, loopUpdate = false;
+    };
+    struct SampleBatch { std::array<SampleEvent, 8> events{}; size_t count = 0; };
+    struct MessageEvent {
+        enum class Type { String, Number, Boolean };
+        std::array<char, 32> topic{};
+        std::array<char, 256> payload{};
+        size_t topicSize = 0, payloadSize = 0;
+        Type type = Type::String;
+        double number = 0;
+        bool boolean = false;
+    };
+    struct MessageBatch { std::array<MessageEvent, 8> events{}; size_t count = 0; };
     struct EngineSound { bool pending = false, active = false, boost = false; float speed = 0; };
     struct HudText { std::array<char, 33> text{}; std::uint64_t revision = 0; };
     struct Impulse { double x = 0, y = 0, z = 0; bool pending = false; };
@@ -52,7 +72,7 @@ public:
     };
     struct AssetCounts {
         int models = 0, textures = 0;
-        std::vector<std::string> modelNames, textureNames;
+        std::vector<std::string> modelNames, textureNames, audioNames;
     };
     PluginScriptRuntime();
     ~PluginScriptRuntime();
@@ -64,14 +84,20 @@ public:
                const WorldQueries* world = nullptr, const AssetCounts* assets = nullptr,
                const ViewQuery* view = nullptr, bool soundGranted = false, bool hudGranted = false,
                const LayoutQuery* layout = nullptr, bool impulseGranted = false, bool controlGranted = false,
-               bool inputGranted = false);
+               bool inputGranted = false, GameplayStorage* storage = nullptr, bool messagingGranted = false,
+               std::uint64_t initialFrame = 0);
+    void prepareFrame(std::uint64_t frame);
     bool tick(double seconds, std::string& error);
     bool input(const std::string& control, double value, std::string& error);
+    bool message(std::string_view sender, const MessageEvent& event, std::string& error);
     bool stop(std::string& error);
     bool running() const;
     std::vector<Box> boxes() const;
     std::vector<Model> models() const;
+    const GameplayModel* proceduralModel(int id) const;
     SoundBatch takeSounds();
+    SampleBatch takeSamples();
+    MessageBatch takeMessages();
     EngineSound takeEngineSound();
     HudText hudText() const;
     Impulse takeImpulse();

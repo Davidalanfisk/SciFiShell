@@ -12,9 +12,9 @@ int main() {
     }
     for (char character : std::string("abcdefghijklmnopqrstuvwxyz0123456789-")) {
         const std::string id = "m." + std::string(78, character);
-        for (int mask = 0; mask < 256; ++mask) {
+        for (int mask = 0; mask < 2048; ++mask) {
             const auto text = sf::gameplayConsentNotice(id, mask & 1, mask & 2, mask & 4, mask & 8,
-                                                        mask & 16, mask & 32, mask & 64, mask & 128);
+                                                        mask & 16, mask & 32, mask & 64, mask & 128, mask & 256, mask & 512, mask & 1024);
             const auto lines = sf::wrapText(text, sf::kSettingsNoticeFontSize, sf::FontFace::UI,
                 1000 - sf::kSettingsNoticeRightPadding - sf::kSettingsNoticeLeft, sf::kSettingsNoticeLines);
             std::string actual, expected;

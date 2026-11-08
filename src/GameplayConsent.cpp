@@ -1,6 +1,7 @@
 #include "GameplayConsent.h"
 
 #include "GameplayPackage.h"
+#include "GameplayFileLock.h"
 #include "GameplayLimits.h"
 
 #include <algorithm>
@@ -18,6 +19,7 @@
 #endif
 
 namespace {
+constexpr char kDigestMagic[] = "SFSGRNT2";
 bool validId(const std::string& id) {
     if (id.size() < 3 || id.size() > 80 || id.find('.') == std::string::npos ||
         id.front() == '.' || id.back() == '.' || id.find("..") != std::string::npos ||
@@ -38,6 +40,29 @@ bool GameplayConsent::grant(const std::string& id, const std::string& bytes, std
         if (error.empty()) error = "Consent package ID does not match";
         return false;
     }
+    return writeGrant(id, bytes, error);
+}
+
+bool GameplayConsent::grantFile(const std::string& id, const std::filesystem::path& path,
+                                const GameplayDigest& expected, std::string& error) {
+    if (directory_.empty() || !validId(id)) { error = "Invalid consent storage or plugin ID"; return false; }
+    GameplayFileLock lock;
+    if (!lock.open(path, error)) return false;
+    GameplayDigest before, after;
+    GameplayPackage package;
+    if (!gameplayDigestFile(path, before, error) || !(before == expected) ||
+        !readGameplayPackageFile(path, package, error) || package.id != id ||
+        !gameplayDigestFile(path, after, error) || !(before == after)) {
+        if (error.empty()) error = "Consent package changed or ID does not match";
+        return false;
+    }
+    std::string record(kDigestMagic, sizeof(kDigestMagic) - 1);
+    for (int i = 0; i < 8; ++i) record.push_back(static_cast<char>((before.size >> (i * 8)) & 255));
+    record.append(reinterpret_cast<const char*>(before.sha256.data()), before.sha256.size());
+    return writeGrant(id, record, error);
+}
+
+bool GameplayConsent::writeGrant(const std::string& id, const std::string& bytes, std::string& error) {
     std::error_code ec;
     std::filesystem::create_directories(directory_, ec);
     if (ec) { error = "Cannot create consent directory: " + ec.message(); return false; }
@@ -85,10 +110,16 @@ bool GameplayConsent::grant(const std::string& id, const std::string& bytes, std
 }
 
 bool GameplayConsent::matches(const std::string& id, const std::string& bytes, bool& granted, std::string& error) const {
+    GameplayDigest digest;
+    if (!gameplayDigestBytes(bytes, digest, error)) { granted = false; return false; }
+    return matchesDigest(id, digest, granted, error);
+}
+
+bool GameplayConsent::matchesDigest(const std::string& id, const GameplayDigest& digest,
+                                    bool& granted, std::string& error) const {
     granted = false;
-    if (directory_.empty() || !validId(id) || bytes.empty() || bytes.size() > kGameplayArchiveLimit) {
-        error = "Invalid consent query";
-        return false;
+    if (directory_.empty() || !validId(id) || !digest.size || digest.size > kGameplayArchiveLimit) {
+        error = "Invalid consent query"; return false;
     }
     const auto path = directory_ / (id + ".grant");
     std::error_code ec;
@@ -100,22 +131,25 @@ bool GameplayConsent::matches(const std::string& id, const std::string& bytes, b
     if (ec || !std::filesystem::is_regular_file(status)) { error = "Cannot inspect consent"; return false; }
     const auto size = std::filesystem::file_size(path, ec);
     if (ec || size > kGameplayArchiveLimit) { error = "Invalid consent file"; return false; }
-    if (size != bytes.size()) { error.clear(); return true; }
-    std::ifstream in(path, std::ios::binary);
-    if (!in) { error = "Cannot read consent"; return false; }
-    char buffer[8192];
-    size_t pos = 0;
-    while (pos < bytes.size()) {
-        const auto count = static_cast<std::streamsize>(std::min(sizeof(buffer), bytes.size() - pos));
-        if (!in.read(buffer, count)) { error = "Cannot read consent"; return false; }
-        if (std::memcmp(buffer, bytes.data() + pos, static_cast<size_t>(count)) != 0) {
-            error.clear();
-            return true;
+    if (size == 48) {
+        std::ifstream in(path, std::ios::binary);
+        std::array<unsigned char, 48> record{};
+        if (!in.read(reinterpret_cast<char*>(record.data()), record.size()) ||
+            in.peek() != std::ifstream::traits_type::eof() || in.bad()) {
+            error = "Cannot read consent"; return false;
         }
-        pos += static_cast<size_t>(count);
+        if (std::memcmp(record.data(), kDigestMagic, 8) == 0) {
+            std::uint64_t recordedSize = 0;
+            for (int i = 0; i < 8; ++i) recordedSize |= static_cast<std::uint64_t>(record[8 + i]) << (i * 8);
+            granted = recordedSize == digest.size &&
+                std::equal(digest.sha256.begin(), digest.sha256.end(), record.begin() + 16);
+            error.clear(); return true;
+        }
     }
-    if (in.peek() != std::ifstream::traits_type::eof() || in.bad()) { error = "Cannot finish reading consent"; return false; }
-    granted = true;
+    if (size != digest.size) { error.clear(); return true; }
+    GameplayDigest legacy;
+    if (!gameplayDigestFile(path, legacy, error)) return false;
+    granted = legacy == digest;
     error.clear();
     return true;
 }

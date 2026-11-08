@@ -1,0 +1,1 @@
+{"id":"com.example.audio-demo","name":"AUDIO DEMO","version":"1.0.0","author":"Example","description":"Play a packaged sample","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","sound"],"api_version":"1"}

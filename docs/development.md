@@ -26,7 +26,7 @@
 | Web browser | Chromium Embedded Framework (CEF) rendering into a texture, with a depth compositor that lifts images and video off the page |
 | Media | Windows Media Foundation for video and audio. Metadata is read in-house, plus a background library scan. A SQLite database (`media.db`) stores scraped info and watch progress; WinINet fetches posters, plots, episode lists, artist and album info and lyrics from TVmaze, iTunes, Deezer, Wikipedia and lrclib on a background thread |
 | Images and models | `stb_image` and `stb_image_write` for images, `cgltf` for glTF/GLB models such as the car |
-| Audio | SDL audio. The sound effects and the electric car hum are synthesised in code (`Sfx`), with no audio files |
+| Audio | SDL audio. Built-in sound effects and the electric car hum are synthesised in code (`Sfx`); gameplay plugins can also package bounded WAV and OGG Vorbis samples |
 | Hosted Windows apps | Window capture plus a UI Automation helper (`SciFiUia.exe`) that mirrors real programs onto panels |
 | Tools | Built-in system monitor, terminal, file browser, image editor, FTP client, calculator and code editor |
 | Packaging | Inno Setup installer, an updater script that checks GitHub Releases, and releases published with the `gh` CLI |

@@ -1,8 +1,11 @@
 #include "PluginPackage.h"
 #include "GameplayPackage.h"
+#include "GameplayFileLock.h"
 #include "GameplayLimits.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
 #include <fstream>
 #include <map>
 #include <vector>
@@ -83,6 +86,41 @@ bool colour(const std::string& s) {
         if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f') || (s[i] >= 'A' && s[i] <= 'F'))) return false;
     return true;
 }
+
+bool copyBoundedZip(const std::filesystem::path& source, const std::filesystem::path& target,
+                    std::uint64_t size, std::string& error) {
+    std::ifstream in(source, std::ios::binary);
+    if (!in) { error = "Cannot open ZIP for copying"; return false; }
+#ifdef _WIN32
+    FILE* out = nullptr;
+    _wfopen_s(&out, target.c_str(), L"wbx");
+#else
+    FILE* out = std::fopen(target.c_str(), "wbx");
+#endif
+    if (!out) { error = "Cannot create installed ZIP (already installed or inaccessible)"; return false; }
+    bool ok = true;
+    std::array<char, 65536> buffer{};
+    std::uint64_t remaining = size;
+    while (remaining) {
+        const auto count = static_cast<std::streamsize>(std::min<std::uint64_t>(remaining, buffer.size()));
+        if (!in.read(buffer.data(), count) ||
+            std::fwrite(buffer.data(), 1, static_cast<size_t>(count), out) != static_cast<size_t>(count)) {
+            ok = false;
+            break;
+        }
+        remaining -= static_cast<std::uint64_t>(count);
+    }
+    if (ok && (in.peek() != std::ifstream::traits_type::eof() || in.bad())) ok = false;
+    if (std::fclose(out) != 0) ok = false;
+    if (!ok) {
+        std::error_code cleanup;
+        std::filesystem::remove(target, cleanup);
+        error = cleanup ? "Cannot copy ZIP or remove incomplete file: " + cleanup.message() :
+                          "Cannot copy ZIP or source changed while copying";
+        return false;
+    }
+    return true;
+}
 }
 
 PluginPackageStore::PluginPackageStore(std::filesystem::path directory, Register reg, RegisterScript script,
@@ -144,13 +182,15 @@ bool PluginPackageStore::parseGameplayManifest(const std::string& text, Gameplay
         if (value.array != (key == "platforms" || key == "permissions")) { error = "Invalid gameplay manifest field type"; return false; }
     const auto& permissions = fields["permissions"].items;
     bool scene = false, world = false, layout = false, impulse = false, control = false,
-         input = false, view = false, sound = false, hud = false, invalidPermission = false;
+         input = false, controller = false, view = false, sound = false, hud = false, storage = false,
+         messaging = false, invalidPermission = false;
     for (const auto& permission : permissions) {
         bool* flag = permission == "scene" ? &scene : permission == "world" ? &world :
                      permission == "input" ? &input : permission == "view" ? &view :
                      permission == "sound" ? &sound : permission == "hud" ? &hud :
                      permission == "layout" ? &layout : permission == "impulse" ? &impulse :
-                     permission == "control" ? &control : nullptr;
+                     permission == "control" ? &control : permission == "storage" ? &storage :
+                     permission == "controller" ? &controller : permission == "messaging" ? &messaging : nullptr;
         if (!flag || *flag) invalidPermission = true;
         else *flag = true;
     }
@@ -160,7 +200,8 @@ bool PluginPackageStore::parseGameplayManifest(const std::string& text, Gameplay
         fields["description"].text.empty() || fields["description"].text.size() > 160 ||
         fields["type"].text != "gameplay" || fields["entry"].text != "scripts/main.lua" ||
         fields["platforms"].items != std::vector<std::string>{"any"} || fields["api_version"].text != "1" ||
-        !scene || ((layout || impulse) && !world) || (control && (!world || !input || !view)) || invalidPermission) {
+        !scene || ((layout || impulse) && !world) || (control && (!world || !input || !view)) ||
+        (controller && !input) || invalidPermission) {
         error = "Unsupported or invalid gameplay manifest";
         return false;
     }
@@ -170,6 +211,9 @@ bool PluginPackageStore::parseGameplayManifest(const std::string& text, Gameplay
     out.author = fields["author"].text;
     out.description = fields["description"].text;
     out.scene = true;
+    out.storage = storage;
+    out.messaging = messaging;
+    out.controller = controller;
     out.world = world;
     out.layout = layout;
     out.impulse = impulse;
@@ -242,19 +286,14 @@ bool PluginPackageStore::loadZip(const std::filesystem::path& path, ScriptPackag
     return readZip(data, out, error_);
 }
 
-bool PluginPackageStore::loadGameplayZip(const std::filesystem::path& path, GameplayPackage& out, std::string& bytes) {
-    std::error_code ec;
-    const auto status = std::filesystem::symlink_status(path, ec);
-    if (ec || !std::filesystem::is_regular_file(status)) { error_ = "Gameplay ZIP must be a regular file"; return false; }
-    const auto size = std::filesystem::file_size(path, ec);
-    if (ec || size == 0 || size > kGameplayArchiveLimit) { error_ = "Gameplay ZIP is unreadable or too large"; return false; }
-    std::ifstream in(path, std::ios::binary);
-    bytes.resize(static_cast<size_t>(size));
-    if (!in || !in.read(bytes.data(), static_cast<std::streamsize>(bytes.size())) ||
-        in.peek() != std::ifstream::traits_type::eof()) {
-        error_ = "Cannot read gameplay ZIP"; return false;
-    }
-    return readGameplayPackage(bytes, out, error_);
+bool PluginPackageStore::loadGameplayZip(const std::filesystem::path& path, GameplayPackage& out, GameplayDigest& digest) {
+    GameplayFileLock lock;
+    if (!lock.open(path, error_)) return false;
+    GameplayDigest after;
+    if (!gameplayDigestFile(path, digest, error_) || !readGameplayPackageFile(path, out, error_) ||
+        !gameplayDigestFile(path, after, error_)) return false;
+    if (!(digest == after)) { error_ = "Gameplay ZIP changed while validating"; return false; }
+    return true;
 }
 
 bool PluginPackageStore::load(const std::filesystem::path& path, ThemePackage& out) {
@@ -295,9 +334,9 @@ void PluginPackageStore::discover() {
             ok = loadZip(path, pkg) && path.filename().string() == pkg.id + ".zip" && registerScript_ && registerScript_(pkg);
             if (!ok && registerGameplay_) {
                 GameplayPackage game;
-                std::string bytes;
-                ok = loadGameplayZip(path, game, bytes) && path.filename().string() == game.id + ".zip" &&
-                     registerGameplay_(game, bytes);
+                GameplayDigest digest;
+                ok = loadGameplayZip(path, game, digest) && path.filename().string() == game.id + ".zip" &&
+                     registerGameplay_(game, path, digest);
             }
         } else {
             ThemePackage pkg;
@@ -318,11 +357,11 @@ bool PluginPackageStore::install(const std::filesystem::path& source) {
     ThemePackage input;
     ScriptPackage script;
     GameplayPackage gameplay;
-    std::string gameplayBytes;
+    GameplayDigest gameplayDigest;
     bool isGameplay = false;
     if (zip) {
         if (!loadZip(source, script)) {
-            if (!registerGameplay_ || !loadGameplayZip(source, gameplay, gameplayBytes)) return false;
+            if (!registerGameplay_ || !loadGameplayZip(source, gameplay, gameplayDigest)) return false;
             isGameplay = true;
         }
     } else if (!load(source, input)) return false;
@@ -331,24 +370,42 @@ bool PluginPackageStore::install(const std::filesystem::path& source) {
     std::filesystem::create_directories(dir_, ec);
     if (ec) { error_ = "Cannot create plugin directory: " + ec.message(); return false; }
     size_t count = 0;
+    std::uint64_t zipBytes = 0;
     std::filesystem::directory_iterator it(dir_, ec), end;
     while (!ec && it != end) {
         if (it->path().extension() == ".sfplugin" || it->path().extension() == ".zip") ++count;
+        if (zip && it->path().extension() == ".zip") {
+            const auto existingSize = it->file_size(ec);
+            if (ec || existingSize > kGameplayInstalledZipLimit - zipBytes) {
+                error_ = "Cannot inspect installed ZIP storage"; return false;
+            }
+            zipBytes += existingSize;
+        }
         it.increment(ec);
     }
     if (ec || count >= kMaxPackages) { error_ = "Cannot install: package directory unreadable or full"; return false; }
+    const auto incomingZipSize = isGameplay ? gameplayDigest.size :
+        zip ? std::filesystem::file_size(source, ec) : 0;
+    if (ec) { error_ = "Cannot inspect source ZIP: " + ec.message(); return false; }
+    if (zip && !isGameplay && incomingZipSize > 262144) {
+        error_ = "Script ZIP changed or exceeds 256 KiB"; return false;
+    }
+    if (zip && incomingZipSize > kGameplayInstalledZipLimit - zipBytes) {
+        error_ = "Installed ZIP storage limit exceeded"; return false;
+    }
     const auto target = dir_ / (id + (zip ? ".zip" : ".sfplugin"));
-    if (!std::filesystem::copy_file(source, target, std::filesystem::copy_options::none, ec)) {
+    if (zip && !copyBoundedZip(source, target, incomingZipSize, error_)) return false;
+    if (!zip && !std::filesystem::copy_file(source, target, std::filesystem::copy_options::none, ec)) {
         error_ = "Cannot install package (already installed or inaccessible): " + ec.message();
         return false;
     }
     ThemePackage copied;
     ScriptPackage copiedScript;
     GameplayPackage copiedGameplay;
-    std::string copiedBytes;
+    GameplayDigest copiedDigest;
     const bool registered = isGameplay
-        ? loadGameplayZip(target, copiedGameplay, copiedBytes) && copiedGameplay.id == id &&
-          copiedBytes == gameplayBytes && registerGameplay_ && registerGameplay_(copiedGameplay, copiedBytes)
+        ? loadGameplayZip(target, copiedGameplay, copiedDigest) && copiedGameplay.id == id &&
+          copiedDigest == gameplayDigest && registerGameplay_ && registerGameplay_(copiedGameplay, target, copiedDigest)
         : zip
         ? loadZip(target, copiedScript) && copiedScript.id == id && registerScript_ && registerScript_(copiedScript)
         : load(target, copied) && copied.id == id && register_(copied);

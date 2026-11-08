@@ -1,6 +1,8 @@
 #pragma once
 
 #include <map>
+#include <filesystem>
+#include <functional>
 #include <string>
 
 namespace sf {
@@ -13,5 +15,9 @@ struct GameplayArchive {
 };
 
 bool readGameplayArchive(const std::string& data, GameplayArchive& out, std::string& error);
+using GameplayArchiveBegin = std::function<bool(const std::string&, const std::string&, std::string&)>;
+using GameplayArchiveAsset = std::function<bool(const std::string&, const std::string&, std::string&)>;
+bool readGameplayArchiveFile(const std::filesystem::path& path, const GameplayArchiveBegin& begin,
+                             const GameplayArchiveAsset& asset, std::string& error);
 
 }  // namespace sf

@@ -16,6 +16,8 @@
 #include "PluginPackage.h"
 #include "GameplayConsent.h"
 #include "GameplayInput.h"
+#include "GameplayControllerInput.h"
+#include "GameplayMessaging.h"
 #include "GameplayClickRouter.h"
 #include "GameplayControlLease.h"
 #include "GameplayImpulse.h"
@@ -89,14 +91,14 @@ private:
     void updateCamera(double dt, float moveX, float moveY, float moveZ, float lookX, float lookY,
                       float speedMul = 1.0f, bool gameplayMotion = false);
     void renderScene(const Mat4& view, const Mat4& proj, const Vec3& eye, bool desktopPass);
-    bool registerGameplay(const GameplayPackage& package, const std::string& bytes);
+    bool registerGameplay(const GameplayPackage& package, const std::filesystem::path& path, const GameplayDigest& digest);
     bool gameplayWorldAvailable() const;
     bool gameplayWindowFocused() const;
 #ifdef SCIFI_TEST_SYNTHETIC_CITY
     bool syntheticGameplayFocus_ = false;
 #endif
     void toggleGameplay(const std::string& id);
-    void tickGameplay(double dt, const FrameInput& input, bool allowInput);
+    void tickGameplay(double dt, const FrameInput& input, const PadState& pad, bool allowInput);
     uint64_t gameplayClickTarget(const Vec3& origin, const Vec3& direction) const;
     void releaseGameplayControl();
     void acquireGameplayControl();
@@ -115,17 +117,22 @@ private:
     std::map<std::string, std::string> pluginMessages_;
     std::set<std::string> installedPluginIds_;
     struct GameplayEntry {
-        std::string bytes;
+        std::filesystem::path path;
+        GameplayDigest digest;
         bool world = false;
         bool layout = false;
         bool impulse = false;
         bool control = false;
         bool input = false;
+        bool storage = false;
+        bool messaging = false;
+        bool controller = false;
         bool view = false;
         bool sound = false;
         bool hud = false;
         uint64_t owner = 0;
         GameplaySoundBudget soundBudget;
+        GameplaySoundBudget messageBudget;
         GameplayImpulse motion;
         std::shared_ptr<GpuLabel> hudLabel;
         std::uint64_t hudRevision = 0;
@@ -134,8 +141,11 @@ private:
         std::unique_ptr<GameplaySceneRenderer> scene;
         std::string pendingError;
         GameplayInput inputState;
+        GameplayControllerInput controllerInput;
     };
     std::map<std::string, std::shared_ptr<GameplayEntry>> gameplay_;
+    GameplayMessaging gameplayMessages_;
+    std::uint64_t gameplayFrame_ = 0;
     GameplayControlLease gameplayControl_;
     GameplayClickRouter gameplayClicks_;
     std::unique_ptr<GameplayConsent> gameplayConsent_;

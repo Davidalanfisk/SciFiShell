@@ -1,6 +1,7 @@
 #include "XInputController.h"
 
 #include <cmath>
+#include <algorithm>
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -15,6 +16,7 @@ namespace sf {
 
 namespace {
 float applyDeadzone(float v, float dz) {
+    v = std::clamp(v, -1.0f, 1.0f);
     float a = std::fabs(v);
     if (a < dz) return 0.0f;
     float s = (a - dz) / (1.0f - dz);
@@ -62,9 +64,14 @@ PadState XInputController::poll() {
         x = (g.wButtons & XINPUT_GAMEPAD_X) != 0;
         lb = (g.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
         rb = (g.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+        s.startHeld = (g.wButtons & XINPUT_GAMEPAD_START) != 0;
+        s.backHeld = (g.wButtons & XINPUT_GAMEPAD_BACK) != 0;
+        s.leftStickHeld = (g.wButtons & XINPUT_GAMEPAD_LEFT_THUMB) != 0;
+        s.rightStickHeld = (g.wButtons & XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
     }
 #else
     if (!impl_->pad || !SDL_GameControllerGetAttached(impl_->pad)) {
+        if (impl_->pad) SDL_GameControllerClose(impl_->pad);
         impl_->pad = nullptr;
         for (int i = 0; i < SDL_NumJoysticks(); ++i)
             if (SDL_IsGameController(i) && (impl_->pad = SDL_GameControllerOpen(i))) break;
@@ -78,8 +85,8 @@ PadState XInputController::poll() {
         s.ly = -axis(SDL_CONTROLLER_AXIS_LEFTY);
         s.rx = axis(SDL_CONTROLLER_AXIS_RIGHTX);
         s.ry = -axis(SDL_CONTROLLER_AXIS_RIGHTY);
-        s.lt = applyDeadzone(SDL_GameControllerGetAxis(impl_->pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) / 32767.0f, 0.1f);
-        s.rt = applyDeadzone(SDL_GameControllerGetAxis(impl_->pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) / 32767.0f, 0.1f);
+        s.lt = std::max(0.0f, applyDeadzone(SDL_GameControllerGetAxis(impl_->pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) / 32767.0f, 0.1f));
+        s.rt = std::max(0.0f, applyDeadzone(SDL_GameControllerGetAxis(impl_->pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) / 32767.0f, 0.1f));
         a = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_A) != 0;
         b = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_B) != 0;
         up = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_DPAD_UP) != 0;
@@ -90,10 +97,16 @@ PadState XInputController::poll() {
         x = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_X) != 0;
         lb = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) != 0;
         rb = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) != 0;
+        s.startHeld = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_START) != 0;
+        s.backHeld = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_BACK) != 0;
+        s.leftStickHeld = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_LEFTSTICK) != 0;
+        s.rightStickHeld = SDL_GameControllerGetButton(impl_->pad, SDL_CONTROLLER_BUTTON_RIGHTSTICK) != 0;
     }
 #endif
     s.lbHeld = lb;
     s.rbHeld = rb;
+    s.aHeld = a; s.bHeld = b; s.xHeld = x; s.yHeld = y;
+    s.upHeld = up; s.downHeld = down; s.leftHeld = left; s.rightHeld = right;
     s.yPressed = y && !impl_->prevY;
     impl_->prevY = y;
     s.aPressed = a && !impl_->prevA;

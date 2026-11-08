@@ -47,17 +47,19 @@ bool GameplaySceneRenderer::prepare(const GameplaySession& session, std::string&
             clear();
             const auto& package = *session.package();
             for (const auto& key : needed) {
-                if (key.first <= 0 || static_cast<size_t>(key.first) > package.models.size() ||
+                if (key.first == 0 || (key.first > 0 && static_cast<size_t>(key.first) > package.models.size()) ||
                     key.second < 0 || static_cast<size_t>(key.second) > package.textures.size()) {
                     error = "Gameplay scene references an unavailable asset";
                     clear();
                     return false;
                 }
-                const auto& model = std::next(package.models.begin(), key.first - 1)->second;
+                const GameplayModel* model = key.first < 0 ? session.proceduralModel(-key.first) :
+                    &std::next(package.models.begin(), key.first - 1)->second;
+                if (!model) { error = "Gameplay scene references an unavailable mesh"; clear(); return false; }
                 const GameplayTexture* texture = key.second ?
                     &std::next(package.textures.begin(), key.second - 1)->second : nullptr;
                 uint64_t handle = 0;
-                if (!renderer_.createGameplayModel(owner_, model, texture, handle, error)) {
+                if (!renderer_.createGameplayModel(owner_, *model, texture, handle, error)) {
                     clear();
                     return false;
                 }

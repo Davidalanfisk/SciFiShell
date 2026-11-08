@@ -154,8 +154,9 @@ bool Renderer::init(SDL_Window* window, const std::string& shaderDir) {
     return true;
 }
 
-void Renderer::ensureMsaaTargets(MsaaTargets& m, uint32_t w, uint32_t h) {
+void Renderer::ensureMsaaTargets(MsaaTargets& m, uint32_t w, uint32_t h, bool desktop) {
     if (m.color && m.depth && m.w == w && m.h == h) return;
+    m.colorRtv.Release();
     m.color.Release();
     m.depth.Release();
     TextureDesc td;
@@ -166,6 +167,10 @@ void Renderer::ensureMsaaTargets(MsaaTargets& m, uint32_t w, uint32_t h) {
     td.SampleCount = samples_;
     td.Name = "MSAA color";
     td.Format = kColorFormat;
+#ifdef _WIN32
+    // DXGI swapchain buffers are UNORM resources with sRGB views.
+    if (desktop) td.Format = TEX_FORMAT_RGBA8_TYPELESS;
+#endif
     td.BindFlags = BIND_RENDER_TARGET;
     td.ClearValue.Format = kColorFormat;
     td.ClearValue.Color[0] = 0.01f;
@@ -173,6 +178,16 @@ void Renderer::ensureMsaaTargets(MsaaTargets& m, uint32_t w, uint32_t h) {
     td.ClearValue.Color[2] = 0.03f;
     td.ClearValue.Color[3] = 1.0f;
     device_->CreateTexture(td, nullptr, &m.color);
+    if (m.color) {
+        if (td.Format == kColorFormat) {
+            m.colorRtv = m.color->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+        } else {
+            TextureViewDesc view;
+            view.ViewType = TEXTURE_VIEW_RENDER_TARGET;
+            view.Format = kColorFormat;
+            m.color->CreateView(view, &m.colorRtv);
+        }
+    }
     td.Name = "MSAA depth";
     td.Format = kDepthFormat;
     td.BindFlags = BIND_DEPTH_STENCIL;
@@ -243,6 +258,8 @@ void Renderer::postWorld() {
     ResolveTextureSubresourceAttribs ra;
     ra.SrcTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
     ra.DstTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+    if (resolveSrc_->GetDesc().Format == TEX_FORMAT_RGBA8_TYPELESS)
+        ra.Format = resolveDst_->GetDesc().Format;
     context_->ResolveTextureSubresource(resolveSrc_, resolveDst_, ra);
     runPost();
     if (!blitSRB_) return;
@@ -276,6 +293,8 @@ void Renderer::endTarget() {
     ResolveTextureSubresourceAttribs ra;
     ra.SrcTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
     ra.DstTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+    if (resolveSrc_->GetDesc().Format == TEX_FORMAT_RGBA8_TYPELESS)
+        ra.Format = resolveDst_->GetDesc().Format;
     context_->ResolveTextureSubresource(resolveSrc_, resolveDst_, ra);
     // VR runtimes expect the image back in the render-target state when it is released.
     StateTransitionDesc tr{resolveDst_, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_RENDER_TARGET,
@@ -499,10 +518,10 @@ void Renderer::beginTarget(ITextureView* rtv, ITextureView* dsv, uint32_t w, uin
     desktopActive_ = desktop;
     if (samples_ > 1) {
         MsaaTargets& m = msaa_[desktop ? 0 : 1];
-        ensureMsaaTargets(m, w, h);
+        ensureMsaaTargets(m, w, h, desktop);
         resolveDst_ = rtv->GetTexture();
         resolveSrc_ = m.color;
-        rtv = m.color->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+        rtv = m.colorRtv;
         dsv = m.depth->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL);
     }
     context_->SetRenderTargets(1, &rtv, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -544,7 +563,7 @@ void Renderer::beginReflection() {
     ITextureView *rtv, *dsv;
     ensureMsaaTargets(msaa_[2], reflW_, reflH_);
     dsv = msaa_[2].depth->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL);
-    rtv = samples_ > 1 ? msaa_[2].color->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET)
+    rtv = samples_ > 1 ? msaa_[2].colorRtv.RawPtr()
                        : reflTex_->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
     context_->SetRenderTargets(1, &rtv, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     Viewport vp{0, 0, static_cast<float>(reflW_), static_cast<float>(reflH_), 0.0f, 1.0f};

@@ -205,7 +205,9 @@ bool AppShell::init() {
             pluginScripts_[p.id] = p.script;
             return true;
         },
-        [this](const GameplayPackage& p, const std::string& bytes) { return registerGameplay(p, bytes); });
+        [this](const GameplayPackage& p, const std::filesystem::path& path, const GameplayDigest& digest) {
+            return registerGameplay(p, path, digest);
+        });
     pluginPackages_->discover();
     if (!pluginPackages_->error().empty()) std::fprintf(stderr, "%s\n", pluginPackages_->error().c_str());
     plugins_.initialize();
@@ -1540,6 +1542,12 @@ bool AppShell::scriptExec(const std::string& line) {
         const auto it = gameplay_.find(id);
         if (it == gameplay_.end()) scriptLog("test audio unavailable");
         else scriptLog("test audio engine=" + std::to_string(sfx_.testHasOwnedEngine(it->second->owner)));
+    } else if (cmd == "testsamples") {
+        std::string id;
+        is >> id;
+        const auto it = gameplay_.find(id);
+        if (it == gameplay_.end()) scriptLog("test samples unavailable");
+        else scriptLog("test samples " + id + "=" + std::to_string(sfx_.testOwnedSampleCount(it->second->owner)));
     } else if (cmd == "testclearance") {
         std::string id;
         is >> id;
@@ -2273,6 +2281,20 @@ void AppShell::tick(double dt) {
     // Only the focused window can take typed text; otherwise the keyboard walks the camera.
     const bool winTypingNow = focus_.p && winTyping(focus_);
     PadState pad = pad_.poll();
+    const PadState gameplayPad = pad;
+    if (gameplayControl_.owner() && gameplayWindowFocused() && gameplayWorldAvailable() &&
+        !focus_.p && !winFocus_ && !settingsPanel_->isOpen() && !start_->isOpen() &&
+        !appsPanel_->isOpen() && !viewer_->active() && !switcher_->isOpen() &&
+        !osk_->isOpen() && !harvi_->panelOpen() && !vrOn_) {
+        for (const auto& [id, entry] : gameplay_) {
+            if (entry->owner == gameplayControl_.owner() && entry->controller && entry->session.running()) {
+                pad.aPressed = pad.bPressed = pad.xPressed = pad.yPressed = false;
+                pad.upPressed = pad.downPressed = pad.leftPressed = pad.rightPressed = false;
+                pad.lbPressed = pad.rbPressed = false;
+                break;
+            }
+        }
+    }
     if (in.quit) running_ = false;
     {
         // What the on-screen keyboard typed arrives like real key presses.
@@ -2971,7 +2993,7 @@ void AppShell::tick(double dt) {
         typing, focus_.p != nullptr, input_.capturing, driving_, riding_, vrOn_, harvi_->panelOpen(),
         settingsPanel_->isOpen(), start_->isOpen(), viewer_->active(), switcher_->isOpen(),
         appsPanel_->isOpen(), osk_->isOpen()};
-    tickGameplay(dt, in, gameplayInputContext.available());
+    tickGameplay(dt, in, gameplayPad, gameplayInputContext.available());
     if (!gameplayInputContext.available() || !gameplayWorldAvailable()) gameplayClicks_.begin(false, false, 0);
     gameplayClicks_.finish(in.clickUp);
     scriptTick(dt);
@@ -3225,6 +3247,12 @@ int AppShell::run() {
         double dt = std::min(0.1, static_cast<double>(now - prev) / freq);
         prev = now;
         tick(dt);
+#ifdef SCIFI_TEST_SYNTHETIC_CITY
+        if (std::getenv("SCIFI_TEST_HEADLESS")) {
+            SDL_Delay(2);
+            continue;
+        }
+#endif
         prepareGameplay();
 
         if (vrOn_) {

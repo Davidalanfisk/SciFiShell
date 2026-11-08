@@ -156,9 +156,10 @@ private:
     void buildMeshes();
     struct MsaaTargets {
         Diligent::RefCntAutoPtr<Diligent::ITexture> color, depth;
+        Diligent::RefCntAutoPtr<Diligent::ITextureView> colorRtv;
         uint32_t w = 0, h = 0;
     };
-    void ensureMsaaTargets(MsaaTargets& m, uint32_t w, uint32_t h);
+    void ensureMsaaTargets(MsaaTargets& m, uint32_t w, uint32_t h, bool desktop = false);
     void draw(Pipeline& pipeline, Diligent::IShaderResourceBinding* srb, const Mesh& mesh, const Mat4& world,
               const float color[4], const float params[4], const float light[4]);
 

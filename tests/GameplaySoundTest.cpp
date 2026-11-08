@@ -1,5 +1,6 @@
 #include "Sfx.h"
 #include "GameplaySoundBudget.h"
+#include "GameplayAudio.h"
 
 #include <SDL.h>
 #include <iostream>
@@ -11,6 +12,7 @@ namespace sf {
 struct SfxTestAccess {
     static unsigned device(const Sfx& sfx) { return sfx.dev_; }
     static size_t engines(const Sfx& sfx) { return sfx.pluginEngines_.size(); }
+    static size_t samples(const Sfx& sfx) { return sfx.samples_.size(); }
     static void mix(Sfx& sfx, std::vector<short>& samples) { sfx.fill(samples.data(), static_cast<int>(samples.size())); }
 };
 }
@@ -61,6 +63,26 @@ int main() {
             if (!sfx.setOwnedEngine(i, false, 0, false)) return 1;
         sf::SfxTestAccess::mix(sfx, samples);
         if (std::any_of(samples.begin(), samples.end(), [](short sample) { return sample != 0; })) return 1;
+        auto clip = std::make_shared<sf::GameplayAudio>();
+        clip->sampleRate = 44100;
+        clip->samples = {10000, 10000, 10000, 10000};
+        if (!sfx.playOwnedSample(1, 1, clip, 0.5f, false)) return 1;
+        sf::SfxTestAccess::mix(sfx, samples);
+        if (samples[0] == 0 || samples[4] != 0 || sf::SfxTestAccess::samples(sfx) != 0) return 1;
+        if (!sfx.playOwnedSample(1, 99, clip, 0.5f, false) || !sfx.loopOwnedSample(1, 99) ||
+            sfx.loopOwnedSample(2, 99)) return 1;
+        sf::SfxTestAccess::mix(sfx, samples);
+        if (samples.back() == 0 || sf::SfxTestAccess::samples(sfx) != 1) return 1;
+        sfx.stopOwnedSample(1, 99);
+        for (int i = 1; i <= 4; ++i)
+            if (!sfx.playOwnedSample(1, i, clip, 0.5f, true)) return 1;
+        if (sfx.playOwnedSample(1, 5, clip, 0.5f, true)) return 1;
+        sf::SfxTestAccess::mix(sfx, samples);
+        if (samples.back() == 0 || sf::SfxTestAccess::samples(sfx) != 4) return 1;
+        sfx.stopOwnedSample(1, 1);
+        if (sf::SfxTestAccess::samples(sfx) != 3) return 1;
+        sfx.stopOwner(1);
+        if (sf::SfxTestAccess::samples(sfx) != 0) return 1;
         if (!sfx.setOwnedEngine(1, true, 20, false) || !sfx.playOwned(1, sf::SfxId::Boom, 1)) return 1;
         sfx.setCar(true, 20, true);
     }

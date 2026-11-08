@@ -4,10 +4,12 @@
 
 #include <mutex>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace sf {
 
+struct GameplayAudio;
 enum class SfxId { Pickup, Throw, Boom, DuckPop, CarSummon, RailOn };
 
 class Sfx {
@@ -18,10 +20,15 @@ public:
     void shutdown();
     void play(SfxId id, float volume = 1.0f);
     bool playOwned(std::uint64_t owner, SfxId id, float volume);
+    bool playOwnedSample(std::uint64_t owner, int voice, std::shared_ptr<const GameplayAudio> sample,
+                         float volume, bool loop);
+    void stopOwnedSample(std::uint64_t owner, int voice);
+    bool loopOwnedSample(std::uint64_t owner, int voice);
     bool setOwnedEngine(std::uint64_t owner, bool active, float speed, bool boost);
     void stopOwner(std::uint64_t owner);
 #ifdef SCIFI_TEST_SYNTHETIC_CITY
     bool testHasOwnedEngine(std::uint64_t owner);
+    std::size_t testOwnedSampleCount(std::uint64_t owner);
 #endif
     // Called every frame: speed in m/s, whether the car is being driven, and whether boost is held.
     void setCar(bool driving, float speed, bool boost);
@@ -40,6 +47,14 @@ private:
         float target = 0, speedTarget = 0, boostTarget = 0;
         float gain = 0, speed = 0, boost = 0, phase1 = 0, phase2 = 0, lowpass = 0;
     };
+    struct SampleVoice {
+        std::uint64_t owner = 0;
+        int id = 0;
+        std::shared_ptr<const GameplayAudio> sample;
+        double position = 0;
+        float volume = 0;
+        bool loop = false, finished = false;
+    };
     static void callback(void* user, unsigned char* stream, int len);
     void fill(short* out, int frames);
     float voiceSample(Voice& v, bool& alive);
@@ -48,6 +63,7 @@ private:
     unsigned dev_ = 0;
     std::mutex mu_;
     std::vector<Voice> voices_;
+    std::vector<SampleVoice> samples_;
     Engine carEngine_;
     std::vector<Engine> pluginEngines_;
     float master_ = 0.8f;

@@ -7,6 +7,38 @@
 #include <new>
 
 namespace sf {
+namespace {
+bool decodeAsset(const std::string& path, const std::string& bytes, GameplayPackage& loaded,
+                 size_t& decoded, std::string& error) {
+    std::string assetError;
+    if (path.compare(path.size() - 4, 4, ".wav") == 0 ||
+        path.compare(path.size() - 4, 4, ".ogg") == 0) {
+        if (!loaded.sound) { error = path + ": audio requires sound permission"; return false; }
+        auto audio = std::make_shared<GameplayAudio>();
+        if (!decodeGameplayAudio(path, bytes, *audio, assetError)) { error = path + ": " + assetError; return false; }
+        const size_t size = audio->samples.size() * sizeof(audio->samples[0]);
+        if (size > kGameplayDecodedLimit - decoded) { error = "Gameplay decoded assets exceed memory limit"; return false; }
+        decoded += size;
+        loaded.audio.emplace(path, std::move(audio));
+    } else if (path.compare(path.size() - 4, 4, ".png") == 0) {
+        GameplayTexture texture;
+        if (!decodeGameplayTexture(bytes, texture, assetError)) { error = path + ": " + assetError; return false; }
+        if (texture.rgba.size() > kGameplayDecodedLimit - decoded) { error = "Gameplay decoded assets exceed memory limit"; return false; }
+        decoded += texture.rgba.size();
+        loaded.textures.emplace(path, std::move(texture));
+    } else {
+        GameplayModel model;
+        if (!decodeGameplayModel(bytes, model, assetError)) { error = path + ": " + assetError; return false; }
+        const size_t size = model.vertices.size() * sizeof(float) +
+                            model.indices.size() * sizeof(std::uint32_t) + model.embeddedTexture.rgba.size();
+        if (size > kGameplayDecodedLimit - decoded) { error = "Gameplay decoded assets exceed memory limit"; return false; }
+        decoded += size;
+        loaded.models.emplace(path, std::move(model));
+    }
+    return true;
+}
+}
+
 bool readGameplayPackage(const std::string& data, GameplayPackage& out, std::string& error) {
     out = {};
     GameplayArchive archive;
@@ -17,22 +49,7 @@ bool readGameplayPackage(const std::string& data, GameplayPackage& out, std::str
     try {
         loaded.script = std::move(archive.script);
         for (const auto& [path, bytes] : archive.assets) {
-            std::string assetError;
-            if (path.compare(path.size() - 4, 4, ".png") == 0) {
-                GameplayTexture texture;
-                if (!decodeGameplayTexture(bytes, texture, assetError)) { error = path + ": " + assetError; return false; }
-                if (texture.rgba.size() > kGameplayDecodedLimit - decoded) { error = "Gameplay decoded assets exceed memory limit"; return false; }
-                decoded += texture.rgba.size();
-                loaded.textures.emplace(path, std::move(texture));
-            } else {
-                GameplayModel model;
-                if (!decodeGameplayModel(bytes, model, assetError)) { error = path + ": " + assetError; return false; }
-                const size_t size = model.vertices.size() * sizeof(float) +
-                                    model.indices.size() * sizeof(std::uint32_t) + model.embeddedTexture.rgba.size();
-                if (size > kGameplayDecodedLimit - decoded) { error = "Gameplay decoded assets exceed memory limit"; return false; }
-                decoded += size;
-                loaded.models.emplace(path, std::move(model));
-            }
+            if (!decodeAsset(path, bytes, loaded, decoded, error)) return false;
         }
     } catch (const std::bad_alloc&) {
         error = "Cannot allocate gameplay package";
@@ -41,5 +58,22 @@ bool readGameplayPackage(const std::string& data, GameplayPackage& out, std::str
     out = std::move(loaded);
     error.clear();
     return true;
+}
+
+bool readGameplayPackageFile(const std::filesystem::path& path, GameplayPackage& out, std::string& error) {
+    out = {};
+    GameplayPackage loaded;
+    size_t decoded = 0;
+    const bool ok = readGameplayArchiveFile(path,
+        [&](const std::string& manifest, const std::string& script, std::string& failure) {
+            if (!PluginPackageStore::parseGameplayManifest(manifest, loaded, failure)) return false;
+            loaded.script = script;
+            return true;
+        },
+        [&](const std::string& name, const std::string& bytes, std::string& failure) {
+            return decodeAsset(name, bytes, loaded, decoded, failure);
+        }, error);
+    if (ok) out = std::move(loaded);
+    return ok;
 }
 }  // namespace sf

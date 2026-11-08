@@ -1,0 +1,1 @@
+{"id":"com.example.storage-demo","name":"STORAGE DEMO","version":"1.0.0","author":"Example","description":"Count plugin starts","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","storage","hud"],"api_version":"1"}

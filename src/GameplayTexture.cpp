@@ -87,7 +87,7 @@ bool decodeGameplayTexture(const std::string& data, GameplayTexture& out, std::s
     static constexpr unsigned char signature[] = {137, 80, 78, 71, 13, 10, 26, 10};
     if (data.size() < sizeof(signature) || data.size() > kGameplayAssetLimit ||
         std::memcmp(bytes, signature, sizeof(signature)) != 0) {
-        error = "Texture must be a PNG no larger than 2 MiB";
+        error = "Texture must be a PNG no larger than 100 MiB";
         return false;
     }
     size_t pos = sizeof(signature);

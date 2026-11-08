@@ -28,6 +28,20 @@ FetchContent_Declare(scifi_miniz
     GIT_TAG 77d0dce8627735138c51770d1799a1ef48f2117d)
 FetchContent_MakeAvailable(scifi_miniz)
 
+FetchContent_Declare(scifi_stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG 4e9b368bfc071e97206ea5c6adba68dd0cbf8897)
+FetchContent_MakeAvailable(scifi_stb)
+add_library(scifi_gameplay_audio STATIC src/GameplayAudio.cpp)
+target_include_directories(scifi_gameplay_audio PRIVATE "${scifi_stb_SOURCE_DIR}")
+
+FetchContent_Declare(scifi_picosha2
+    GIT_REPOSITORY https://github.com/okdshin/PicoSHA2.git
+    GIT_TAG 161cb3fc4170fa7a3eca9e582cebd27cc4d1fe29)
+FetchContent_MakeAvailable(scifi_picosha2)
+add_library(scifi_gameplay_digest STATIC src/GameplayDigest.cpp)
+target_include_directories(scifi_gameplay_digest PRIVATE "${scifi_picosha2_SOURCE_DIR}")
+
 # ---- Diligent Engine (core + engine backends) -------------------------------------------------
 # Override with -DSCIFI_DILIGENT_TAG=<tag> to pin a specific release.
 set(SCIFI_DILIGENT_TAG "master" CACHE STRING "DiligentCore git tag/branch")
@@ -99,6 +113,7 @@ set(SOURCES
     src/GameplayPackage.cpp
     src/GameplayConsent.cpp
     src/GameplaySession.cpp
+    src/GameplayStorage.cpp
     src/NativePlugin.cpp
     src/SettingsPanel.cpp
     src/SettingsHub.cpp
@@ -178,6 +193,11 @@ target_link_libraries(SciFiShell PRIVATE ${CMAKE_DL_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(GameplayAudioTest tests/GameplayAudioTest.cpp)
+    target_include_directories(GameplayAudioTest PRIVATE src)
+    target_compile_definitions(GameplayAudioTest PRIVATE "SCIFI_TEST_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\"")
+    target_link_libraries(GameplayAudioTest PRIVATE scifi_gameplay_audio)
+    add_test(NAME GameplayAudioTest COMMAND GameplayAudioTest)
     add_executable(GameplaySoundTest tests/GameplaySoundTest.cpp src/Sfx.cpp)
     target_include_directories(GameplaySoundTest PRIVATE src)
     target_compile_definitions(GameplaySoundTest PRIVATE SDL_MAIN_HANDLED)
@@ -196,16 +216,20 @@ if(BUILD_TESTING)
     target_include_directories(PluginManagerTest PRIVATE src)
     target_compile_definitions(PluginManagerTest PRIVATE NOMINMAX)
     add_test(NAME PluginManagerTest COMMAND PluginManagerTest)
-    add_executable(PluginPackageTest tests/PluginPackageTest.cpp tests/CgltfTestImpl.cpp src/PluginPackage.cpp src/PluginManager.cpp src/GameplayArchive.cpp src/GameplayTexture.cpp src/GameplayModel.cpp src/GameplayGpuValidation.cpp src/GameplayPackage.cpp src/GameplayConsent.cpp src/GameplaySession.cpp src/PluginScript.cpp)
+    add_executable(PluginPackageTest tests/PluginPackageTest.cpp tests/CgltfTestImpl.cpp src/PluginPackage.cpp src/PluginManager.cpp src/GameplayArchive.cpp src/GameplayTexture.cpp src/GameplayModel.cpp src/GameplayGpuValidation.cpp src/GameplayPackage.cpp src/GameplayConsent.cpp src/GameplaySession.cpp src/GameplayStorage.cpp src/PluginScript.cpp)
     target_include_directories(PluginPackageTest PRIVATE src third_party)
     target_compile_definitions(PluginPackageTest PRIVATE "SCIFI_TEST_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\"")
-    target_link_libraries(PluginPackageTest PRIVATE miniz scifi_lua)
+    target_link_libraries(PluginPackageTest PRIVATE miniz scifi_lua scifi_gameplay_audio scifi_gameplay_digest)
     add_test(NAME PluginPackageTest COMMAND PluginPackageTest)
+    # Explicit, resource-intensive boundary test; not part of headless CTest.
+    add_executable(GameplayArchiveLargeTest EXCLUDE_FROM_ALL tests/GameplayArchiveLargeTest.cpp src/GameplayArchive.cpp)
+    target_include_directories(GameplayArchiveLargeTest PRIVATE src)
+    target_link_libraries(GameplayArchiveLargeTest PRIVATE miniz)
     # Explicitly run on a graphics-capable isolated display; not part of headless CTest.
     add_executable(GameplayRendererTest EXCLUDE_FROM_ALL tests/GameplayRendererTest.cpp src/Renderer.cpp
         src/GameplayGpuValidation.cpp src/GameplayModel.cpp src/GameplayTexture.cpp
         src/GameplaySceneRenderer.cpp src/GameplaySession.cpp src/GameplayPackage.cpp
-        src/GameplayArchive.cpp src/GameplayConsent.cpp src/PluginPackage.cpp src/PluginScript.cpp
+        src/GameplayArchive.cpp src/GameplayConsent.cpp src/GameplayStorage.cpp src/PluginPackage.cpp src/PluginScript.cpp
         src/ModelLoader.cpp src/StbImpl.cpp src/Math.cpp)
     target_include_directories(GameplayRendererTest PRIVATE src third_party)
     target_compile_definitions(GameplayRendererTest PRIVATE SDL_MAIN_HANDLED NOMINMAX
@@ -218,7 +242,7 @@ if(BUILD_TESTING)
         target_include_directories(GameplayRendererTest PRIVATE ${SDL2_INCLUDE_DIRS})
         target_link_libraries(GameplayRendererTest PRIVATE ${SDL2_LIBRARIES})
     endif()
-    target_link_libraries(GameplayRendererTest PRIVATE miniz scifi_lua Diligent-Common Diligent-GraphicsTools Diligent-BuildSettings)
+    target_link_libraries(GameplayRendererTest PRIVATE miniz scifi_lua scifi_gameplay_audio scifi_gameplay_digest Diligent-Common Diligent-GraphicsTools Diligent-BuildSettings)
     if(WIN32)
         target_link_libraries(GameplayRendererTest PRIVATE Diligent-GraphicsEngineD3D12-static d3d12 dxgi)
     elseif(APPLE)
@@ -226,10 +250,17 @@ if(BUILD_TESTING)
     else()
         target_link_libraries(GameplayRendererTest PRIVATE Diligent-GraphicsEngineVk-static)
     endif()
-    add_executable(PluginScriptTest tests/PluginScriptTest.cpp src/PluginScript.cpp)
+    add_executable(PluginScriptTest tests/PluginScriptTest.cpp src/PluginScript.cpp src/GameplayStorage.cpp)
     target_include_directories(PluginScriptTest PRIVATE src)
     target_link_libraries(PluginScriptTest PRIVATE scifi_lua)
     add_test(NAME PluginScriptTest COMMAND PluginScriptTest)
+    add_executable(GameplayStorageTest tests/GameplayStorageTest.cpp src/PluginScript.cpp src/GameplayStorage.cpp)
+    target_include_directories(GameplayStorageTest PRIVATE src)
+    target_link_libraries(GameplayStorageTest PRIVATE scifi_lua)
+    add_test(NAME GameplayStorageTest COMMAND GameplayStorageTest)
+    add_executable(GameplayControllerInputTest tests/GameplayControllerInputTest.cpp)
+    target_include_directories(GameplayControllerInputTest PRIVATE src)
+    add_test(NAME GameplayControllerInputTest COMMAND GameplayControllerInputTest)
     add_library(NativePluginFixture MODULE tests/NativePluginFixture.cpp)
     target_include_directories(NativePluginFixture PRIVATE src)
     foreach(mode IN ITEMS BAD_ABI FAIL_CREATE FAIL_START)
@@ -279,7 +310,7 @@ else()
 endif()
 
 target_link_libraries(SciFiShell PRIVATE
-    scifi_lua miniz
+    scifi_lua miniz scifi_gameplay_audio scifi_gameplay_digest
     sqlite3_static
     OpenXR::openxr_loader
     Diligent-Common

@@ -4,6 +4,8 @@
 #include <functional>
 #include <string>
 
+#include "GameplayDigest.h"
+
 namespace sf {
 
 struct GameplayPackage;
@@ -20,7 +22,7 @@ class PluginPackageStore {
 public:
     using Register = std::function<bool(const ThemePackage&)>;
     using RegisterScript = std::function<bool(const ScriptPackage&)>;
-    using RegisterGameplay = std::function<bool(const GameplayPackage&, const std::string&)>;
+    using RegisterGameplay = std::function<bool(const GameplayPackage&, const std::filesystem::path&, const GameplayDigest&)>;
     PluginPackageStore(std::filesystem::path directory, Register registerTheme, RegisterScript registerScript = {},
                        RegisterGameplay registerGameplay = {});
     void discover();
@@ -34,7 +36,7 @@ public:
 private:
     bool load(const std::filesystem::path& path, ThemePackage& out);
     bool loadZip(const std::filesystem::path& path, ScriptPackage& out);
-    bool loadGameplayZip(const std::filesystem::path& path, GameplayPackage& out, std::string& bytes);
+    bool loadGameplayZip(const std::filesystem::path& path, GameplayPackage& out, GameplayDigest& digest);
     std::filesystem::path dir_;
     Register register_;
     RegisterScript registerScript_;

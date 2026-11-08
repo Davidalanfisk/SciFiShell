@@ -5,7 +5,10 @@
 #include "GameplayGpuValidation.h"
 #include "GameplayPackage.h"
 #include "GameplayConsent.h"
+#include "GameplayFileLock.h"
+#include "GameplayLimits.h"
 #include "GameplaySession.h"
+#include "GameplayStorage.h"
 #include "GameplayInput.h"
 #include "GameplayFrame.h"
 #include "GameplayControlLease.h"
@@ -14,8 +17,10 @@
 #include "PluginManager.h"
 #include "PluginScript.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -23,6 +28,14 @@
 #include <limits>
 #include <set>
 #include "miniz.h"
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <winioctl.h>
+#undef far
+#endif
 
 namespace fs = std::filesystem;
 
@@ -75,6 +88,18 @@ std::string png(unsigned width, unsigned height, const std::string& raw) {
 
 void appendLittleEndian(std::string& data, std::uint32_t value) {
     for (int shift = 0; shift <= 24; shift += 8) data.push_back(static_cast<char>(value >> shift));
+}
+
+size_t paddedData(void* opaque, mz_uint64 offset, void* buffer, size_t size) {
+    const auto& prefix = *static_cast<const std::string*>(opaque);
+    if (offset >= sf::kGameplayAssetLimit) return 0;
+    size = std::min<std::uint64_t>(size, sf::kGameplayAssetLimit - offset);
+    std::memset(buffer, 0, size);
+    if (offset < prefix.size()) {
+        const auto count = std::min<std::uint64_t>(size, prefix.size() - offset);
+        std::memcpy(buffer, prefix.data() + offset, static_cast<size_t>(count));
+    }
+    return size;
 }
 
 std::string glb(std::string json, std::string binary) {
@@ -165,7 +190,8 @@ int main() {
                                             {"assets/../bad.glb", "data"}}), gameplay, error) &&
           gameplay.assets.empty(), "gameplay traversal rejected without partial output");
     for (const auto& path : {"assets\\bad.glb", "/assets/bad.glb", "assets/.hidden.png", "assets/UPPER.png",
-                             "assets/dir/file.png", "assets/file.exe", "assets/car..png"}) {
+                             "assets/dir//file.png", "assets/dir/.hidden.png", "assets/dir/../file.png",
+                             "assets/file.exe", "assets/car..png"}) {
         const std::string placeholder(std::strlen(path), 'q');
         auto hostile = archive({{"plugin.json", manifest}, {"scripts/main.lua", code}, {placeholder, "data"}});
         size_t pos = 0;
@@ -175,12 +201,34 @@ int main() {
         }
         check(!hostile.empty() && !sf::readGameplayArchive(hostile, gameplay, error), "hostile asset path rejected");
     }
+    check(sf::readGameplayArchive(archive({{"plugin.json", manifest}, {"scripts/main.lua", code},
+                                           {"assets/ships/fighter.glb", "data"}}), gameplay, error) &&
+          gameplay.assets.count("assets/ships/fighter.glb") == 1, "canonical nested asset accepted");
+    const std::string path80 = "assets/ships/" + std::string(70, 'x') + ".glb";
+    check(sf::readGameplayArchive(archive({{"plugin.json", manifest}, {"scripts/main.lua", code},
+                                           {path80, "data"}}), gameplay, error) &&
+          !sf::readGameplayArchive(archive({{"plugin.json", manifest}, {"scripts/main.lua", code},
+                                           {"assets/ships/" + std::string(71, 'x') + ".glb", "data"}}), gameplay, error),
+          "nested asset path length boundary");
+    check(!sf::readGameplayArchive(archive({{"plugin.json", manifest}, {"scripts/main.lua", code},
+                                           {"assets/ships/", ""}}), gameplay, error),
+          "asset directory entries rejected");
+    auto nestedLink = archive({{"plugin.json", manifest}, {"scripts/main.lua", code},
+                               {"assets/ships/link.glb", "data"}});
+    const auto nestedName = nestedLink.rfind("assets/ships/link.glb");
+    if (nestedName == std::string::npos || nestedName < 46) ++failures;
+    else {
+        const auto header = nestedName - 46;
+        nestedLink[header + 38] = 0; nestedLink[header + 39] = 0;
+        nestedLink[header + 40] = static_cast<char>(0xff); nestedLink[header + 41] = static_cast<char>(0xa1);
+        check(!sf::readGameplayArchive(nestedLink, gameplay, error), "nested asset symlink rejected");
+    }
     check(!sf::readGameplayArchive(archive({{"plugin.json", manifest}, {"scripts/main.lua", code},
                                             {"assets/car.glb", "one"}, {"assets/car.glb", "two"}}), gameplay, error),
           "duplicate asset rejected");
-    check(!sf::readGameplayArchive(archive({{"plugin.json", manifest}, {"scripts/main.lua", code},
+    check(sf::readGameplayArchive(archive({{"plugin.json", manifest}, {"scripts/main.lua", code},
                                             {"assets/car.glb", std::string(2 * 1024 * 1024 + 1, 'x')}}),
-                                   gameplay, error), "oversized asset rejected");
+                                  gameplay, error), "asset over the old 2 MiB limit accepted");
     const std::string maxAsset(2 * 1024 * 1024, 'x');
     check(!sf::readGameplayArchive(archive({{"plugin.json", manifest}, {"scripts/main.lua", code},
                                             {"assets/a.glb", maxAsset}, {"assets/b.glb", maxAsset},
@@ -227,6 +275,38 @@ int main() {
         appendLittleEndian(binary, word);
     binary.append("\0\1\2\0", 4);
     const auto modelData = glb(modelJson, binary);
+    if (std::getenv("SCIFI_LARGE_PACKAGE_TEST")) {
+        auto largeJson = modelJson;
+        const auto lengthPos = largeJson.find("\"byteLength\":40");
+        largeJson.replace(lengthPos, std::string("\"byteLength\":40").size(), "\"byteLength\":104857000");
+        const size_t paddedJson = (largeJson.size() + 3) & ~size_t(3);
+        const auto binSize = static_cast<std::uint32_t>(sf::kGameplayAssetLimit - 28 - paddedJson);
+        largeJson.replace(largeJson.find("104857000"), 9, std::to_string(binSize));
+        auto prefix = glb(largeJson, binary);
+        for (int i = 0; i < 4; ++i) {
+            prefix[8 + i] = static_cast<char>(sf::kGameplayAssetLimit >> (8 * i));
+            prefix[20 + paddedJson + i] = static_cast<char>(binSize >> (8 * i));
+        }
+        const auto path = fs::temp_directory_path() / ("scifi-large-model-" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".zip");
+        const std::string largeManifest =
+            R"({"id":"com.example.large","name":"LARGE","version":"1.0.0","author":"Example","description":"Example","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene"],"api_version":"1"})";
+        mz_zip_archive writer{};
+        bool ok = mz_zip_writer_init_file(&writer, path.string().c_str(), 0) &&
+            mz_zip_writer_add_mem(&writer, "plugin.json", largeManifest.data(), largeManifest.size(), MZ_DEFAULT_COMPRESSION) &&
+            mz_zip_writer_add_mem(&writer, "scripts/main.lua", "return {}", 9, MZ_DEFAULT_COMPRESSION) &&
+            mz_zip_writer_add_read_buf_callback(&writer, "assets/large.glb", paddedData, &prefix,
+                sf::kGameplayAssetLimit, nullptr, nullptr, 0, MZ_DEFAULT_COMPRESSION, nullptr, 0, nullptr, 0) &&
+            mz_zip_writer_finalize_archive(&writer);
+        mz_zip_writer_end(&writer);
+        sf::GameplayPackage largePackage;
+        check(ok && sf::readGameplayPackageFile(path, largePackage, error) &&
+              largePackage.models.size() == 1 && largePackage.models.begin()->second.vertices.size() == 24,
+              "valid 100 MiB GLB loads with bounded decoded geometry");
+        std::error_code cleanup;
+        fs::remove(path, cleanup);
+        check(!cleanup, "remove large model fixture");
+    }
     sf::GameplayModel model;
     check(sf::decodeGameplayModel(modelData, model, error) && model.vertices.size() == 24 &&
           model.vertices[8] == 1 && model.vertices[17] == 1 && model.vertices[5] == 1 &&
@@ -533,6 +613,22 @@ int main() {
     soundManifest.replace(soundManifest.find(sceneWorld), sceneWorld.size(), "\"scene\",\"sound\"");
     check(sf::PluginPackageStore::parseGameplayManifest(soundManifest, game, error) && game.sound && !game.world,
           "sound permission is explicit");
+    auto storageManifest = gameplayManifest;
+    storageManifest.replace(storageManifest.find(sceneWorld), sceneWorld.size(), "\"scene\",\"storage\"");
+    check(sf::PluginPackageStore::parseGameplayManifest(storageManifest, game, error) && game.storage,
+          "persistent storage permission is explicit");
+    auto messageManifest = gameplayManifest;
+    messageManifest.replace(messageManifest.find(sceneWorld), sceneWorld.size(), "\"scene\",\"messaging\"");
+    check(sf::PluginPackageStore::parseGameplayManifest(messageManifest, game, error) && game.messaging,
+          "messaging permission is explicit");
+    auto controllerManifest = gameplayManifest;
+    controllerManifest.replace(controllerManifest.find(sceneWorld), sceneWorld.size(), "\"scene\",\"input\",\"controller\"");
+    check(sf::PluginPackageStore::parseGameplayManifest(controllerManifest, game, error) && game.controller && game.input,
+          "controller permission is explicit");
+    auto invalidController = gameplayManifest;
+    invalidController.replace(invalidController.find(sceneWorld), sceneWorld.size(), "\"scene\",\"controller\"");
+    check(!sf::PluginPackageStore::parseGameplayManifest(invalidController, game, error),
+          "controller permission requires input permission");
     auto hudManifest = gameplayManifest;
     hudManifest.replace(hudManifest.find(sceneWorld), sceneWorld.size(), "\"scene\",\"hud\"");
     check(sf::PluginPackageStore::parseGameplayManifest(hudManifest, game, error) && game.hud && !game.world,
@@ -708,13 +804,101 @@ int main() {
     fs::create_directory(dir);
     const fs::path source = dir / "source.sfplugin", installed = dir / "installed";
     {
+        sf::GameplayDigest abc;
+        const std::array<unsigned char, 32> expected = {
+            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+            0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad};
+        check(sf::gameplayDigestBytes("abc", abc, error) && abc.size == 3 && abc.sha256 == expected,
+              "SHA-256 known vector");
+        auto sceneManifest = gameplayManifest;
+        sceneManifest.replace(sceneManifest.find("\"scene\",\"world\""), 15, "\"scene\"");
+        const auto bytes = archive({{"plugin.json", sceneManifest}, {"scripts/main.lua", "return {}"}});
+        const auto packagePath = dir / "file-consent.zip";
+        const auto consentDir = dir / "file-consents";
+        auto write = [&](const std::string& value) {
+            std::ofstream out(packagePath, std::ios::binary | std::ios::trunc);
+            return static_cast<bool>(out.write(value.data(), static_cast<std::streamsize>(value.size())));
+        };
+        check(write(bytes), "write file-backed consent fixture");
+        sf::GameplayDigest digest, memoryDigest;
+        check(sf::gameplayDigestFile(packagePath, digest, error) &&
+              sf::gameplayDigestBytes(bytes, memoryDigest, error) && digest == memoryDigest,
+              "file and memory package digests agree");
+        sf::GameplayConsent fileConsent(consentDir);
+        bool granted = false;
+        sf::GameplaySession fileSession;
+        check(!fileSession.startFile(packagePath, digest, fileConsent, nullptr, error) &&
+              !fileSession.running(), "file-backed session requires consent");
+        check(fileConsent.grant("com.example.game", bytes, error) &&
+              fileConsent.matchesDigest("com.example.game", digest, granted, error) && granted,
+              "legacy consent is compatible with file digest");
+#ifdef _WIN32
+        {
+            sf::GameplayFileLock lock;
+            check(lock.open(packagePath, error), "acquire package read lock");
+            std::ofstream writer(packagePath, std::ios::binary | std::ios::trunc);
+            check(!writer, "read lock prevents concurrent package modification");
+        }
+#endif
+        check(fileConsent.grantFile("com.example.game", packagePath, digest, error) &&
+              fs::file_size(consentDir / "com.example.game.grant") == 48 &&
+              fileSession.startFile(packagePath, digest, fileConsent, nullptr, error) &&
+              fileSession.stop(error), "file-backed consent starts session");
+        sf::GameplayConsent restarted(consentDir);
+        check(restarted.matchesDigest("com.example.game", digest, granted, error) && granted,
+              "digest consent survives restart");
+        auto modified = bytes;
+        modified[modified.size() / 2] ^= 1;
+        sf::GameplayDigest changed;
+        check(write(modified) && sf::gameplayDigestFile(packagePath, changed, error) &&
+              !(changed == digest) && !fileSession.startFile(packagePath, digest, restarted, nullptr, error) &&
+              restarted.matchesDigest("com.example.game", changed, granted, error) && !granted &&
+              !restarted.grantFile("com.example.game", packagePath, digest, error),
+              "same-size package mutation is rejected");
+        check(write(bytes) && restarted.matchesDigest("com.example.game", digest, granted, error) && granted,
+              "failed file grant preserves previous approval");
+        { std::ofstream out(consentDir / "com.example.game.grant", std::ios::binary | std::ios::trunc);
+          out << std::string(48, 'x'); }
+        check(restarted.matchesDigest("com.example.game", digest, granted, error) && !granted &&
+              !fileSession.startFile(packagePath, digest, restarted, nullptr, error),
+              "corrupted consent cannot authorize package");
+        check(restarted.revoke("com.example.game", error), "file consent revocation");
+        const auto firstCentral = bytes.find(std::string("PK\x01\x02", 4));
+        if (firstCentral == std::string::npos) {
+            check(false, "find file-backed ZIP central directory");
+        } else {
+            auto corrupted = bytes;
+            corrupted[firstCentral + 16] ^= 1;
+            sf::GameplayPackage invalid;
+            check(write(corrupted) && !sf::readGameplayPackageFile(packagePath, invalid, error) &&
+                  invalid.id.empty(), "file-backed ZIP rejects CRC mismatch without partial output");
+            auto encrypted = bytes;
+            encrypted[firstCentral + 8] |= 1;
+            check(write(encrypted) && !sf::readGameplayPackageFile(packagePath, invalid, error) &&
+                  invalid.id.empty(), "file-backed ZIP rejects encrypted entry");
+            auto link = bytes;
+            link[firstCentral + 38] = 0; link[firstCentral + 39] = 0;
+            link[firstCentral + 40] = static_cast<char>(0xff); link[firstCentral + 41] = static_cast<char>(0xa1);
+            check(write(link) && !sf::readGameplayPackageFile(packagePath, invalid, error) &&
+                  invalid.id.empty(), "file-backed ZIP rejects symlink entry");
+            check(write(bytes.substr(0, bytes.size() - 10)) &&
+                  !sf::readGameplayPackageFile(packagePath, invalid, error) && invalid.id.empty(),
+                  "file-backed ZIP rejects truncated archive");
+        }
+        fs::remove(consentDir);
+        fs::remove(packagePath);
+    }
+    {
         const auto gameSource = dir / "game.zip";
         const auto gameDir = dir / "games";
         { std::ofstream out(gameSource, std::ios::binary); out.write(executableZip.data(), executableZip.size()); }
         std::set<std::string> registered;
         sf::PluginPackageStore gameStore(gameDir, [](const sf::ThemePackage&) { return true; }, {},
-            [&](const sf::GameplayPackage& package, const std::string& bytes) {
-                return package.id == "com.example.game" && bytes == executableZip && registered.insert(package.id).second;
+            [&](const sf::GameplayPackage& package, const fs::path& path, const sf::GameplayDigest& digest) {
+                sf::GameplayDigest expected;
+                return package.id == "com.example.game" && path == gameDir / "com.example.game.zip" &&
+                       sf::gameplayDigestBytes(executableZip, expected, error) && digest == expected &&
+                       registered.insert(package.id).second;
             });
         check(gameStore.install(gameSource) && registered.count("com.example.game") == 1,
               "install validated gameplay package");
@@ -728,8 +912,11 @@ int main() {
               "failed install preserves previously installed package");
         registered.clear();
         sf::PluginPackageStore restartedGameStore(gameDir, [](const sf::ThemePackage&) { return true; }, {},
-            [&](const sf::GameplayPackage& package, const std::string& bytes) {
-                return package.id == "com.example.game" && bytes == executableZip && registered.insert(package.id).second;
+            [&](const sf::GameplayPackage& package, const fs::path& path, const sf::GameplayDigest& digest) {
+                sf::GameplayDigest expected;
+                return package.id == "com.example.game" && path == gameDir / "com.example.game.zip" &&
+                       sf::gameplayDigestBytes(executableZip, expected, error) && digest == expected &&
+                       registered.insert(package.id).second;
             });
         restartedGameStore.discover();
         check(restartedGameStore.error().empty() && registered.count("com.example.game") == 1,
@@ -738,6 +925,49 @@ int main() {
         registered.clear();
         restartedGameStore.discover();
         check(registered.empty(), "uninstalled gameplay package not rediscovered");
+        sf::PluginPackageStore rejectStore(gameDir, [](const sf::ThemePackage&) { return true; }, {},
+            [](const sf::GameplayPackage&, const fs::path&, const sf::GameplayDigest&) { return false; });
+        check(!rejectStore.install(gameSource) && !fs::exists(gameDir / "com.example.game.zip"),
+              "failed registration removes copied package");
+        {
+            const auto quotaFile = gameDir / "quota-fixture.zip";
+            bool sparse = true;
+#ifdef _WIN32
+            HANDLE file = CreateFileW(quotaFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                      FILE_ATTRIBUTE_NORMAL, nullptr);
+            DWORD ignored = 0;
+            sparse = file != INVALID_HANDLE_VALUE &&
+                     DeviceIoControl(file, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &ignored, nullptr);
+            if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+#else
+            { std::ofstream out(quotaFile, std::ios::binary); sparse = bool(out); }
+#endif
+            std::error_code ec;
+            if (sparse) fs::resize_file(quotaFile, sf::kGameplayInstalledZipLimit - executableZip.size(), ec);
+            check(sparse && !ec, "create sparse ZIP quota fixture");
+            if (sparse && !ec) {
+                registered.clear();
+                check(gameStore.install(gameSource), "installed ZIP quota accepts exact 4 GiB");
+                check(gameStore.uninstall("com.example.game"), "remove exact quota package");
+                registered.clear();
+                fs::resize_file(quotaFile, sf::kGameplayInstalledZipLimit - executableZip.size() + 1, ec);
+                check(!ec && !gameStore.install(gameSource) &&
+                      gameStore.error().find("limit") != std::string::npos,
+                      "installed ZIP quota rejects one byte over 4 GiB");
+                const auto quotaScript = dir / "quota-script.zip";
+                { std::ofstream out(quotaScript, std::ios::binary); out.write(zip.data(), zip.size()); }
+                fs::resize_file(quotaFile, sf::kGameplayInstalledZipLimit - zip.size() + 1, ec);
+                sf::PluginPackageStore quotaScriptStore(gameDir, [](const sf::ThemePackage&) { return true; },
+                    [](const sf::ScriptPackage&) { return true; });
+                check(!ec && !quotaScriptStore.install(quotaScript) &&
+                      quotaScriptStore.error().find("limit") != std::string::npos,
+                      "script packages also respect installed ZIP quota");
+                fs::remove(quotaScript, ec);
+                check(!ec, "remove script quota fixture");
+            }
+            fs::remove(quotaFile, ec);
+            check(!ec, "remove sparse ZIP quota fixture");
+        }
         fs::remove(gameDir);
         fs::remove(gameSource);
         fs::remove(badSource);
@@ -757,6 +987,83 @@ int main() {
               consent.matches("com.example.game", executableZip, granted, error) && granted,
               "failed replacement preserves existing consent");
         sf::GameplaySession session;
+        {
+            const auto storageZip = archive({{"plugin.json", storageManifest}, {"scripts/main.lua",
+                "local n=storage_get('count') or 0 storage_set('count',n+1) return {}"}});
+            check(consent.grant("com.example.game", storageZip, error) &&
+                  !session.start(storageZip, consent, nullptr, error) &&
+                  session.start(storageZip, consent, nullptr, error, nullptr, nullptr, dir / "storage") &&
+                  session.stop(error) &&
+                  session.start(storageZip, consent, nullptr, error, nullptr, nullptr, dir / "storage") &&
+                  session.stop(error), "consented session loads and persists private storage");
+            sf::GameplayStorage stored(dir / "storage", "com.example.game");
+            const sf::GameplayStorage::Value* storedValue = nullptr;
+            check(stored.load(error) && stored.get("count", storedValue, error) && storedValue &&
+                  std::get<double>(*storedValue) == 2, "storage survives a session restart");
+            check(consent.grant("com.example.game", executableZip, error), "restore original package consent");
+            fs::remove(dir / "storage" / "com.example.game.store");
+            fs::remove(dir / "storage");
+        }
+        {
+            const auto example = fs::path(SCIFI_TEST_ASSETS).parent_path() / "examples" / "plugins" / "storage-demo";
+            const auto read = [](const fs::path& path) {
+                std::ifstream in(path, std::ios::binary);
+                return std::string(std::istreambuf_iterator<char>(in), {});
+            };
+            const auto exampleZip = archive({{"plugin.json", read(example / "plugin.json")},
+                                             {"scripts/main.lua", read(example / "scripts" / "main.lua")}});
+            bool exampleOk = consent.grant("com.example.storage-demo", exampleZip, error) &&
+                session.start(exampleZip, consent, nullptr, error, nullptr, nullptr, dir / "storage-example");
+            if (exampleOk) {
+                exampleOk = std::string(session.hudText().text.data()) == "STARTS: 1";
+                exampleOk = session.stop(error) && exampleOk;
+            }
+            if (exampleOk) {
+                exampleOk = session.start(exampleZip, consent, nullptr, error, nullptr, nullptr, dir / "storage-example");
+                if (exampleOk) {
+                    exampleOk = std::string(session.hudText().text.data()) == "STARTS: 2";
+                    exampleOk = session.stop(error) && exampleOk;
+                }
+            }
+            check(exampleOk, "packaged storage example counts launches across restarts");
+            check(consent.revoke("com.example.storage-demo", error), "revoke storage example consent");
+            fs::remove(dir / "storage-example" / "com.example.storage-demo.store");
+            fs::remove(dir / "storage-example");
+        }
+        {
+            const auto example = fs::path(SCIFI_TEST_ASSETS).parent_path() / "examples" / "plugins" / "audio-demo";
+            const auto read = [](const fs::path& path) {
+                std::ifstream in(path, std::ios::binary);
+                return std::string(std::istreambuf_iterator<char>(in), {});
+            };
+            const auto manifest = read(example / "plugin.json");
+            const auto script = read(example / "scripts" / "main.lua");
+            const auto sound = read(example / "assets" / "tone.ogg");
+            const auto zip = archive({{"plugin.json", manifest}, {"scripts/main.lua", script},
+                                      {"assets/tone.ogg", sound}});
+            bool ok = !sound.empty() && consent.grant("com.example.audio-demo", zip, error) &&
+                session.start(zip, consent, nullptr, error);
+            if (ok) {
+                const auto commands = session.takeSamples();
+                ok = commands.count == 1 && commands.events[0].asset == 0 &&
+                     commands.events[0].voice == 1 && commands.events[0].loop &&
+                     commands.events[0].volume == 0.5f && session.package()->audio.size() == 1;
+                ok = session.stop(error) && ok;
+            }
+            check(ok, "packaged OGG example creates a looping sample voice");
+            check(consent.revoke("com.example.audio-demo", error), "revoke audio example consent");
+            auto withoutSound = manifest;
+            const auto soundPermission = withoutSound.find(",\"sound\"");
+            if (soundPermission != std::string::npos) withoutSound.erase(soundPermission, 8);
+            const auto noSound = archive({{"plugin.json", withoutSound}, {"scripts/main.lua", code},
+                                          {"assets/tone.ogg", sound}});
+            sf::GameplayPackage invalidAudio;
+            check(soundPermission != std::string::npos && !sf::readGameplayPackage(noSound, invalidAudio, error),
+                  "audio requires sound permission");
+            const auto badSound = archive({{"plugin.json", manifest}, {"scripts/main.lua", script},
+                                           {"assets/tone.ogg", "invalid"}});
+            check(!sf::readGameplayPackage(badSound, invalidAudio, error), "reject malformed audio asset");
+        }
         sf::PluginScriptRuntime::WorldQueries world{
             nullptr,
             [](void*, double, double, double, double, double, double* out) noexcept { *out = 0; return true; },

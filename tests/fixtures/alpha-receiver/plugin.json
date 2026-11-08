@@ -1,0 +1,1 @@
+{"id":"com.example.alpha-receiver","name":"ALPHA RECEIVER","version":"1.0.0","author":"Test","description":"Host integration receiver","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","messaging","hud"],"api_version":"1"}

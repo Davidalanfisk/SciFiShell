@@ -3,7 +3,8 @@
 # This exercises a simulated focus gate on an inactive desktop, not physical input.
 param(
     [Parameter(Mandatory = $true)][string]$Executable,
-    [Parameter(Mandatory = $true)][string]$OutputDirectory
+    [Parameter(Mandatory = $true)][string]$OutputDirectory,
+    [switch]$AlphaOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +20,8 @@ public static class GameplayTestDesktop {
     struct Startup { public int cb; public string reserved,desktop,title; public int x,y,xSize,ySize,xChars,yChars,fill,flags; public short show,reserved2; public IntPtr reservedPtr,stdin,stdout,stderr; }
     [StructLayout(LayoutKind.Sequential)]
     struct Process { public IntPtr process,thread; public int pid,tid; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct Security { public int length; public IntPtr descriptor; public int inherit; }
     [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
     static extern IntPtr CreateDesktop(string name,IntPtr device,IntPtr mode,int flags,uint access,IntPtr security);
     [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
@@ -28,26 +31,33 @@ public static class GameplayTestDesktop {
     [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr handle,out uint code);
     [DllImport("kernel32.dll")] static extern bool TerminateProcess(IntPtr handle,uint code);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
-    public static int Run(string exe,string log,string cwd) {
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+    static extern IntPtr CreateFile(string path,uint access,uint share,ref Security security,uint creation,uint flags,IntPtr template);
+    public static int Run(string exe,string log,string cwd,uint timeout) {
         string name = "SciFiGameplayTest_" + Guid.NewGuid().ToString("N");
         IntPtr desktop = CreateDesktop(name,IntPtr.Zero,IntPtr.Zero,0,0x01ff,IntPtr.Zero);
         if (desktop == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         try {
-            Startup si = new Startup(); si.cb = Marshal.SizeOf(typeof(Startup)); si.desktop = name;
-            Process pi;
-            string cmd = "cmd.exe /d /c \"\"" + exe + "\" > \"" + log + "\" 2>&1\"";
-            if (!CreateProcess(null,new StringBuilder(cmd),IntPtr.Zero,IntPtr.Zero,false,0x08000000,IntPtr.Zero,cwd,ref si,out pi))
-                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            Security security = new Security { length = Marshal.SizeOf(typeof(Security)), inherit = 1 };
+            IntPtr output = CreateFile(log,0x40000000,1,ref security,2,0x80,IntPtr.Zero);
+            if (output == new IntPtr(-1)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
             try {
-                if (WaitForSingleObject(pi.process,60000) != 0) {
-                    TerminateProcess(pi.process,99);
-                    WaitForSingleObject(pi.process,5000);
-                    return 99;
-                }
-                uint code;
-                if (!GetExitCodeProcess(pi.process,out code)) throw new System.ComponentModel.Win32Exception();
-                return (int)code;
-            } finally { CloseHandle(pi.thread); CloseHandle(pi.process); }
+                Startup si = new Startup(); si.cb = Marshal.SizeOf(typeof(Startup)); si.desktop = name;
+                si.flags = 0x100; si.stdout = output; si.stderr = output;
+                Process pi;
+                if (!CreateProcess(exe,new StringBuilder("\"" + exe + "\""),IntPtr.Zero,IntPtr.Zero,true,0x08000000,IntPtr.Zero,cwd,ref si,out pi))
+                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                try {
+                    if (WaitForSingleObject(pi.process,timeout) != 0) {
+                        TerminateProcess(pi.process,99);
+                        WaitForSingleObject(pi.process,5000);
+                        return 99;
+                    }
+                    uint code;
+                    if (!GetExitCodeProcess(pi.process,out code)) throw new System.ComponentModel.Win32Exception();
+                    return (int)code;
+                } finally { CloseHandle(pi.thread); CloseHandle(pi.process); }
+            } finally { CloseHandle(output); }
         } finally { CloseDesktop(desktop); }
     }
 }
@@ -63,12 +73,7 @@ $run = Join-Path $root ('gameplay-control-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run | Out-Null
 $fixtures = Join-Path $PSScriptRoot 'fixtures'
 
-function Run-Scenario([string]$name, [string]$source, [string[]]$commands) {
-    $dir = Join-Path $run $name
-    New-Item -ItemType Directory -Path $dir | Out-Null
-    $profile = Join-Path $dir 'profile'
-    New-Item -ItemType Directory -Path $profile | Out-Null
-    $zip = Join-Path $dir 'fixture.zip'
+function New-FixtureZip([string]$source, [string]$zip) {
     if (Test-Path -LiteralPath $source -PathType Leaf) {
         Copy-Item -LiteralPath $source -Destination $zip
     } else {
@@ -78,11 +83,28 @@ function Run-Scenario([string]$name, [string]$source, [string[]]$commands) {
             Get-ChildItem -LiteralPath $source -File -Recurse | ForEach-Object {
                 $entry = $_.FullName.Substring($source.Length + 1).Replace('\', '/')
                 if ($entry -eq 'plugin.json' -or $entry -eq 'scripts/main.lua' -or
-                    $entry -match '^assets/[a-z0-9_-]+\.(png|glb)$') {
+                    $entry -match '^assets/[a-z0-9_-]+\.(png|glb|wav|ogg)$') {
                     [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $_.FullName, $entry) | Out-Null
                 }
             }
         } finally { $archive.Dispose() }
+    }
+}
+
+function Run-Scenario([string]$name, [string]$source, [string[]]$commands, [string[]]$additionalSources = @()) {
+    $dir = Join-Path $run $name
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    $profile = Join-Path $dir 'profile'
+    New-Item -ItemType Directory -Path $profile | Out-Null
+    $zip = Join-Path $dir 'fixture.zip'
+    New-FixtureZip $source $zip
+    $number = 2
+    foreach ($extra in $additionalSources) {
+        $extraZip = Join-Path $dir ("fixture$number.zip")
+        New-FixtureZip $extra $extraZip
+        $token = "{ZIP$number}"
+        $commands = $commands | ForEach-Object { $_.Replace($token, $extraZip) }
+        $number++
     }
     $script = Join-Path $dir 'control.txt'
     $commands = $commands | ForEach-Object { $_.Replace('{ZIP}', $zip) }
@@ -102,7 +124,9 @@ function Run-Scenario([string]$name, [string]$source, [string[]]$commands) {
             ForEach-Object { Remove-Item -LiteralPath ("Env:\" + $_.Name) }
         $env:SCIFI_NO_UPDATE = '1'
         $env:SCIFI_SCRIPT = $script
-        $code = [GameplayTestDesktop]::Run($exe, $log, (Split-Path -Parent $exe))
+        if ($AlphaOnly) { $env:SCIFI_TEST_HEADLESS = '1' }
+        $timeout = if ($AlphaOnly) { 30000 } else { 60000 }
+        $code = [GameplayTestDesktop]::Run($exe, $log, (Split-Path -Parent $exe), $timeout)
     } finally {
         Get-ChildItem Env: | Where-Object {
             $_.Name -like 'SCIFI_*' -or $_.Name -in @('LOCALAPPDATA', 'APPDATA', 'USERPROFILE', 'HOME', 'SDL_AUDIODRIVER')
@@ -116,6 +140,50 @@ function Run-Scenario([string]$name, [string]$source, [string[]]$commands) {
     $control = Join-Path $profile 'SciFiShell\control.log'
     if (!(Test-Path -LiteralPath $control)) { throw "$name produced no control log; see $log" }
     return @(Get-Content -LiteralPath $control)
+}
+
+if ($AlphaOnly) {
+    $sender = Join-Path $run 'alpha-sender'
+    Copy-Item -LiteralPath (Join-Path $fixtures 'alpha-sender') -Destination $sender -Recurse
+    $assets = Join-Path $sender 'assets'
+    New-Item -ItemType Directory -Path $assets | Out-Null
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\examples\plugins\audio-demo\assets\tone.ogg') -Destination $assets
+    $wav = [System.IO.BinaryWriter]::new([System.IO.File]::Create((Join-Path $assets 'tone.wav')))
+    try {
+        $wav.Write([System.Text.Encoding]::ASCII.GetBytes('RIFF'))
+        $wav.Write([uint32](36 + 3200))
+        $wav.Write([System.Text.Encoding]::ASCII.GetBytes('WAVEfmt '))
+        $wav.Write([uint32]16); $wav.Write([uint16]1); $wav.Write([uint16]1)
+        $wav.Write([uint32]16000); $wav.Write([uint32]32000)
+        $wav.Write([uint16]2); $wav.Write([uint16]16)
+        $wav.Write([System.Text.Encoding]::ASCII.GetBytes('data'))
+        $wav.Write([uint32]3200)
+        for ($i = 0; $i -lt 1600; $i++) {
+            if (($i % 40) -lt 20) { $wav.Write([int16]4000) } else { $wav.Write([int16]-4000) }
+        }
+    } finally { $wav.Dispose() }
+    $alpha = Run-Scenario 'alpha' $sender @(
+        'wait 2', 'waitcity', 'plugininstall {ZIP2}',
+        'pluginclick ALPHA RECEIVER', 'pluginclick ALPHA RECEIVER', 'settingsclose',
+        'wait 1', 'testgamehud com.example.alpha-receiver',
+        'plugininstall {ZIP}', 'pluginclick ALPHA SENDER', 'pluginclick ALPHA SENDER',
+        'settingsclose', 'wait 3', 'testgamehud com.example.alpha-receiver',
+        'testsamples com.example.alpha-sender', 'gameplaystatus com.example.alpha-sender',
+        'pluginclick DISABLE ALPHA SENDER', 'wait 0.5',
+        'testsamples com.example.alpha-sender', 'gameplaystatus com.example.alpha-sender',
+        'pluginerror', 'quit'
+    ) @((Join-Path $fixtures 'alpha-receiver'))
+    $joined = $alpha -join "`n"
+    if ($joined -notmatch 'test hud WAITING' -or
+        $joined -notmatch 'test hud MESSAGE RECEIVED' -or
+        $joined -notmatch 'test samples com\.example\.alpha-sender=2' -or
+        $joined -notmatch 'test samples com\.example\.alpha-sender=0' -or
+        $joined -notmatch 'gameplay com\.example\.alpha-sender running=1' -or
+        $joined -notmatch 'gameplay com\.example\.alpha-sender running=0') {
+        throw "Alpha host routing/audio scenario failed; see $run\alpha\profile\SciFiShell\control.log"
+    }
+    Write-Host "Alpha host routing and packaged audio passed: $run"
+    return
 }
 
 $common = @('wait 2', 'waitcity', 'cam 0 1.7 110 0 0', 'fly off', 'wait 1',

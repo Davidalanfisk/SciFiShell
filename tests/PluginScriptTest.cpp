@@ -4,6 +4,7 @@
 #include "GameplayControlMotion.h"
 #include "GameplayTrackClearance.h"
 #include "GameplayClickRouter.h"
+#include "GameplayMessaging.h"
 
 #include <iostream>
 #include <limits>
@@ -63,6 +64,86 @@ int main() {
     check(!sf::runPluginScript(std::string("\x1bLua", 4), result, error), "bytecode rejected");
     check(sf::runPluginScript("return 'AFTER FAILURE'", result, error), "fresh runtime after failure");
     sf::PluginScriptRuntime runtime;
+    check(runtime.start(
+              "local t=time_elapsed() local wall=time_unix() "
+              "math.randomseed(42,1) local n=math.random(1,100) local f=math.random() "
+              "math.randomseed(42,1) if n~=math.random(1,100) or f~=math.random() "
+              "or n<1 or n>100 or f<0 or f>=1 or t<0 or wall<1 then missing() end "
+              "return {on_tick=function() if time_elapsed()<t or time_unix()<1 then missing() end end}",
+              error) && runtime.tick(0.01, error) && runtime.stop(error),
+          "monotonic and wall time plus seeded random utilities");
+    check(runtime.start(
+              "local t=time_now() if time_frame()~=12 or time_delta()~=0 or time_since_start()<0 then missing() end "
+              "random_seed(42.5) local a=random() local b=random_range(-2,3) random_seed(42.5) "
+              "if a~=random() or b~=random_range(-2,3) or a<0 or a>=1 or b< -2 or b>3 then missing() end "
+              "local huge=1.7976931348623157e308 local r=random_range(-huge,huge) "
+              "if r~=r or r< -huge or r>huge then missing() end "
+              "return {on_input=function() if time_frame()~=37 or time_delta()~=0 then missing() end end,"
+              "on_tick=function(dt) if time_now()<t or time_frame()~=37 or time_delta()~=dt then missing() end end}",
+              error, false, nullptr, nullptr, nullptr, false, false, nullptr, false, false, false, nullptr, false, 12) &&
+          (runtime.prepareFrame(37), runtime.input("button_a", 1, error)) &&
+          runtime.tick(0.05, error) && runtime.stop(error),
+          "roadmap time and deterministic random signatures");
+    check(!runtime.start("random_range(3,2) return {}", error) &&
+          !runtime.start("random_seed(1/0) return {}", error), "invalid random arguments rejected");
+    check(!runtime.start("message_emit('hello','x') return {}", error),
+          "messaging unavailable without permission");
+    sf::PluginScriptRuntime receiver;
+    check(runtime.start("message_emit('hello.topic','a\\0b') return {}", error,
+                        false, nullptr, nullptr, nullptr, false, false, nullptr, false, false, false, nullptr, true) &&
+          receiver.start("local got=false return {on_message=function(sender,topic,payload) "
+                         "if sender~='com.example.sender' or topic~='hello.topic' or payload~='a\\0b' "
+                         "then missing() end got=true end, on_tick=function() if not got then missing() end end}",
+                         error, false, nullptr, nullptr, nullptr, false, false, nullptr, false, false, false, nullptr, true),
+          "messaging-enabled runtimes start");
+    const auto outbound = runtime.takeMessages();
+    sf::GameplayMessaging bus;
+    check(outbound.count == 1 && bus.push("com.example.sender", 1, 1, outbound.events[0]),
+          "enqueue bounded message");
+    const auto messages = bus.take();
+    check(messages.count == 1 &&
+          receiver.message(std::string_view(messages.messages[0].sender.data(), messages.messages[0].senderSize),
+                           messages.messages[0].event, error) &&
+          receiver.tick(0.01, error) && bus.take().count == 0 &&
+          receiver.stop(error) && runtime.stop(error),
+          "deliver sender, topic and binary payload once");
+    for (int i = 0; i < 64; ++i)
+        check(bus.push("com.example.sender", 1, 1, outbound.events[0]), "message queue accepts within limit");
+    check(!bus.push("com.example.sender", 1, 1, outbound.events[0]) && bus.take().count == 64,
+          "global message queue is bounded");
+    check(!runtime.start("message_emit('Invalid','x') return {}", error,
+                         false, nullptr, nullptr, nullptr, false, false, nullptr, false, false, false, nullptr, true) &&
+          !runtime.start("for i=1,9 do message_emit('hello','x') end return {}", error,
+                         false, nullptr, nullptr, nullptr, false, false, nullptr, false, false, false, nullptr, true),
+          "invalid topics and per-plugin message overflow rejected");
+    check(runtime.start("send_event('race_complete',123.5) send_event('ready',true) "
+                        "send_event('label','finished') return {}", error,
+                        false, nullptr, nullptr, nullptr, false, false, nullptr, false, false, false, nullptr, true) &&
+          receiver.start("local n=0 on_event('race_complete',function(t) if t~=123.5 then missing() end n=n+1 end) "
+                         "on_event('ready',function(v) if v~=true then missing() end n=n+1 end) "
+                         "on_event('label',function(v) if v~='finished' then missing() end n=n+1 end) "
+                         "return {on_tick=function() if n~=3 then missing() end end}",
+                         error, false, nullptr, nullptr, nullptr, false, false, nullptr, false, false, false, nullptr, true),
+          "typed roadmap event senders and receivers start");
+    const auto typed = runtime.takeMessages();
+    check(typed.count == 3 && receiver.message("com.example.sender", typed.events[0], error) &&
+          receiver.message("com.example.sender", typed.events[1], error) &&
+          receiver.message("com.example.sender", typed.events[2], error) &&
+          receiver.tick(0.01, error) && receiver.stop(error) && runtime.stop(error),
+          "race_complete numeric, boolean and string events delivered");
+    check(!runtime.start("send_event('race_complete',1/0) return {}", error,
+                         false, nullptr, nullptr, nullptr, false, false, nullptr, false, false, false, nullptr, true) &&
+          !runtime.start("send_event('race_complete',{}) return {}", error,
+                         false, nullptr, nullptr, nullptr, false, false, nullptr, false, false, false, nullptr, true),
+          "invalid typed event payloads rejected");
+    check(receiver.start("on_event('race_complete',function() while true do end end) return {}", error,
+                         false, nullptr, nullptr, nullptr, false, false, nullptr, false, false, false, nullptr, true) &&
+          !receiver.message("com.example.sender", typed.events[0], error) &&
+          error.find("instruction limit") != std::string::npos && !receiver.running(),
+          "registered event callback instruction budget and failure cleanup");
+    check(!runtime.start("for i=1,33 do on_event('event'..i,function() end) end return {}", error,
+                         false, nullptr, nullptr, nullptr, false, false, nullptr, false, false, false, nullptr, true) &&
+          error.find("callback limit") != std::string::npos, "event callback registrations are bounded");
     {
         sf::GameplayClickRouter router;
         router.begin(true, true, 9);
@@ -526,6 +607,46 @@ int main() {
     check(!runtime.start("sound_play('other',1) return {}", error, false, nullptr, nullptr, nullptr, true) &&
           !runtime.start("sound_play('boom',2) return {}", error, false, nullptr, nullptr, nullptr, true),
           "invalid sound and volume rejected");
+    sf::PluginScriptRuntime::AssetCounts audioAssets;
+    audioAssets.audioNames = {"assets/tone.ogg"};
+    check(!runtime.start("sound_sample('assets/tone.ogg',1,true) return {}", error, true, nullptr, &audioAssets),
+          "sample API absent without sound permission");
+    check(runtime.start("local v=sound_sample('assets/tone.ogg',0.5,true) "
+                       "return {on_tick=function() sound_stop(v) end}",
+                       error, true, nullptr, &audioAssets, nullptr, true),
+          "start sample with sound permission");
+    auto sampleCommands = runtime.takeSamples();
+    check(sampleCommands.count == 1 && sampleCommands.events[0].voice == 1 &&
+          sampleCommands.events[0].asset == 0 && sampleCommands.events[0].loop &&
+          sampleCommands.events[0].volume == 0.5f && runtime.tick(0.1, error),
+          "sample start command is delivered once");
+    sampleCommands = runtime.takeSamples();
+    check(sampleCommands.count == 1 && sampleCommands.events[0].stop &&
+          sampleCommands.events[0].voice == 1 && runtime.stop(error),
+          "sample stop command references owned voice");
+    check(!runtime.start("sound_sample('missing.ogg',1,false) return {}", error,
+                        true, nullptr, &audioAssets, nullptr, true) &&
+          !runtime.start("sound_stop(1) return {}", error, true, nullptr, &audioAssets, nullptr, true) &&
+          !runtime.start("sound_sample('assets/tone.ogg',1,1) return {}", error,
+                        true, nullptr, &audioAssets, nullptr, true),
+          "invalid sample name, voice, or loop rejected");
+    check(runtime.start("local s=asset_sound('tone.ogg') local v=sound_play_asset(s) sound_loop(v) "
+                       "return {on_tick=function() sound_stop(v) end}",
+                       error, true, nullptr, &audioAssets, nullptr, true), "roadmap sample aliases start");
+    sampleCommands = runtime.takeSamples();
+    check(sampleCommands.count == 1 && sampleCommands.events[0].voice == 1 && sampleCommands.events[0].loop &&
+          runtime.tick(0.01, error), "loop coalesced with pending sample start");
+    sampleCommands = runtime.takeSamples();
+    check(sampleCommands.count == 1 && sampleCommands.events[0].stop && runtime.stop(error),
+          "roadmap sound_stop uses voice handle");
+    check(runtime.start("local v=sound_play_asset(asset_sound('assets/tone.ogg')) "
+                        "return {on_tick=function() sound_loop(v) end}",
+                        error, true, nullptr, &audioAssets, nullptr, true) &&
+          runtime.takeSamples().count == 1 && runtime.tick(0.01, error),
+          "loop already-started voice");
+    sampleCommands = runtime.takeSamples();
+    check(sampleCommands.count == 1 && sampleCommands.events[0].loopUpdate &&
+          sampleCommands.events[0].voice == 1 && runtime.stop(error), "loop-update event preserves voice");
     check(!runtime.start("sound_engine(true,1,false) return {}", error),
           "engine sound is absent without permission");
     check(runtime.start("sound_engine(true,12,false) sound_engine(true,30,true) "
@@ -574,6 +695,7 @@ int main() {
           other.boxes()[0].x == 2, "stopping one runtime preserves another owner's scene");
     check(other.stop(error) && other.boxes().empty(), "second scene owner stops cleanly");
     sf::PluginScriptRuntime::AssetCounts assets{1, 1, {"assets/duck.glb"}, {"assets/paint.png"}};
+    assets.audioNames = {"assets/tone.ogg"};
     check(!runtime.start("return {}", error, false, nullptr, &assets),
           "asset catalog requires scene grant");
     check(runtime.start("local id=scene_model(1,1,1,2,3,4,5,6,0.2,0.3,0.4) "
@@ -588,6 +710,55 @@ int main() {
     check(runtime.start("local id=scene_model(asset_model('assets/duck.glb'),asset_texture('assets/paint.png'),"
                         "0,0,0,1,1,1,1,1,1) return {}", error, true, nullptr, &assets) &&
           runtime.models().size() == 1 && runtime.stop(error), "lookup packaged asset names");
+    check(runtime.start("local all=asset_list() local found=asset_find('assets/p') "
+                       "if #all~=3 or all[1]~='assets/duck.glb' or all[3]~='assets/tone.ogg' "
+                       "or #found~=1 or found[1]~='assets/paint.png' or not asset_exists(all[1]) "
+                       "or asset_exists('assets/missing.png') then missing() end return {}",
+                       error, true, nullptr, &assets) && runtime.stop(error),
+          "discover packaged assets in sorted order");
+    sf::PluginScriptRuntime::AssetCounts nestedAssets{3, 0,
+        {"assets/ships/fighter.glb", "assets/ships/scout.glb", "assets/ships/deep/other.glb"}, {}};
+    check(runtime.start("local f=asset_find('ships/*.glb') local g=asset_find('assets/ships/?????.glb') "
+                        "if #asset_find()~=3 or #asset_find('')~=3 then missing() end "
+                       "if #f~=2 or f[1]~='assets/ships/fighter.glb' or f[2]~='assets/ships/scout.glb' "
+                       "or #g~=1 or g[1]~='assets/ships/scout.glb' then missing() end return {}",
+                       error, true, nullptr, &nestedAssets) && runtime.stop(error),
+          "nested glob matches one path segment and preserves sorted full paths");
+    const std::string meshVertices =
+        "{0,0,0,0,0,1,0,0, 1,0,0,0,0,1,1,0, 0,1,0,0,0,1,0,1}";
+    check(runtime.start("local m=mesh_create(" + meshVertices + ",{1,2,3}) "
+                        "scene_mesh(m,0,0,0,0,1,1,1,1,1,1) return {}",
+                        error, true) && runtime.models().size() == 1 && runtime.models()[0].model == -1 &&
+          runtime.proceduralModel(1) && runtime.proceduralModel(1)->vertices.size() == 24 &&
+          runtime.proceduralModel(1)->indices == std::vector<std::uint32_t>({0, 1, 2}) &&
+          runtime.stop(error) && !runtime.proceduralModel(1),
+          "procedural mesh is created, instanced and released");
+    check(!runtime.start("mesh_create(" + meshVertices + ",{1,2,4}) return {}", error, true) &&
+          !runtime.start("mesh_create(" + meshVertices + ",{1,2,1.5}) return {}", error, true) &&
+          !runtime.start("mesh_create({0/0,0,0,0,0,1,0,0},{1,1,1}) return {}", error, true) &&
+          !runtime.start("scene_mesh(1,0,0,0,0,1,1,1,1,1,1) return {}", error, true),
+          "invalid procedural mesh geometry and handles rejected");
+    check(!runtime.start("local v=" + meshVertices +
+                         " for i=1,9 do mesh_create(v,{1,2,3}) end return {}", error, true) &&
+          error.find("mesh limit") != std::string::npos, "procedural mesh count is bounded");
+    check(runtime.start("local m=mesh_create() local a=mesh_vertex(m,0,0,0) mesh_normal(m,0,0,1) "
+                       "mesh_uv(m,0,0) local b=mesh_vertex(m,1,0,0) local c=mesh_vertex(m,0,1,0) "
+                       "mesh_triangle(m,a,b,c) if mesh_upload(m)~=m then missing() end scene_mesh(m) return {}",
+                       error, true) && runtime.models().size() == 1 && runtime.models()[0].transform.width == 1 &&
+          runtime.proceduralModel(1) && runtime.proceduralModel(1)->indices == std::vector<std::uint32_t>({0, 1, 2}) &&
+          runtime.stop(error), "incremental mesh builder and default scene instance");
+    check(!runtime.start("local m=mesh_create() mesh_normal(m,0,0,1) return {}", error, true) &&
+          !runtime.start("local m=mesh_create() mesh_vertex(m,0,0,0) mesh_triangle(m,1,1,2) return {}", error, true) &&
+          !runtime.start("local m=mesh_create() scene_mesh(m) return {}", error, true) &&
+          !runtime.start("local m=mesh_create() mesh_vertex(m,0,0,0) mesh_triangle(m,1,1,1) "
+                        "mesh_upload(m) mesh_vertex(m,1,1,1) return {}", error, true),
+          "invalid mesh builder order, indices and reuse rejected");
+    check(!runtime.start("local m=mesh_create() for i=1,1025 do mesh_vertex(m,0,0,0) end return {}", error, true) &&
+          error.find("vertex limit") != std::string::npos &&
+          !runtime.start("local m=mesh_create() mesh_vertex(m,0,0,0) "
+                         "for i=1,2049 do mesh_triangle(m,1,1,1) end return {}", error, true) &&
+          error.find("index limit") != std::string::npos,
+          "incremental mesh vertex and triangle limits enforced");
     check(!runtime.start("asset_model('assets/missing.glb') return {}", error, true, nullptr, &assets),
           "unknown packaged asset name rejected");
     sf::PluginScriptRuntime::AssetCounts duplicateAssets{2, 0, {"assets/a.glb", "assets/a.glb"}, {}};

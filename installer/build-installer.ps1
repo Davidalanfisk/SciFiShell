@@ -17,6 +17,7 @@ if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item $stage -ItemType Directory | Out-Null
 robocopy $rel $stage /E /XF *.lib *.pdb *.log *.exp *.ilk /NFL /NDL /NJH /NJS /NP | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'update.ps1') $stage
+Copy-Item (Join-Path $root 'third_party\alpha-plugin-licenses.txt') $stage
 Set-Content (Join-Path $stage 'version.txt') $Version -NoNewline
 
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |

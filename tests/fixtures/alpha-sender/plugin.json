@@ -1,0 +1,1 @@
+{"id":"com.example.alpha-sender","name":"ALPHA SENDER","version":"1.0.0","author":"Test","description":"Host integration sender","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","messaging","sound"],"api_version":"1"}

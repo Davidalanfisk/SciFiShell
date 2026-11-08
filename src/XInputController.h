@@ -10,6 +10,10 @@ struct PadState {
     bool leftPressed = false, rightPressed = false;
     bool xPressed = false, lbPressed = false, rbPressed = false;  // X: on-screen keyboard, LB / RB: previous / next window
     bool lbHeld = false, rbHeld = false;
+    bool aHeld = false, bHeld = false, xHeld = false, yHeld = false;
+    bool startHeld = false, backHeld = false;
+    bool upHeld = false, downHeld = false, leftHeld = false, rightHeld = false;
+    bool leftStickHeld = false, rightStickHeld = false;
 };
 
 class XInputController {
