@@ -39,31 +39,49 @@ int main() {
     const auto before = restart.placements();
     check(!restart.move("missing", 3) && restart.placements() == before, "unknown move rejected");
     check(!restart.move("z.plugin", sf::kDowntownSlots) && restart.placements() == before, "out of range rejected");
-    const auto region = sf::downtownRegion();
-    check(region.width == 160 && region.depth == 1048 &&
-          region.x-region.width*0.5f == sf::kDowntownWest &&
-          region.x+region.width*0.5f == sf::kDowntownEast &&
-          region.z-region.depth*0.5f == sf::kDowntownNorth &&
-          region.z+region.depth*0.5f == sf::kDowntownSouth,
-          "rendered region outline exactly matches the reserved district on all four edges");
+    const auto empty = sf::downtownRegion();
+    check(empty.width == 32 && empty.depth == 40 && empty.north() > 75,
+          "empty district has a minimal footprint south of Computer");
+    const std::map<std::string, int> compact{{sf::kDowntownDrivingId,0}, {sf::kDowntownParksId,1}};
+    const auto small = sf::downtownRegion(compact);
+    check(small.west() == -68 && small.east() == 4 && small.north() == 108 && small.south() == 148,
+          "two bundled buildings have an exact compact outline");
+    const auto sparse = sf::downtownRegion({{"one",0}, {"far",127}});
+    check(sparse.width == 136 && sparse.depth == 1032 && sparse.south() == 1140,
+          "user-selected far plot expands bounds including intentional gaps");
+    check(sf::downtownRegion({{"one",0}}).depth == 40 && small.depth == 40,
+          "removing the distant occupant shrinks the region without renumbering plots");
+    check(!small.intersects(0, 500, 20) && sparse.intersects(0,500,20),
+          "unused future rows are not reserved; intentional gaps remain reserved");
+    check(sf::downtownBuiltin(sf::kDowntownDrivingId) && sf::downtownBuiltin(sf::kDowntownParksId) &&
+          !sf::downtownBuiltin("com.example.plugin"), "only the two bundled IDs have protected management");
     for (int i = 0; i < sf::kDowntownSlots; ++i) {
         const auto p = sf::downtownPlot(i);
-        check(p.z-14 > 75 && p.x-14 > sf::kDowntownWest && p.x+14 < sf::kDowntownEast,
-              "plots south of Computer and inside reserved corridor");
-        check(sf::downtownIntersects(p.x, p.z, 14), "drive packing excludes every plot");
-        check(p.x-14 >= region.x-region.width*0.5f && p.x+14 <= region.x+region.width*0.5f &&
-              p.z-14 >= region.z-region.depth*0.5f && p.z+14 <= region.z+region.depth*0.5f,
-              "colored outline encloses every selectable plot including the final row");
+        const auto region = sf::downtownRegion({{"occupant",i}});
+        check(p.z-20 > 75 && region.width == 40 && region.depth == 40,
+              "any single occupied plot has a compact footprint south of Computer");
+        check(region.intersects(p.x, p.z, 14), "drive packing excludes each occupied plot");
+        check(p.x-14 >= region.west() && p.x+14 <= region.east() &&
+              p.z-14 >= region.north() && p.z+14 <= region.south(),
+              "colored outline encloses the occupied pavement and host entrance");
         for (int j = 0; j < i; ++j) {
             const auto q = sf::downtownPlot(j);
             check(std::abs(p.x-q.x) >= 32 || std::abs(p.z-q.z) >= 32, "plots never overlap");
         }
     }
-    check(!sf::downtownIntersects(0, -55, 20), "Computer not inside Downtown");
-    check(!sf::downtownIntersects(300, 128, 40, 42), "unrelated city space remains available");
+    check(!small.intersects(0, -55, 20), "Computer not inside Downtown");
+    check(!small.intersects(300, 128, 40, 42), "unrelated city space remains available");
     std::set<std::string> many;
     for (int i = 0; i < 64; ++i) many.insert("plugin." + std::to_string(i));
     check(restart.reconcile(many) && restart.placements().size() == 64, "full package-store capacity supported");
+    const auto packages = restart.placements();
+    many.insert(sf::kDowntownDrivingId); many.insert(sf::kDowntownParksId);
+    check(restart.reconcile(many) && restart.placements().size() == 66, "bundled buildings fit beside full package capacity");
+    for (const auto& [id, slot] : packages)
+        check(restart.placements().at(id) == slot, "adding native buildings preserves existing package placements");
+    const auto withBuiltins = restart.placements();
+    check(restart.reconcile(many) && restart.placements() == withBuiltins,
+          "disabled and re-enabled native plugins retain their buildings and placements");
     fs::remove(file);
     fs::create_directory(file); // Deterministic failed atomic replacement, even with elevated permissions.
     const auto saved = restart.placements();

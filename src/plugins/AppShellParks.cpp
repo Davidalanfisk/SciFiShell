@@ -4,7 +4,7 @@
 namespace sf {
 
 Plugin AppShell::makeParksPlugin() {
-    Plugin plugin{"org.scifishell.parks", "PARKS AND TOYS", "Parks and toys; trusted native code, not sandboxed", "1.0.0",
+    Plugin plugin{kDowntownParksId, "PARKS AND TOYS", "Parks and toys; trusted native code, not sandboxed", "1.0.0",
             [this] { city_->setParksEnabled(true); },
             [this] { city_->setParksEnabled(false); scoreT_ = 0; scoreLabel_.reset(); }};
     plugin.prepare = [this](std::string& error) {

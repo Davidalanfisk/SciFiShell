@@ -122,14 +122,19 @@ Districts sit on glass-pane floors with a neon outline, and the whole city has a
 
 ### Play in the city
 
-**Downtown (v0.9.23).** South of Computer, a colored glass-region outline marks the plugin district. Installed plugins get persistent physical
-buildings, including plugins that are off or have failed. Use **Settings > Downtown > Visit** or walk
+**Downtown (v0.9.24).** South of Computer, a colored glass-region outline grows and shrinks around
+the occupied plots instead of reserving a fixed-size district. Installed plugins and the bundled
+**Car and Track** and **Parks and Toys** get persistent physical buildings, including plugins that are off
+or have failed. The former connector road to Computer has been removed. Use **Settings > Downtown > Visit** or walk
 south, then aim at a building's illuminated entrance and select it. Its host-managed room contains
 plugin details, On / Off, Delete, Rearrange and Exit controls; Escape also returns outside. Toggle/delete
 evacuate you before changing plugin state and use the existing permission and removal confirmations.
+Bundled plugins can be switched on/off and rearranged but cannot be uninstalled.
 In **Settings > Downtown**, select **Arrange [name]**, choose **Previous / Next Plot**, then
 **Move / Swap** to save a new position (occupied plots swap). New installs fill gaps without disturbing
-your arrangement. See the [Downtown author and user guide](docs/plugins.md#downtown-district-v0923)
+your arrangement. Moving to a distant plot expands the outline to include the gap; resizing can repack
+nearby storage regions and safely returns city visitors to the gateway.
+See the [Downtown author and user guide](docs/plugins.md#downtown-district-v0924)
 for optional bounded exterior models and persistence details.
 Ground-level fog drifts between the towers (tune it with the fog sliders in Settings > Graphics), and the parks have wireframe neon ducks paddling around their ponds.
 
@@ -141,7 +146,7 @@ Ground-level fog drifts between the towers (tune it with the fog sliders in Sett
 
 **The car.** Press `F10` anywhere in the city to summon a neon hologram sports car, and `F10` again to leave it. `C` swaps first and third person; `Space` drifts and `Shift` boosts. A speedo appears on the HUD. The wheels steer and spin, and a quiet electric hum rises with speed. Parked, it is solid: you can stand on it. Ramps on every region let you drive up onto the platforms.
 
-**Make a plugin.** The Windows x64 build **v0.9.23** supports data-only themes, Lua message scripts, and experimental Lua gameplay plugins, including persistent storage, controller input, audio samples, local messages and procedural meshes. Every installed package gets a Downtown building, and gameplay packages may supply a bounded custom exterior through `downtown_model`. Plugin manifests and Lua source files accept up to **10 MiB each**, with bounded Lua compilation and runtime memory. Start with the [plugin developer guide](docs/plugins.md): it walks through installation, a first gameplay plugin, packaging, permissions, limits and the API, including the [v0.9.23 changelog](docs/plugins.md#v0923-changelog). Try the downloadable [clock](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.19/scifishell-clock-example.zip), [scripted car and track](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-car-track.zip), or [scripted parks and toys](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-parks-toys.zip) in **Settings > Plugins**. The gameplay examples are simplified, not replacements for the separately enabled native Car and Track and Parks and Toys. Scripts and asset decoders run in the shell process, not an OS sandbox; only install and enable packages you trust.
+**Make a plugin.** The Windows x64 build **v0.9.24** supports data-only themes, Lua message scripts, and experimental Lua gameplay plugins, including persistent storage, controller input, audio samples, local messages and procedural meshes. Every installed package gets a Downtown building, and gameplay packages may supply a bounded custom exterior through `downtown_model`. Plugin manifests and Lua source files accept up to **10 MiB each**, with bounded Lua compilation and runtime memory. Start with the [plugin developer guide](docs/plugins.md): it walks through installation, a first gameplay plugin, packaging, permissions, limits and the API, including the [v0.9.24 changelog](docs/plugins.md#v0924-changelog). Try the downloadable [clock](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.19/scifishell-clock-example.zip), [scripted car and track](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-car-track.zip), or [scripted parks and toys](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-parks-toys.zip) in **Settings > Plugins**. The gameplay examples are simplified, not replacements for the separately enabled native Car and Track and Parks and Toys. Scripts and asset decoders run in the shell process, not an OS sandbox; only install and enable packages you trust.
 
 ![Plugins settings](docs/screenshot-plugins-2026.jpg)
 

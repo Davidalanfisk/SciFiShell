@@ -113,12 +113,29 @@ function Run-Scenario([string]$name, [string[]]$commands) {
     }
     if ($code -ne 0) { throw "$name exited $code; see $root" }
     $log = @(Get-Content -LiteralPath $control | Select-Object -Skip $previousLines)
-    if ($log -match 'not found|pick blocked|pick failed|entrance unavailable|card unavailable') { throw "Interaction failed: $root" }
+    if ($log -match 'not found|pick blocked|pick failed|entrance unavailable|card unavailable|layout_clear=0|collision_safe=0') { throw "Interaction failed: $root" }
     return $log
 }
 function Require([string[]]$log, [string]$pattern) {
     if (!($log -match $pattern)) { throw "Missing $pattern; see $root" }
 }
+$log = Run-Scenario 'builtins' @(
+    'wait 2', 'downtownstatus', 'downtownclick VISIT CAR AND TRACK', 'downtownenter org.scifishell.driving',
+    'downtowncard 2', 'downtownstatus', 'downtowncard 1', 'pluginstatus', 'downtownstatus',
+    'settingsclose', 'downtownenter org.scifishell.driving', 'downtowncard 1', 'pluginstatus',
+    'settingsclose', 'downtownclick VISIT PARKS AND TOYS', 'downtownenter org.scifishell.parks',
+    'downtowncard 2', 'downtownstatus', 'downtowncard 1', 'pluginstatus',
+    'settingsclose', 'downtownenter org.scifishell.parks', 'downtowncard 1', 'pluginstatus', 'quit'
+)
+Require $log 'bounds=-68,4,108,148'
+Require $log 'interior=org.scifishell.driving cards=5'
+Require $log 'interior=org.scifishell.parks cards=5'
+Require $log 'org.scifishell.driving=off'
+Require $log 'org.scifishell.driving=on'
+Require $log 'org.scifishell.parks=off'
+Require $log 'org.scifishell.parks=on'
+Require $log 'city=1 interior=none'
+Require $log 'built=1 layout_clear=1'
 $log = Run-Scenario 'lifecycle' @(
     'wait 2', "plugininstall $defaultZip", "plugininstall $zip", "plugininstall $failedZip",
     'downtownstatus', 'downtownclick VISIT CLOCK', 'downtownenter com.example.clock', 'downtownstatus',
@@ -135,7 +152,7 @@ $log = Run-Scenario 'lifecycle' @(
     'leave', 'downtownclick VISIT DISTRICT TEST', 'wait 1', 'quit'
 )
 Require $log 'interior=com.example.clock cards=5'
-Require $log 'com.example.downtown=1\(custom\).*com.example.clock=2\(default\)|com.example.clock=2\(default\).*com.example.downtown=1\(custom\)'
+Require $log 'com.example.downtown=3\(custom\).*com.example.clock=4\(default\)|com.example.clock=4\(default\).*com.example.downtown=3\(custom\)'
 Require $log 'collision_safe=1'
 Require $log 'built=1 layout_clear=1'
 Require $log 'com.example.clock=on'
@@ -153,9 +170,9 @@ $log = Run-Scenario 'restart-remove' @(
 )
 Require $log 'CLICK REMOVE AGAIN'
 Require $log 'PLUGIN UNINSTALLED'
-Require $log 'com.example.clock=2\(default\).*com.example.downtown=1\(custom\)'
+Require $log 'com.example.clock=4\(default\).*com.example.downtown=3\(custom\)'
 $last = ($log | Where-Object { $_ -like 'downtown *' })[-1]
 if ($last -match 'com.example.clock=|com.example.downtown=') { throw "Removed buildings remain: $root" }
 $log = Run-Scenario 'gap-fill' @('wait 2', "plugininstall $defaultZip", 'downtownstatus', 'quit')
-Require $log 'com.example.clock=1\(default\)'
+Require $log 'com.example.clock=3\(default\)'
 Write-Output "Downtown normal Release integration passed. Artifacts: $root"

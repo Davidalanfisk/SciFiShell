@@ -59,7 +59,8 @@ public:
     bool pickDowntown(Vec3 origin, Vec3 dir, std::string& id) const;
     bool downtownExit(const std::string& id, Vec3& pos) const;
     bool downtownCustom(const std::string& id) const { return downtownModels_.count(id) != 0; }
-    bool downtownLayoutClear() const; // Diagnostic: actual drive/route geometry must honor the reserved corridor.
+    const DowntownRegion& downtownBounds() const { return downtownRegion_; }
+    bool downtownLayoutClear() const; // Actual drive/route geometry must honor the occupied district.
     // Returns -1 on unavailable/over-budget, 0 outside a grid cell, 1 with center, pitch and occupancy.
     int gameplayCell(float x, float z, double* result) const noexcept;
     bool gameplayTrackClearance(float x, float z, float radius, double* result) const;
@@ -279,6 +280,7 @@ private:
     };
     struct DowntownModel { uint64_t owner = 0, handle = 0; Mat4 fit; };
     std::vector<DowntownBuilding> downtown_;
+    DowntownRegion downtownRegion_;
     std::map<std::string, DowntownModel> downtownModels_;
     uint64_t downtownOwner_ = UINT64_MAX;
     Monument downtownLabel_;

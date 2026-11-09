@@ -55,11 +55,12 @@ build\Release\SciFiShell.exe
 
 For a release, ensure CEF 156 is present at `third_party\cef` or pass `-DSCIFI_CEF_ROOT=<extracted-CEF-directory>` when configuring; otherwise the browser is omitted. Use a Windows x64 generator and the `Release` configuration. Run `ctest --test-dir build -C Release --output-on-failure` before packaging; the explicit `GameplayArchiveLargeTest --expanded-limit` target also checks the 1 GiB archive and 100 MiB asset boundaries. The [v0.9.23 plugin changelog](plugins.md#v0923-changelog) covers Downtown and the optional exterior model schema; the [v0.9.22 changelog](plugins.md#v0922-changelog) describes authoring limits and their separate runtime budgets. `build-installer.ps1` writes the supplied version into the staged `version.txt` and excludes test binaries/fixtures from the installer.
 
-Downtown regression coverage includes `DowntownTest` (allocation, persistence/failures and exact region-outline
-bounds) and `PluginPackageTest` (manifest/asset and permission lifecycle validation). On Windows,
+Downtown regression coverage includes `DowntownTest` (allocation, persistence/failures, dynamic region bounds
+and bundled-ID placement migration) and `PluginPackageTest` (manifest/asset and permission lifecycle validation). On Windows,
 `powershell -NoProfile -File tests\RunDowntownIntegration.ps1 -Executable <Release\SciFiShell.exe> -OutputDirectory <existing-artifact-directory>`
 runs the normal optimized build on a private inactive desktop with a separate temporary profile.
-It exercises actual entrances, room cards, consent cancellation/grant, failure access, swap/restart,
+It exercises actual entrances, native-plugin toggle/protected-removal cards, compact bounds,
+room cards, consent cancellation/grant, failure access, swap/restart,
 uninstall/gap reuse and drive/bus clearance without activating the installed app. This is not a visual,
 physical-controller/VR or frame-rate benchmark.
 

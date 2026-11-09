@@ -7,7 +7,7 @@
 namespace sf {
 
 Plugin AppShell::makeDrivingPlugin() {
-    Plugin plugin{"org.scifishell.driving", "CAR AND TRACK", "Driving and track; trusted native code, not sandboxed", "1.0.0",
+    Plugin plugin{kDowntownDrivingId, "CAR AND TRACK", "Driving and track; trusted native code, not sandboxed", "1.0.0",
             [this] { drivingPluginEnabled_ = true; city_->setDrivingEnabled(true); },
             [this] { stopDrivingPlugin(); }};
     plugin.prepare = [this](std::string& error) {

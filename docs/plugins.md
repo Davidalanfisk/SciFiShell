@@ -1,6 +1,15 @@
 # Plugins
 
-This guide targets the **SciFi Shell v0.9.23 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+This guide targets the **SciFi Shell v0.9.24 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+
+## v0.9.24 changelog
+
+Downtown now fits its occupied plots instead of reserving all 128 possible plots. The floor, outline,
+label, storage packing, bus avoidance and track clearance use the same dynamic bounds.
+The connector road to Computer has been removed. The bundled Car and Track and Parks and Toys
+now have default buildings, host management rooms and persistent rearrangement alongside packages.
+Their existing on/off controls work even when disabled; built-in plugins cannot be uninstalled.
+Existing package placements and optional `downtown_model` schema remain compatible.
 
 ## v0.9.23 changelog
 
@@ -11,11 +20,14 @@ field `downtown_model` are new in this release. Existing packages need no change
 building; disabled and failed plugins keep their entrances. Existing source/archive/runtime limits and
 digest-bound consent and removal-confirmation checks are retained. The model field is optional but requires v0.9.23.
 
-## Downtown district (v0.9.23)
+## Downtown district (v0.9.24)
 
 Downtown is a host-owned district **south of Computer** (+Z in city coordinates). Every installed
 theme, message-script or gameplay package gets a building, including disabled or failed packages.
-Bundled native features are managed in Plugins and do not consume package plots. Buildings represent
+The bundled native **Car and Track** (`org.scifishell.driving`) and **Parks and Toys**
+(`org.scifishell.parks`) also receive stable plots and default buildings. They use the same Visit,
+Arrange and On / Off controls; their removal card is disabled and labeled **BUILT-IN - CANNOT DELETE**.
+Buildings represent
 installed packages, not running Lua scene objects; disabling a plugin does not remove its management
 entrance. Uninstalling removes it.
 
@@ -37,10 +49,16 @@ To rearrange, select **Arrange [name]** in Downtown (or the room's Rearrange car
 occupied destinations swap both buildings, empty destinations move only the selected building.
 Rearrangement returns a city visitor to the district gateway before changing geometry.
 Numbered plots use a four-column, 32-unit-pitch layout starting at `(x=-48,z=128)`.
-There are 128 selectable plots for the existing 64-package installation limit. Drives, bus routes and
-native track supports reserve the corridor `x=-80..80,z=104..1152`; the colored region outline uses those
-same bounds, even while plots are empty, so later installs never require
-moving existing buildings. The track may pass overhead with clearance.
+There are 128 selectable plots for the existing 64-package installation limit plus the two bundled
+plugins. The district is the bounding rectangle of occupied plot centers with a 20-unit margin on
+each side; a completely empty district uses a minimal 32x40 footprint south of Computer.
+The colored floor/outline and label, drive packing, bus avoidance and native/scripted track clearance
+all use these same bounds. Installing or removing a plugin grows/shrinks the region without renumbering
+existing buildings. Intentionally selecting a distant plot includes the gaps in the outline.
+Resizing repacks storage regions and regenerates bus/track geometry, first releasing player control,
+leaving the car/data-lane ride and returning city visitors to the safe gateway. Nearby storage regions
+may therefore move; occupied plugin plots do not. The track may pass overhead with clearance.
+There is currently no connector road between Computer and Downtown.
 
 Arrangements are saved atomically to `%LOCALAPPDATA%\SciFiShell\downtown.ini` on Windows
 (alongside `plugins.ini` on other platforms), keyed by package ID. New packages take the lowest free
@@ -162,7 +180,7 @@ Use `scene_mesh(handle, texture, x, y, z, width, height, depth, red, green, blue
 
 ## Start here
 
-You do not need to build the shell to make a plugin: install [v0.9.23](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.23), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
+You do not need to build the shell to make a plugin: install [v0.9.24](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.24), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
 
 | What you want | Package | Start with |
 |---|---|---|

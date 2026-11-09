@@ -5,11 +5,35 @@
 namespace sf {
 void AppShell::syncDowntown() {
     if (!downtown_) return;
-    const bool saved = downtown_->reconcile(installedPluginIds_);
+    auto ids = installedPluginIds_;
     std::vector<std::pair<std::string, std::string>> names;
     for (const auto& p : plugins_.plugins())
-        if (installedPluginIds_.count(p.id)) names.emplace_back(p.id, p.name);
+        if (installedPluginIds_.count(p.id) || downtownBuiltin(p.id)) {
+            ids.insert(p.id);
+            names.emplace_back(p.id, p.name);
+        }
+    const bool saved = downtown_->reconcile(ids);
+    const bool resized = !(downtownRegion(downtown_->placements()) == city_->downtownBounds());
+    if (resized) {
+        // Resizing repacks nearby drives and regenerates routes/track. Leave old geometry first.
+        evacuateDowntown();
+        releaseGameplayControl();
+        if (driving_) toggleCar();
+        riding_ = false;
+        knock_ = {};
+        carOn_ = false;
+        if (cityMode_) {
+            camera_.position = {0,1.7f,96};
+            flying_ = false; vy_ = 0;
+        }
+        if (cityCamSet_) savedCam_.position = {0,1.7f,96};
+    }
     city_->setDowntown(downtown_->placements(), names);
+    if (resized && cityMode_ && settingsPanel_ && settingsPanel_->isOpen()) {
+        settingsPanel_->close();
+        openSettingsWin();
+        settingsPanel_->openPage("DOWNTOWN");
+    }
     if (!saved) {
         std::fprintf(stderr, "%s\n", downtown_->error().c_str());
         if (settingsPanel_) settingsPanel_->setNotice(downtown_->error());
@@ -84,7 +108,7 @@ void AppShell::moveDowntown() {
 
 void AppShell::enterDowntown(const std::string& id) {
     for (const auto& p : plugins_.plugins()) {
-        if (p.id != id || !installedPluginIds_.count(id)) continue;
+        if (p.id != id || (!installedPluginIds_.count(id) && !downtownBuiltin(id))) continue;
         releaseGameplayControl();
         if (driving_) toggleCar();
         riding_ = false;
@@ -94,9 +118,10 @@ void AppShell::enterDowntown(const std::string& id) {
         clearRoomPending_ = false;
         room_->loadPlugin(p.name, {p.id, "VERSION " + p.version, p.description,
                           p.running ? "ON" : (p.enabled ? "FAILED - RETRY OR DISABLE" : "OFF"),
-                          "Host managed room - ESC exits"},
+                          downtownBuiltin(id) ? "Bundled native plugin - cannot uninstall; ESC exits" :
+                                                "Host managed room - ESC exits"},
             [this, id] { togglePlugin(id); },
-            [this, id] { removePlugin(id); },
+            downtownBuiltin(id) ? std::function<void()>{} : std::function<void()>{[this, id] { removePlugin(id); }},
             [this, id] {
                 evacuateDowntown();
                 downtownSelected_ = id;
@@ -129,6 +154,7 @@ void AppShell::togglePlugin(const std::string& id) {
 }
 
 void AppShell::removePlugin(const std::string& id) {
+    if (downtownBuiltin(id)) { settingsPanel_->setNotice("BUNDLED PLUGIN - CANNOT UNINSTALL"); return; }
     if (!installedPluginIds_.count(id)) { settingsPanel_->setNotice("PACKAGE UNAVAILABLE"); return; }
     const bool inside = !downtownInterior_.empty();
     evacuateDowntown();

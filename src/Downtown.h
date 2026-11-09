@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <filesystem>
 #include <map>
 #include <set>
@@ -7,22 +8,40 @@
 #include <utility>
 
 namespace sf {
-// +Z is south. Reserve this corridor before packing drives or routing their buses.
+// +Z is south. Plot coordinates stay stable while the occupied district grows and shrinks.
 struct DowntownPlot { float x, z; };
-inline constexpr int kDowntownSlots = 128; // Room for the package store's 64 packages and user-selected spare plots.
-inline constexpr float kDowntownWest = -80, kDowntownEast = 80;
-inline constexpr float kDowntownNorth = 104, kDowntownSouth = 1152;
-struct DowntownRegion { float x, z, width, depth; };
-inline constexpr DowntownRegion downtownRegion() {
-    return {(kDowntownWest+kDowntownEast)*0.5f, (kDowntownNorth+kDowntownSouth)*0.5f,
-            kDowntownEast-kDowntownWest, kDowntownSouth-kDowntownNorth};
+inline constexpr int kDowntownSlots = 128; // Includes spare user-selected plots and the two bundled plugins.
+inline constexpr const char* kDowntownDrivingId = "org.scifishell.driving";
+inline constexpr const char* kDowntownParksId = "org.scifishell.parks";
+inline bool downtownBuiltin(const std::string& id) {
+    return id == kDowntownDrivingId || id == kDowntownParksId;
 }
+struct DowntownRegion {
+    float x = 0, z = 124, width = 32, depth = 40;
+    float west() const { return x-width*0.5f; }
+    float east() const { return x+width*0.5f; }
+    float north() const { return z-depth*0.5f; }
+    float south() const { return z+depth*0.5f; }
+    bool operator==(const DowntownRegion& other) const {
+        return x == other.x && z == other.z && width == other.width && depth == other.depth;
+    }
+    bool intersects(float cx, float cz, float half, float clearance = 0) const {
+        return cx+half+clearance > west() && cx-half-clearance < east() &&
+               cz+half+clearance > north() && cz-half-clearance < south();
+    }
+};
 inline DowntownPlot downtownPlot(int slot) {
     return {-48.0f + (slot % 4) * 32.0f, 128.0f + (slot / 4) * 32.0f};
 }
-inline bool downtownIntersects(float x, float z, float half, float clearance = 0) {
-    return x + half + clearance > kDowntownWest && x - half - clearance < kDowntownEast &&
-           z + half + clearance > kDowntownNorth && z - half - clearance < kDowntownSouth;
+inline DowntownRegion downtownRegion(const std::map<std::string, int>& plots = {}) {
+    if (plots.empty()) return {};
+    float west = 1e30f, east = -1e30f, north = 1e30f, south = -1e30f;
+    for (const auto& [id, slot] : plots) {
+        const auto p = downtownPlot(slot);
+        west = std::min(west, p.x-20); east = std::max(east, p.x+20);
+        north = std::min(north, p.z-20); south = std::max(south, p.z+20);
+    }
+    return {(west+east)*0.5f, (north+south)*0.5f, east-west, south-north};
 }
 
 class Downtown {

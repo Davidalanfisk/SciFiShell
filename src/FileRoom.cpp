@@ -409,7 +409,8 @@ void FileRoom::loadPlugin(const std::string& name, const std::vector<std::string
     info->tall = true;
     info->setInfo(details);
     card("ON / OFF", -4, -4, std::move(toggle));
-    card("DELETE PLUGIN", 0, -4, std::move(remove));
+    const bool removable = bool(remove);
+    card(removable ? "DELETE PLUGIN" : "BUILT-IN - CANNOT DELETE", 0, -4, std::move(remove));
     card("REARRANGE", 4, -4, std::move(arrange));
     card("EXIT TO DOWNTOWN", 0, 5, [this] { if (onExitBuilding) onExitBuilding(); });
     cards_.back()->yaw = kPi;
@@ -1383,6 +1384,7 @@ std::string FileRoom::activate(Node* node) {
         action();
         return "DOWNTOWN - plugin management";
     }
+    if (pluginRoom_) return "BUNDLED PLUGIN - CANNOT DELETE";
     if (card->roomIndex >= 0) {
         const int idx = card->roomIndex;
         const std::string name = rooms_[idx].name;

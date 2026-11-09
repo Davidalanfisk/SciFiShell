@@ -707,7 +707,7 @@ void AppShell::buildSettingsHub() {
                              [this] { return pluginPackages_->error().empty() ? std::string("OK") : pluginPackages_->error(); }, nullptr});
     cats.push_back(std::move(plugins));
 
-    SettingsCategory district{"DOWNTOWN", "South of Computer - installed plugins keep buildings even when off", "CITY", {}};
+    SettingsCategory district{"DOWNTOWN", "South of Computer - bundled and installed plugins keep buildings even when off", "CITY", {}};
     district.items.push_back({"PLOT STORAGE", "Arrangements survive restart; new installs fill gaps",
         [this] { return downtown_->error().empty() ? std::string("OK") : downtown_->error(); }, nullptr});
     district.items.push_back({"SELECTED PLUGIN", "Select an ARRANGE card below first",
@@ -725,7 +725,7 @@ void AppShell::buildSettingsHub() {
         nullptr, [this] { moveDowntown(); }});
     for (const auto& plugin : plugins_.plugins()) {
         const auto id = plugin.id;
-        if (!installedPluginIds_.count(id)) continue;
+        if (!downtown_->placements().count(id)) continue;
         district.items.push_back({"VISIT " + plugin.name, "Go outside the host entrance; aim and click to enter",
             [this, id] {
                 const auto it = downtown_->placements().find(id);
@@ -1581,6 +1581,9 @@ bool AppShell::scriptExec(const std::string& line) {
         std::string status = "downtown city=" + std::to_string(cityMode_) + " interior=" +
             (downtownInterior_.empty() ? "none" : downtownInterior_) + " cards=" + std::to_string(room_->cardCount());
         status += " built=" + std::to_string(city_->built()) + " layout_clear=" + std::to_string(city_->downtownLayoutClear());
+        const auto& bounds = city_->downtownBounds();
+        status += " bounds=" + std::to_string(int(bounds.west())) + "," + std::to_string(int(bounds.east())) +
+                  "," + std::to_string(int(bounds.north())) + "," + std::to_string(int(bounds.south()));
         for (const auto& [id, slot] : downtown_->placements())
             status += " " + id + "=" + std::to_string(slot+1) + (city_->downtownCustom(id) ? "(custom)" : "(default)");
         if (cityMode_) {

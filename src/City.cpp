@@ -87,6 +87,9 @@ City::~City() {
 
 void City::setDowntown(const std::map<std::string, int>& plots,
                        const std::vector<std::pair<std::string, std::string>>& names) {
+    const auto region = downtownRegion(plots);
+    const bool resized = !(region == downtownRegion_);
+    downtownRegion_ = region;
     downtown_.clear();
     for (const auto& [id, name] : names) {
         const auto it = plots.find(id);
@@ -98,6 +101,16 @@ void City::setDowntown(const std::map<std::string, int>& plots,
             renderer_.releaseGameplayModels(it->second.owner);
             it = downtownModels_.erase(it);
         } else ++it;
+    }
+    if (resized) {
+        clearHover();
+        hasEntered_ = false;
+        if (built_) {
+            layoutPlatforms(snap_);
+            refreshTargets(snap_);
+        }
+        netBuilt_ = false;
+        trackDirty_ = true;
     }
 }
 
@@ -135,13 +148,13 @@ bool City::downtownExit(const std::string& id, Vec3& pos) const {
 
 bool City::downtownLayoutClear() const {
     for (const auto& p : platforms_)
-        if (!(p.gone && p.grow <= 0) && downtownIntersects(p.cx, p.cz, p.side*0.5f)) return false;
+        if (!(p.gone && p.grow <= 0) && downtownRegion_.intersects(p.cx, p.cz, p.side*0.5f)) return false;
     if (!netBuilt_ && built_) buildNetwork();
     for (const auto& route : net_)
         for (size_t i = 1; i < route.pts.size(); ++i) {
             const auto a = route.pts[i-1], b = route.pts[i];
-            if (std::max(a.x,b.x)+4 > kDowntownWest && std::min(a.x,b.x)-4 < kDowntownEast &&
-                std::max(a.z,b.z)+4 > kDowntownNorth && std::min(a.z,b.z)-4 < kDowntownSouth) return false;
+            if (std::max(a.x,b.x)+4 > downtownRegion_.west() && std::min(a.x,b.x)-4 < downtownRegion_.east() &&
+                std::max(a.z,b.z)+4 > downtownRegion_.north() && std::min(a.z,b.z)-4 < downtownRegion_.south()) return false;
         }
     return true;
 }
@@ -162,14 +175,11 @@ bool City::pickDowntown(Vec3 o, Vec3 d, std::string& id) const {
 
 void City::renderDowntown(Renderer& r, Vec3 eye) {
     const auto& th = currentTheme();
-    const auto region = downtownRegion();
+    const auto& region = downtownRegion_;
     // The same glass-pane region floor and colored rim as storage districts, below the roads and plots.
     renderBox(r, {region.x, 0.01f, region.z}, {region.width, 0.02f, region.depth},
               th.alt, 0.5f, 6, 1, 1, 0);
-    float end = kDowntownNorth + 20;
-    for (const auto& b : downtown_) end = std::max(end, downtownPlot(b.slot).z + 16);
-    renderBox(r, {0, 0.025f, (80+end)*0.5f}, {8, 0.05f, end-80}, th.accent, 0, 5, 1, 0, 0);
-    moduleLabel(r, downtownLabel_, "DOWNTOWN - PLUGIN DISTRICT", {region.x, 5, kDowntownNorth-2}, 2, eye, th.alt);
+    moduleLabel(r, downtownLabel_, "DOWNTOWN - PLUGIN DISTRICT", {region.x, 5, region.north()-2}, 2, eye, th.alt);
     for (auto& b : downtown_) {
         const auto p = downtownPlot(b.slot);
         if (std::fabs(eye.z-p.z) > 400*drawScale_ || std::fabs(eye.x-p.x) > 400*drawScale_) continue;
@@ -197,7 +207,7 @@ bool City::gameplayTrackClearance(float x, float z, float radius, double* result
     if (!built_ || !result) return false;
     std::vector<Box> monuments;
     monumentBoxes(monuments);
-    monuments.push_back({kDowntownWest, kDowntownEast, 16, kDowntownNorth, kDowntownSouth});
+    monuments.push_back({downtownRegion_.west(), downtownRegion_.east(), 16, downtownRegion_.north(), downtownRegion_.south()});
     return sf::gameplayTrackClearance(platforms_, monuments, x, z, radius, *result);
 }
 
@@ -390,7 +400,7 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap, int first, int co
                 const float a = target + off;
                 const float x = r * std::cos(a), z = r * std::sin(a);
                 bool ok = std::fabs(x) > kHubHalf + half + kClear || std::fabs(z) > kHubHalf + half + kClear;
-                if (downtownIntersects(x, z, half, kClear)) ok = false;
+                if (downtownRegion_.intersects(x, z, half, kClear)) ok = false;
                 for (size_t q = 0; ok && q < placed.size(); ++q) {
                     const int j = placed[q];
                     const float need = half + platforms_[j].side * 0.5f + kClear;
@@ -1789,7 +1799,8 @@ void City::buildNetwork() const {
         stamp(pl.cx - h - 3.5f, pl.cx + h + 3.5f, pl.cz - h - 3.5f, pl.cz + h + 3.5f, [&](int c) { inf[c] = (inf[c] == -1 || inf[c] == j) ? j : -3; });
     }
     for (const Rect& r : solids) stamp(r.x0 - 3.5f, r.x1 + 3.5f, r.z0 - 3.5f, r.z1 + 3.5f, [&](int c) { solid[c] = 1; });
-    stamp(kDowntownWest-4, kDowntownEast+4, kDowntownNorth-4, kDowntownSouth+4, [&](int c) { solid[c] = 1; });
+    stamp(downtownRegion_.west()-4, downtownRegion_.east()+4, downtownRegion_.north()-4, downtownRegion_.south()+4,
+          [&](int c) { solid[c] = 1; });
     stamp(-13, 13, -13, 13, [&](int c) { solid[c] = 1; });
     auto markPoly = [&](const Poly& pts) {
         const float hw = 1.5f + cs * 0.5f - 0.01f;
