@@ -5,6 +5,7 @@
 #include <algorithm>
 
 #include "TextRender.h"
+#include "UiKit.h"
 
 namespace sf {
 
@@ -185,6 +186,42 @@ CardNode::CardNode(Renderer& renderer, const DirEntry& e, const std::string& tex
 // Text labels are made on first draw, so cards that are never in view cost no GPU memory.
 void CardNode::ensureLabel() {
     if (label_) return;
+    if (console) {
+        Bitmap bm; bm.w = 720; bm.h = 460;
+        bm.rgba.assign(size_t(bm.w)*bm.h*4,0);
+        ui::fillRect(bm,0,0,720,460,{9,16,24,255});
+        ui::fillRect(bm,0,0,6,460,{145,111,62,255});
+        float y = 42;
+        for (const auto& line : wrapText(text_,32,FontFace::UI,640,2)) {
+            drawText(bm,36,y,line,32,FontFace::UI,{199,173,123,255});
+            y += 40;
+        }
+        ui::fillRect(bm,36,110,684,112,{45,64,76,255});
+        y = 166;
+        if (!info_.empty()) {
+            for (const auto& line : wrapText(info_.front(),40,FontFace::UI,640,2)) {
+                drawText(bm,36,y,line,40,FontFace::UI,{218,232,238,255});
+                y += 50;
+            }
+        }
+        y += 16;
+        for (size_t i=1;i+1<info_.size();++i)
+            for (const auto& line : wrapText(info_[i],27,FontFace::UI,640,3)) {
+                if (y > 365) break;
+                drawText(bm,36,y,line,27,FontFace::UI,{151,173,187,255});
+                y += 35;
+            }
+        ui::fillRect(bm,36,382,684,383,{45,64,76,255});
+        y = 411;
+        if (info_.size()>1) {
+            for (const auto& line : wrapText(info_.back(),24,FontFace::UI,640,2)) {
+                drawText(bm,36,y,line,24,FontFace::UI,{151,173,187,255});
+                y += 29;
+            }
+        }
+        label_ = r_->createLabel(bm,true);
+        return;
+    }
     if (tall) {  // a room door: the title on top, a gap for the preview, then the room's details
         Bitmap bm;
         bm.w = 520;
@@ -253,6 +290,10 @@ void CardNode::ensureLabel() {
 
 // Hover swaps the title for the details; long details scroll slowly while the preview stays put.
 void CardNode::update(double dt, double) {
+    if (liveInfo) {
+        infoTimer_ -= dt;
+        if (infoTimer_ <= 0) { infoTimer_ = 0.35; setInfo(liveInfo()); }
+    }
     if (!isDoor()) return;
     if (hover != shownHover_) {
         shownHover_ = hover;
@@ -304,13 +345,18 @@ void CardNode::render(Renderer& renderer) {
         return;
     }
     Mat4 w = worldMatrix();
-    if (hover) w = w * Mat4::scale({1.08f, 1.08f, 1.0f});
+    if (hover) w = w * Mat4::scale(console ? Vec3{1.015f,1.015f,1} : Vec3{1.08f,1.08f,1});
     if (thumb_) {
         renderer.drawCube(*thumb_, w, hover ? Vec3{1.25f, 1.25f, 1.25f} : Vec3{1.0f, 1.0f, 1.0f}, false, true,
                           3.0f);  // no cyan edge; hover enlarges and brightens
         return;
     }
     ensureLabel();
+    if (console) {
+        // Opaque screen pixels are not an alpha-only text mask; keep their dark background and colour.
+        renderer.drawImage(*label_,w);
+        return;
+    }
     Vec3 base = tall ? Vec3{0.02f, 0.035f, 0.06f} : isParentLink ? Vec3{0.2f, 0.3f, 0.36f} : (entry.isDir ? Vec3{0.1f, 0.28f, 0.52f} : Vec3{0.14f, 0.17f, 0.23f});
     if (tall && isParentLink) base = {0.9f, 0.9f, 0.92f};
     Vec3 color = hover ? base * 1.4f : base;
@@ -414,6 +460,76 @@ void FileRoom::loadPlugin(const std::string& name, const std::vector<std::string
     card("REARRANGE", 4, -4, std::move(arrange));
     card("EXIT TO DOWNTOWN", 0, 5, [this] { if (onExitBuilding) onExitBuilding(); });
     cards_.back()->yaw = kPi;
+}
+
+void FileRoom::loadSettings(const SettingsCategory& category, std::function<void(size_t,int)> invoke,
+                            std::function<std::vector<std::string>(size_t)> values,
+                            std::function<std::string()> notice) {
+    loadEmpty();
+    pluginRoom_ = building_ = loaded_ = true;
+    slots_.clear();
+    const float depth = 2*std::max(12.0f, float((category.items.size()+1)/2)*4.4f+5);
+    walk_ = {{-9.6f,9.6f,-depth+2,11}};
+    rows_ = 0; levels_ = roomFloors_ = 1; roomTop_ = 10; spawnPending_ = false;
+    extent_ = depth+16;
+    auto block = [&](Vec3 at,Vec3 size,Vec3 color) {
+        auto wall = std::make_unique<BlockNode>(renderer_,color,false);
+        wall->position = at; wall->scale = size; root_->add(std::move(wall));
+    };
+    const Vec3 tint{0.025f,0.04f,0.055f}, gold{0.24f,0.14f,0.06f};
+    block({0,5,-depth},{28,10,0.4f},tint);
+    block({0,5,14},{28,10,0.4f},tint);
+    block({-14,5,(14-depth)*0.5f},{0.4f,10,depth+14},tint);
+    block({14,5,(14-depth)*0.5f},{0.4f,10,depth+14},tint);
+    block({0,10,(14-depth)*0.5f},{28,0.4f,depth+14},{0.018f,0.026f,0.04f});
+    for (float x : {-5.6f,5.6f}) block({x,0.02f,(8-depth)*0.5f},{0.1f,0.04f,depth},gold);
+    for (float z=6;z>-depth;z-=8.8f) {
+        block({0,8.8f,z},{27,0.35f,0.55f},tint*2);
+        for (float x : {-13.3f,13.3f}) {
+            block({x,4.4f,z},{0.45f,8.8f,0.55f},tint*2);
+            block({x,6.5f,z+0.3f},{0.12f,3,0.08f},gold);
+        }
+    }
+    auto card = [&](std::string title,Vec3 at,Vec3 scale,float yaw,std::function<void()> action,bool console) {
+        auto c = std::make_unique<CardNode>(renderer_,DirEntry{},title);
+        c->position = at; c->scale = scale; c->yaw = yaw;
+        c->console = console; c->onActivate = std::move(action);
+        return addCard(std::move(c));
+    };
+    for (size_t i=0;i<category.items.size();++i) {
+        const float side = i%2 ? 1.0f : -1.0f, z = -6-float(i/2)*8.8f;
+        const float yaw = side < 0 ? kPi*0.5f : -kPi*0.5f;
+        const bool slider = bool(category.items[i].sliderSet);
+        block({side*12.2f,0.7f,z},{1.0f,1.4f,4.2f},tint*2);
+        block({side*11.8f,2.2f,z},{0.24f,2.65f,3.85f},tint*2);
+        block({side*11.65f,3.6f,z},{0.12f,0.05f,3.6f},gold);
+        auto* option = card(category.items[i].title,{side*11.6f,2.2f,z},{3.6f,2.4f,0.08f},yaw,
+            [invoke,i,slider] { invoke(i,slider?1:0); },true);
+        option->liveInfo = [values,i] { return values(i); };
+        if (slider) {
+            option->onNudge = [invoke,i](int direction) { invoke(i,direction); };
+            card("-",{side*11.5f,0.85f,z+1.1f},{0.7f,0.7f,0.08f},yaw,
+                 [invoke,i] { invoke(i,-1); },false);
+            card("+",{side*11.5f,0.85f,z-1.1f},{0.7f,0.7f,0.08f},yaw,
+                 [invoke,i] { invoke(i,1); },false);
+        }
+    }
+    auto* heading = card(category.name+" CONTROL HALL",{0,4.5f,-depth+0.6f},{7,4.5f,0.08f},0,[] {},true);
+    heading->liveInfo = [subtitle=category.subtitle,notice] {
+        return std::vector<std::string>{subtitle,notice(),"Aim/select consoles; +/- or left/right adjust sliders"};
+    };
+    auto* exit = card("EXIT TO SETTINGS DISTRICT",{0,3.4f,12.2f},{5.44f,6.8f,0.08f},kPi,
+        [this] { if (onExitBuilding) onExitBuilding(); },false);
+    exit->tall = true;
+    exit->setInfo({"Return outside","ESC / Back also exits"});
+}
+
+bool FileRoom::nudge(Node* node, int direction) {
+    auto* card = node && node->isCard() ? static_cast<CardNode*>(node) : nullptr;
+    if (!card || !card->onNudge) return false;
+    auto action = card->onNudge;
+    action(direction);
+    return true;
 }
 
 void FileRoom::load(std::string path) {
@@ -1213,7 +1329,7 @@ float FileRoom::floorHeight(const Vec3& p) const {
 }
 
 float FileRoom::maxEye() const {
-    if (pluginRoom_) return 4.6f;
+    if (pluginRoom_) return roomTop_-0.4f;
     if (inRoom_) return std::max(3.5f, roomTop_);
     return levels_ > 1 ? (levels_ - 1) * kLevelH + 3.5f : 6.0f;
 }

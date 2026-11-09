@@ -13,6 +13,7 @@
 #include "SceneGraph.h"
 #include "Thumbnails.h"
 #include "Viewer.h"
+#include "SettingsModel.h"
 
 namespace sf {
 
@@ -28,7 +29,13 @@ public:
     int roomIndex = -1;  // >= 0: a hallway door to that room; -2: the door back to the hallway
     void setThumbnail(std::shared_ptr<GpuLabel> thumb) { thumb_ = std::move(thumb); }
     const std::shared_ptr<GpuLabel>& thumbnail() const { return thumb_; }
-    void setInfo(std::vector<std::string> lines) { info_ = std::move(lines); label_.reset(); doorDirty_ = true; }
+    void setInfo(std::vector<std::string> lines) {
+        if (lines == info_) return;
+        info_ = std::move(lines); label_.reset(); doorDirty_ = true;
+    }
+    bool console = false;
+    std::function<std::vector<std::string>()> liveInfo;
+    std::function<void(int)> onNudge;
     bool isDoor() const { return tall; }  // lobby doors use the preview-and-details face
     void setDoorArt(Bitmap art) { art_ = std::move(art); hasArt_ = true; doorDirty_ = true; }
     void setDoorStats(std::string big, std::string label) { big_ = std::move(big); bigLabel_ = std::move(label); doorDirty_ = true; }
@@ -43,6 +50,7 @@ private:
     bool hasArt_ = false, doorDirty_ = true, shownHover_ = false;
     std::string big_, bigLabel_;
     float hoverT_ = 0.0f, maxScroll_ = 0.0f, scroll_ = 0.0f;
+    double infoTimer_ = 0;
     std::shared_ptr<GpuLabel> face_;
     Renderer* r_;
     std::string text_;
@@ -63,6 +71,10 @@ public:
     void loadPlugin(const std::string& name, const std::vector<std::string>& details,
                     std::function<void()> toggle, std::function<void()> remove,
                     std::function<void()> arrange);
+    void loadSettings(const SettingsCategory& category, std::function<void(size_t,int)> invoke,
+                      std::function<std::vector<std::string>(size_t)> values,
+                      std::function<std::string()> notice);
+    bool nudge(Node* node, int direction);
     bool loaded() const { return loaded_; }
     int cardCount() const { return static_cast<int>(cards_.size()); }
     float extent() const { return extent_; }  // walkable radius, grows with the number of files

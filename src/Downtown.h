@@ -30,16 +30,18 @@ struct DowntownRegion {
                cz+half+clearance > north() && cz-half-clearance < south();
     }
 };
-inline DowntownPlot downtownPlot(int slot) {
-    return {-48.0f + (slot % 4) * 32.0f, 128.0f + (slot / 4) * 32.0f};
+inline DowntownPlot downtownPlot(int slot, bool north = false) {
+    if (north) return {-96.0f+(slot%4)*64.0f,-164.0f-(slot/4)*64.0f};
+    return {-48.0f + (slot % 4) * 32.0f, 128.0f+(slot/4)*32.0f};
 }
-inline DowntownRegion downtownRegion(const std::map<std::string, int>& plots = {}) {
-    if (plots.empty()) return {};
+inline DowntownRegion downtownRegion(const std::map<std::string, int>& plots = {}, bool northern = false) {
+    if (plots.empty()) return northern ? DowntownRegion{0,-164,64,80} : DowntownRegion{};
     float west = 1e30f, east = -1e30f, north = 1e30f, south = -1e30f;
+    const float margin = northern ? 40.0f : 20.0f;
     for (const auto& [id, slot] : plots) {
-        const auto p = downtownPlot(slot);
-        west = std::min(west, p.x-20); east = std::max(east, p.x+20);
-        north = std::min(north, p.z-20); south = std::max(south, p.z+20);
+        const auto p = downtownPlot(slot, northern);
+        west = std::min(west, p.x-margin); east = std::max(east, p.x+margin);
+        north = std::min(north, p.z-margin); south = std::max(south, p.z+margin);
     }
     return {(west+east)*0.5f, (north+south)*0.5f, east-west, south-north};
 }

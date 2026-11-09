@@ -16,6 +16,7 @@ void AppShell::syncDowntown() {
     const bool resized = !(downtownRegion(downtown_->placements()) == city_->downtownBounds());
     if (resized) {
         // Resizing repacks nearby drives and regenerates routes/track. Leave old geometry first.
+        evacuateSettingsBuilding();
         evacuateDowntown();
         releaseGameplayControl();
         if (driving_) toggleCar();
@@ -68,6 +69,7 @@ void AppShell::evacuateDowntown() {
 
 void AppShell::visitDowntown(const std::string& id) {
     if (!settings_.showCity) { settingsPanel_->setNotice("TURN ON CITY IN GRAPHICS FIRST"); return; }
+    evacuateSettingsBuilding();
     evacuateDowntown();
     Vec3 exterior;
     if (!city_->downtownExit(id, exterior)) { settingsPanel_->setNotice("DOWNTOWN BUILDING UNAVAILABLE"); return; }
@@ -84,6 +86,7 @@ void AppShell::visitDowntown(const std::string& id) {
 }
 
 void AppShell::moveDowntown() {
+    evacuateSettingsBuilding();
     evacuateDowntown();
     if (cityMode_) {
         releaseGameplayControl();
@@ -138,7 +141,8 @@ void AppShell::enterDowntown(const std::string& id) {
 }
 
 void AppShell::togglePlugin(const std::string& id) {
-    const bool inside = !downtownInterior_.empty();
+    const bool inside = !downtownInterior_.empty() || !settingsInterior_.empty();
+    evacuateSettingsBuilding();
     evacuateDowntown();
     if (inside) { settingsPanel_->close(); openSettingsWin(); settingsPanel_->openPage("PLUGINS"); }
     if (gameplay_.count(id)) { toggleGameplay(id); return; }
@@ -156,7 +160,8 @@ void AppShell::togglePlugin(const std::string& id) {
 void AppShell::removePlugin(const std::string& id) {
     if (downtownBuiltin(id)) { settingsPanel_->setNotice("BUNDLED PLUGIN - CANNOT UNINSTALL"); return; }
     if (!installedPluginIds_.count(id)) { settingsPanel_->setNotice("PACKAGE UNAVAILABLE"); return; }
-    const bool inside = !downtownInterior_.empty();
+    const bool inside = !downtownInterior_.empty() || !settingsInterior_.empty();
+    evacuateSettingsBuilding();
     evacuateDowntown();
     if (inside) { settingsPanel_->close(); openSettingsWin(); settingsPanel_->openPage("PLUGINS"); }
     if (uninstallConfirm_ != id || std::chrono::steady_clock::now() >= uninstallDeadline_) {

@@ -14,7 +14,7 @@ namespace sf {
 
 namespace {
 constexpr int kW = 1832, kH = 960, kPad = 40, kGap = 24;
-constexpr int kCols = 5, kHomeTop = 140, kHomeCardH = 240;
+constexpr int kHomeTop = 140, kHomeCardH = 240;
 constexpr int kListTop = 236, kRowH = 96, kRowGap = 16, kVisibleRows = 6;
 constexpr float kWorldW = 2.0f, kDist = 1.7f;
 
@@ -103,10 +103,11 @@ void SettingsHub::rebuild() {
 
     if (home) {
         const int n = static_cast<int>(cats_.size());
-        const float cw = static_cast<float>(W_ - 2 * kPad - (kCols - 1) * kGap) / kCols;
+        const int cols = settingsHomeColumns(cats_.size());
+        const float cw = static_cast<float>(W_ - 2 * kPad - (cols - 1) * kGap) / cols;
         for (int i = 0; i < n; ++i) {
             const SettingsCategory& c = cats_[static_cast<size_t>(i)];
-            const float x = kPad + (i % kCols) * (cw + kGap), y = static_cast<float>(kHomeTop + (i / kCols) * (kHomeCardH + kGap));
+            const float x = kPad + (i % cols) * (cw + kGap), y = static_cast<float>(kHomeTop + (i / cols) * (kHomeCardH + kGap));
             const Rect r{x, y, x + cw, y + kHomeCardH};
             rects_.push_back(r);
             const bool sel = i == sel_;
@@ -221,8 +222,7 @@ bool SettingsHub::nudge(int dir) {
     const auto& items = cats_[static_cast<size_t>(page_)].items;
     if (sel_ - 1 >= static_cast<int>(items.size())) return false;
     const SettingsItem& it = items[static_cast<size_t>(sel_ - 1)];
-    if (!it.sliderGet || !it.sliderSet) return false;
-    it.sliderSet(std::clamp(it.sliderGet() + dir * (it.hi - it.lo) / 20.0f, it.lo, it.hi));
+    if (!nudgeSetting(it, dir)) return false;
     dirty_ = true;
     return true;
 }

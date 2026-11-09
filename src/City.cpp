@@ -102,16 +102,63 @@ void City::setDowntown(const std::map<std::string, int>& plots,
             it = downtownModels_.erase(it);
         } else ++it;
     }
-    if (resized) {
-        clearHover();
-        hasEntered_ = false;
-        if (built_) {
-            layoutPlatforms(snap_);
-            refreshTargets(snap_);
-        }
-        netBuilt_ = false;
-        trackDirty_ = true;
+    if (resized) resizeDistrictGeometry();
+}
+
+void City::resizeDistrictGeometry() {
+    clearHover();
+    hasEntered_ = false;
+    if (built_) {
+        layoutPlatforms(snap_);
+        refreshTargets(snap_);
     }
+    netBuilt_ = false;
+    trackDirty_ = true;
+}
+
+void City::setSettingsDistrict(const std::map<std::string, int>& plots,
+                               const std::vector<std::pair<std::string, std::string>>& names) {
+    bool unchanged = settingsBuildings_.size()==names.size();
+    for (size_t i=0;unchanged && i<names.size();++i) {
+        const auto it=plots.find(names[i].first);
+        unchanged=it!=plots.end() && settingsBuildings_[i].id==names[i].first &&
+                  settingsBuildings_[i].name==names[i].second && settingsBuildings_[i].slot==it->second;
+    }
+    if (unchanged) return;
+    const auto region = downtownRegion(plots, true);
+    const bool resized = !(region == settingsRegion_);
+    settingsRegion_ = region;
+    settingsBuildings_.clear();
+    for (const auto& [id, name] : names) {
+        const auto it = plots.find(id);
+        if (it != plots.end()) settingsBuildings_.push_back({id,name,it->second,{}});
+    }
+    if (resized) resizeDistrictGeometry();
+}
+
+bool City::settingsBuildingExit(const std::string& id, Vec3& pos) const {
+    for (const auto& building : settingsBuildings_) if (building.id == id) {
+        const auto p = downtownPlot(building.slot, true);
+        pos = {p.x,1.7f,p.z+24};
+        resolve(pos,0.8f,1.7f);
+        pos.y = floorAt(pos,0.8f,1.7f)+1.7f;
+        return true;
+    }
+    return false;
+}
+
+bool City::pickSettingsBuilding(Vec3 o, Vec3 d, std::string& id) const {
+    float best = 12;
+    if (std::fabs(d.z) < 1e-6f) return false;
+    for (const auto& building : settingsBuildings_) {
+        const auto p = downtownPlot(building.slot, true);
+        const float t = (p.z+12.2f-o.z)/d.z;
+        const float x = o.x+d.x*t, y = o.y+d.y*t;
+        if (t >= 0 && t < best && std::fabs(x-p.x) < 2.72f && y >= 0 && y <= 6.8f) {
+            id = building.id; best = t;
+        }
+    }
+    return best < 12;
 }
 
 bool City::setDowntownModel(const std::string& id, const GameplayModel& model, std::string& error) {
@@ -148,13 +195,16 @@ bool City::downtownExit(const std::string& id, Vec3& pos) const {
 
 bool City::downtownLayoutClear() const {
     for (const auto& p : platforms_)
-        if (!(p.gone && p.grow <= 0) && downtownRegion_.intersects(p.cx, p.cz, p.side*0.5f)) return false;
+        if (!(p.gone && p.grow <= 0) && (downtownRegion_.intersects(p.cx, p.cz, p.side*0.5f) ||
+            settingsRegion_.intersects(p.cx,p.cz,p.side*0.5f))) return false;
     if (!netBuilt_ && built_) buildNetwork();
     for (const auto& route : net_)
         for (size_t i = 1; i < route.pts.size(); ++i) {
             const auto a = route.pts[i-1], b = route.pts[i];
             if (std::max(a.x,b.x)+4 > downtownRegion_.west() && std::min(a.x,b.x)-4 < downtownRegion_.east() &&
                 std::max(a.z,b.z)+4 > downtownRegion_.north() && std::min(a.z,b.z)-4 < downtownRegion_.south()) return false;
+            if (std::max(a.x,b.x)+4 > settingsRegion_.west() && std::min(a.x,b.x)-4 < settingsRegion_.east() &&
+                std::max(a.z,b.z)+4 > settingsRegion_.north() && std::min(a.z,b.z)-4 < settingsRegion_.south()) return false;
         }
     return true;
 }
@@ -164,9 +214,11 @@ bool City::pickDowntown(Vec3 o, Vec3 d, std::string& id) const {
     for (const auto& b : downtown_) {
         const auto p = downtownPlot(b.slot);
         if (std::fabs(d.z) < 1e-6f) continue;
-        const float t = (p.z - 9 - o.z) / d.z;
+        const bool custom = downtownModels_.count(b.id) != 0;
+        const float t = (p.z - (custom ? 9.0f : 6.1f) - o.z) / d.z;
         const float x = o.x + d.x*t, y = o.y + d.y*t;
-        if (t >= 0 && t < best && std::fabs(x-p.x) < 2 && y >= 0 && y <= 4) {
+        if (t >= 0 && t < best && std::fabs(x-p.x) < (custom ? 2.0f : 1.36f) &&
+            y >= 0 && y <= (custom ? 4.0f : 3.4f)) {
             id = b.id; best = t;
         }
     }
@@ -187,6 +239,8 @@ void City::renderDowntown(Renderer& r, Vec3 eye) {
         const auto model = downtownModels_.find(b.id);
         if (model == downtownModels_.end()) {
             renderBox(r, {p.x, 4, p.z}, {12, 8, 12}, th.accent*0.65f, 0.5f, 3, 1, 0, 0);
+            renderDistrictDoor(r,b,{p.x,0,p.z},th.alt,false);
+            continue;
         } else if (!r.drawGameplayModel(model->second.owner, model->second.handle,
                                        Mat4::translate({p.x, 0, p.z}) * model->second.fit, {1,1,1})) {
             std::fprintf(stderr, "Downtown model draw failed: %s\n", b.id.c_str());
@@ -203,11 +257,99 @@ void City::renderDowntown(Renderer& r, Vec3 eye) {
     }
 }
 
+void City::renderDistrictDoor(Renderer& r, DowntownBuilding& b, Vec3 plot, Vec3 tint, bool north) {
+    if (!b.label && labelBudget_ > 0) { b.label = makeDoorLabel(b.name,tint); --labelBudget_; }
+    if (!b.label) return;
+    const float sign = north ? 1.0f : -1.0f;
+    const float size = north ? 2.0f : 1.0f;
+    const float z = plot.z+sign*6.0f*size, dh = 3.4f*size, dw = dh*0.8f;
+    const Vec3 glow = tint*0.8f+Vec3{0.3f,0.3f,0.3f};
+    for (float side : {-1.0f,1.0f})
+        renderBox(r,{plot.x+side*(dw*0.5f+0.12f*size),1.8f*size,z+sign*0.1f*size},{0.14f*size,3.6f*size,0.22f*size},glow,0.5f,4,1,1,0);
+    renderBox(r,{plot.x,3.58f*size,z+sign*0.1f*size},{dw+0.5f*size,0.16f*size,0.26f*size},glow,0.5f,4,1,1,0);
+    renderBox(r,{plot.x,4.0f*size,z+sign*0.6f*size},{dw+1.6f*size,0.1f*size,1.3f*size},tint,0.5f,3,1,0,0);
+    renderBox(r,{plot.x,0.05f*size,z+sign*1.5f*size},{dw+1.2f*size,0.05f*size,2.4f*size},tint,0.5f,6,1,2,0);
+    r.drawCube(*b.label,Mat4::translate({plot.x,dh*0.5f,z+sign*0.03f*size}) *
+               Mat4::rotateY(north ? 0.0f : kPi) * Mat4::scale({dw,dh,0.06f*size}),{1,1,1},false,true,0);
+}
+
+void City::renderSettingsDistrict(Renderer& r, Vec3 eye) {
+    const auto& region = settingsRegion_;
+    const Vec3 tint = currentTheme().accent*0.45f + Vec3{0.45f,0.25f,0.12f};
+    renderBox(r,{region.x,0.01f,region.z},{region.width,0.02f,region.depth},tint,0.5f,6,1,1,0);
+    moduleLabel(r,settingsDistrictLabel_,"SETTINGS - CONTROL QUARTER",
+                {region.x,5,region.south()+2},2,eye,tint);
+    for (auto& b : settingsBuildings_) {
+        const auto p = downtownPlot(b.slot,true);
+        if (std::fabs(eye.z-p.z) > 400*drawScale_ || std::fabs(eye.x-p.x) > 400*drawScale_) continue;
+        auto box = [&](Vec3 at,Vec3 size, bool glow = false) {
+            renderBox(r,{p.x+at.x*2,at.y*2,p.z+at.z*2},size*2,tint,0.5f,glow?4:3,1,glow?0.35f:0.0f,0);
+        };
+        renderBox(r,{p.x,0.025f,p.z},{56,0.05f,56},tint*0.4f,0,6,1,0,0);
+        box({0,4,0},{12,8,12});
+        for (float side : {-1.0f,1.0f}) {
+            box({side*5.7f,4.2f,0},{0.6f,8.4f,12.6f});
+            box({side*4.8f,7.8f,0},{0.22f,0.22f,12.8f},true);
+            box({side*2.7f,2.1f,6.35f},{0.3f,4.2f,0.6f});
+        }
+        box({0,8.1f,-0.5f},{10.4f,0.35f,10.8f});
+        if (b.name == "DISPLAY" || b.name == "GRAPHICS") {
+            box({0,6,6.12f},{8,2.6f,0.2f},true);
+            box({0,6,6.25f},{7.4f,2.1f,0.12f});
+            for (int i=0;i<3;++i) box({-2.5f+i*2.5f,6.6f-i*0.5f,6.34f},{1.6f,0.12f,0.08f},true);
+        } else if (b.name == "SOUND") {
+            for (float x : {-3.8f,3.8f}) {
+                box({x,5.5f,6.1f},{2.1f,4,0.4f});
+                for (float y : {4.5f,6.4f}) {
+                    r.drawHolo(*dummy_,2,Mat4::translate({p.x+x*2,y*2,p.z+12.8f}) *
+                               Mat4::scale({2.8f,2.8f,0.6f}),tint*0.45f,1,1,0.1f);
+                    r.drawHolo(*dummy_,2,Mat4::translate({p.x+x*2,y*2,p.z+13.15f}) *
+                               Mat4::scale({1.0f,1.0f,0.2f}),tint*0.2f,1,1,0);
+                }
+            }
+        } else if (b.name == "NETWORK") {
+            for (int i=0;i<3;++i) box({float(i-1)*3,8.5f+i*0.6f,0},{0.3f,1+i*1.2f,0.3f},true);
+            for (int i=0;i<3;++i) box({0,6+i*0.5f,6.2f},{2.0f+i*1.5f,0.15f,0.12f},true);
+        } else if (b.name == "POWER") {
+            box({0,9,0},{5,2,4});
+            for (int i=0;i<3;++i) box({-1.6f+i*1.6f,9,2.1f},{0.7f,1.3f,0.15f},true);
+        } else if (b.name.find("MEDIA") != std::string::npos) {
+            for (int i=0;i<7;++i) box({float(i-3)*1.15f,5.8f,6.2f},{0.35f,0.7f+float(i%3)*0.6f,0.2f},true);
+            box({0,8.3f,0},{7,0.6f,7});
+        } else if (b.name == "WINDOWS" || b.name == "PERSONALISATION") {
+            for (float x : {-3.0f,3.0f}) box({x,6,6.2f},{2.4f,2,0.18f},true);
+        } else if (b.name == "MOUSE" || b.name == "SHELL") {
+            box({0,8.5f,0},{3,1,5});
+            box({0,9.1f,0.8f},{0.3f,0.3f,1.2f},true);
+        } else if (b.name == "PLUGINS") {
+            for (float x : {-3.2f,3.2f}) {
+                box({x,6.2f,6.2f},{2.8f,2.8f,0.5f});
+                for (float pin : {-0.8f,0.0f,0.8f})
+                    box({x+pin,4.7f,6.25f},{0.22f,0.7f,0.3f},true);
+            }
+        } else if (b.name == "DOWNTOWN") {
+            for (int i=0;i<5;++i) {
+                const float height=1.0f+float((i*3)%5)*0.45f;
+                box({float(i-2)*1.5f,8+height*0.5f,0},{1.1f,height,3.0f});
+                box({float(i-2)*1.5f,8+height,1.6f},{0.7f,0.12f,0.15f},true);
+            }
+        } else if (b.name == "SETTINGS DISTRICT") {
+            box({0,8.5f,0},{8,1,8});
+            for (float x : {-3.2f,3.2f}) for (float z : {-3.2f,3.2f})
+                box({x,9.6f,z},{0.5f,1.2f,0.5f},true);
+        } else {
+            for (int i=0;i<3;++i) box({0,5.2f+i*0.7f,6.2f},{7-i*1.2f,0.18f,0.15f},true);
+        }
+        renderDistrictDoor(r,b,{p.x,0,p.z},tint,true);
+    }
+}
+
 bool City::gameplayTrackClearance(float x, float z, float radius, double* result) const {
     if (!built_ || !result) return false;
     std::vector<Box> monuments;
     monumentBoxes(monuments);
     monuments.push_back({downtownRegion_.west(), downtownRegion_.east(), 16, downtownRegion_.north(), downtownRegion_.south()});
+    monuments.push_back({settingsRegion_.west(),settingsRegion_.east(),32,settingsRegion_.north(),settingsRegion_.south()});
     return sf::gameplayTrackClearance(platforms_, monuments, x, z, radius, *result);
 }
 
@@ -400,7 +542,7 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap, int first, int co
                 const float a = target + off;
                 const float x = r * std::cos(a), z = r * std::sin(a);
                 bool ok = std::fabs(x) > kHubHalf + half + kClear || std::fabs(z) > kHubHalf + half + kClear;
-                if (downtownRegion_.intersects(x, z, half, kClear)) ok = false;
+                if (downtownRegion_.intersects(x, z, half, kClear) || settingsRegion_.intersects(x,z,half,kClear)) ok = false;
                 for (size_t q = 0; ok && q < placed.size(); ++q) {
                     const int j = placed[q];
                     const float need = half + platforms_[j].side * 0.5f + kClear;
@@ -1484,6 +1626,7 @@ void City::render(Renderer& r, Vec3 eye) {
     labelBudget_ = 2;
     pendingLabels_.clear();
     renderDowntown(r, eye);
+    renderSettingsDistrict(r,eye);
     {
         // The computer's own components stand on a region floor of their own; it is drawn first so it never covers them.
         const float g0 = ease(coreGrow_[0]);
@@ -1801,6 +1944,8 @@ void City::buildNetwork() const {
     for (const Rect& r : solids) stamp(r.x0 - 3.5f, r.x1 + 3.5f, r.z0 - 3.5f, r.z1 + 3.5f, [&](int c) { solid[c] = 1; });
     stamp(downtownRegion_.west()-4, downtownRegion_.east()+4, downtownRegion_.north()-4, downtownRegion_.south()+4,
           [&](int c) { solid[c] = 1; });
+    stamp(settingsRegion_.west()-4,settingsRegion_.east()+4,settingsRegion_.north()-4,settingsRegion_.south()+4,
+          [&](int c) { solid[c] = 1; });
     stamp(-13, 13, -13, 13, [&](int c) { solid[c] = 1; });
     auto markPoly = [&](const Poly& pts) {
         const float hw = 1.5f + cs * 0.5f - 0.01f;
@@ -2029,6 +2174,11 @@ void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const 
         const auto plot = downtownPlot(b.slot);
         if (std::fabs(p.x-plot.x) > 8+rad || std::fabs(p.z-plot.z) > 8+rad) continue;
         boxes.push_back({plot.x-6, plot.x+6, downtownModels_.count(b.id) ? 12.0f : 8.0f, plot.z-6, plot.z+6});
+    }
+    for (const auto& b : settingsBuildings_) {
+        const auto plot = downtownPlot(b.slot,true);
+        if (std::fabs(p.x-plot.x) > 8+rad || std::fabs(p.z-plot.z) > 8+rad) continue;
+        boxes.push_back({plot.x-13.6f,plot.x+13.6f,24,plot.z-13.6f,plot.z+13.6f});
     }
     if (car_.show && car_.solid && car_.spawn > 0.9f) {  // a parked car is a solid, climbable object
         const float sx = -std::sin(car_.yaw), sz = -std::cos(car_.yaw);

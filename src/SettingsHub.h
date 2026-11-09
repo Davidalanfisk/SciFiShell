@@ -9,29 +9,14 @@
 
 #include "Renderer.h"
 #include "Utils.h"
+#include "SettingsModel.h"
 
 namespace sf {
-
-struct SettingsItem {
-    std::string title;
-    std::string hint;                     // small grey line under the title
-    std::function<std::string()> value;   // optional live value shown on the right
-    std::function<void()> act;            // click / select
-    std::function<float()> sliderGet;     // with sliderSet: draws a draggable slider on the card
-    std::function<void(float)> sliderSet;
-    float lo = 0.0f, hi = 1.0f;
-};
-
-struct SettingsCategory {
-    std::string name;
-    std::string subtitle;
-    std::string tag;  // small label on the card, e.g. SHELL or WINDOWS
-    std::vector<SettingsItem> items;
-};
 
 class SettingsHub {
 public:
     explicit SettingsHub(Renderer& renderer) : renderer_(renderer) {}
+    const std::vector<SettingsCategory>& categories() const { return cats_; }
 
     void setCategories(std::vector<SettingsCategory> cats) {
         cats_ = std::move(cats);

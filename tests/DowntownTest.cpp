@@ -103,6 +103,21 @@ int main() {
     std::getline(original, first);
     check(first == "a.plugin 1", "corrupt preferences preserved");
     original.close();
+    const auto settingsFile=root/"settings-district.ini";
+    sf::Downtown settings(settingsFile);
+    check(settings.load() && settings.reconcile({"settings.graphics","settings.shell"}),
+          "Settings reuses the same allocator in its independent preference file");
+    check(settings.move("settings.graphics",127),"Settings can move to a distant plot");
+    sf::Downtown settingsRestart(settingsFile);
+    check(settingsRestart.load() && settingsRestart.placements().at("settings.graphics")==127,
+          "Settings positions survive restart independently of plugins");
+    check(settingsRestart.reconcile({"settings.graphics","settings.shell","settings.sound"}) &&
+          settingsRestart.placements().at("settings.graphics")==127,
+          "new Settings groups fill gaps without disturbing rearrangements");
+    check(settingsRestart.move("settings.sound",127) &&
+          settingsRestart.placements().at("settings.sound")==127,
+          "Settings buildings use the same persistent move/swap behavior");
+    fs::remove(settingsFile);
     fs::remove(file);
     fs::remove(root);
     return failures ? 1 : 0;

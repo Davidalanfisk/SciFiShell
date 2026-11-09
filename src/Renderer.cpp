@@ -614,6 +614,39 @@ void Renderer::present(bool vsync) {
     swapChain_->Present(vsync ? 1 : 0);
 }
 
+bool Renderer::captureDesktop(Bitmap& bitmap, std::string& error) {
+    endTarget();
+    auto* source = swapChain_->GetCurrentBackBufferRTV()->GetTexture();
+    auto desc = source->GetDesc();
+    desc.Name = "Screenshot readback";
+    desc.Usage = USAGE_STAGING;
+    desc.BindFlags = BIND_NONE;
+    desc.CPUAccessFlags = CPU_ACCESS_READ;
+    desc.MiscFlags = MISC_TEXTURE_FLAG_NONE;
+    RefCntAutoPtr<ITexture> staging;
+    device_->CreateTexture(desc, nullptr, &staging);
+    if (!staging) { error = "Cannot allocate screenshot readback"; return false; }
+    CopyTextureAttribs copy;
+    copy.pSrcTexture = source;
+    copy.pDstTexture = staging;
+    copy.SrcTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+    copy.DstTextureTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+    context_->CopyTexture(copy);
+    context_->Flush();
+    context_->WaitForIdle();
+    MappedTextureSubresource mapped;
+    context_->MapTextureSubresource(staging, 0, 0, MAP_READ, MAP_FLAG_NONE, nullptr, mapped);
+    if (!mapped.pData) { error = "Cannot map screenshot readback"; return false; }
+    bitmap.w = static_cast<int>(desc.Width);
+    bitmap.h = static_cast<int>(desc.Height);
+    bitmap.rgba.resize(size_t(bitmap.w)*bitmap.h*4);
+    for (int y=0;y<bitmap.h;++y)
+        std::memcpy(bitmap.rgba.data()+size_t(y)*bitmap.w*4,
+                    static_cast<const uint8_t*>(mapped.pData)+size_t(y)*mapped.Stride, size_t(bitmap.w)*4);
+    context_->UnmapTextureSubresource(staging, 0, 0);
+    return true;
+}
+
 void Renderer::setView(const Mat4& view, const Mat4& proj) {
     view_ = view;
     proj_ = proj;

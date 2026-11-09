@@ -185,6 +185,9 @@ bool AppShell::init() {
     downtown_ = std::make_unique<Downtown>(
         statePath.empty() ? std::filesystem::path{} : statePath.parent_path() / "downtown.ini");
     if (!downtown_->load()) std::fprintf(stderr, "%s\n", downtown_->error().c_str());
+    settingsDistrict_ = std::make_unique<Downtown>(
+        statePath.empty() ? std::filesystem::path{} : statePath.parent_path() / "settings-district.ini");
+    if (!settingsDistrict_->load()) std::fprintf(stderr, "Settings district: %s\n", settingsDistrict_->error().c_str());
     gameplayConsent_ = std::make_unique<GameplayConsent>(
         statePath.empty() ? std::filesystem::path{} : statePath.parent_path() / "plugin-consents");
     pluginPackages_ = std::make_unique<PluginPackageStore>(
@@ -350,6 +353,7 @@ bool AppShell::init() {
         if (deferred_) return;
         if (city_) { city_->markEntered(); city_->clearHover(); }
         deferred_ = [this, folder] {
+            evacuateSettingsBuilding();
             evacuateDowntown();
             room_->load(folder);
             if (cityMode_) toggleCity(false);
@@ -489,6 +493,7 @@ void AppShell::enterFileRoom() {
 }
 
 void AppShell::leaveFileRoom() {
+    evacuateSettingsBuilding();
     evacuateDowntown();
     state_ = State::Menu;
     camera_ = Camera{};
@@ -685,7 +690,8 @@ void AppShell::buildSettingsHub() {
         if (game != gameplay_.end()) {
             plugins.items.push_back({"DISABLE " + plugin.name, "Stop this gameplay plugin, including after an error",
                                      nullptr, [this, id] {
-                                         const bool inside = !downtownInterior_.empty();
+                                         const bool inside = !downtownInterior_.empty() || !settingsInterior_.empty();
+                                         evacuateSettingsBuilding();
                                          evacuateDowntown();
                                          if (inside) { settingsPanel_->close(); openSettingsWin(); settingsPanel_->openPage("PLUGINS"); }
                                          gameplayConfirm_.clear();
@@ -803,11 +809,53 @@ void AppShell::buildSettingsHub() {
     }
 #endif
     for (SettingsCategory& c : mediaCategories()) cats.push_back(std::move(c));
+    SettingsCategory quarter{"SETTINGS DISTRICT","North of Computer - visit or rearrange settings buildings","CITY",{}};
+    quarter.items.push_back({"DISTRICT STORAGE","Saved settings-building placements",
+        [this] { return settingsDistrict_->error().empty() ? std::string("OK") : settingsDistrict_->error(); },nullptr});
+    quarter.items.push_back({"PREVIOUS PLOT","Choose destination",
+        [this] { return std::to_string(settingsTarget_+1); },
+        [this] { settingsTarget_=(settingsTarget_+kDowntownSlots-1)%kDowntownSlots; }});
+    quarter.items.push_back({"NEXT PLOT","Choose destination",
+        [this] {
+            std::string occupant="EMPTY";
+            for (const auto& [id,slot] : settingsDistrict_->placements()) if (slot==settingsTarget_) occupant=id;
+            return std::to_string(settingsTarget_+1)+" - "+occupant;
+        },[this] { settingsTarget_=(settingsTarget_+1)%kDowntownSlots; }});
+    quarter.items.push_back({"MOVE / SWAP","Move selected building; swap an occupied plot",
+        [this] { return settingsSelected_; },[this] { moveSettingsBuilding(); }});
+    std::vector<std::string> groupNames;
+    for (const auto& c : cats) groupNames.push_back(c.name);
+    groupNames.push_back(quarter.name);
+    for (const auto& name : groupNames) {
+        const auto id=settingsGroupId(name);
+        quarter.items.push_back({"VISIT "+name,"Go to this settings building's door",
+            [this,id] { const auto it=settingsDistrict_->placements().find(id);
+                return it==settingsDistrict_->placements().end() ? std::string("UNAVAILABLE") : "PLOT "+std::to_string(it->second+1); },
+            [this,id] { visitSettingsBuilding(id); }});
+        quarter.items.push_back({"ARRANGE "+name,"Then choose a plot and Move / Swap",nullptr,
+            [this,id] { settingsSelected_=id; settingsTarget_=settingsDistrict_->placements().at(id);
+                settingsPanel_->openPage("SETTINGS DISTRICT"); settingsPanel_->setNotice("SELECTED "+id); }});
+    }
+    cats.push_back(std::move(quarter));
+    settingsCategories_ = cats;
+    syncSettingsDistrict();
+    settingsRoomRefresh_ = true;
     settingsPanel_->setCategories(std::move(cats));
 }
 
 // F12: grabs what is on screen inside the shell window and saves it as a PNG in Pictures\SciFiShell.
 void AppShell::saveScreenshot() {
+    if (!shotPath_.empty()) {
+        Bitmap frame;
+        std::string error;
+        const auto path=std::exchange(shotPath_,{});
+        if (!renderer_.captureDesktop(frame,error))
+            std::fprintf(stderr,"Screenshot failed: %s\n",error.c_str());
+        else if (!stbi_write_png(path.c_str(),frame.w,frame.h,4,frame.rgba.data(),frame.w*4))
+            std::fprintf(stderr,"Screenshot failed to write: %s\n",path.c_str());
+        else std::fprintf(stderr,"Screenshot saved: %s\n",path.c_str());
+        return;
+    }
 #ifdef _WIN32
     SDL_SysWMinfo wm;
     SDL_VERSION(&wm.version);
@@ -1577,6 +1625,82 @@ bool AppShell::scriptExec(const std::string& line) {
 #endif
     } else if (cmd == "pluginnotice") {
         scriptLog("plugin notice " + settingsPanel_->notice());
+    } else if (cmd == "settingsdistrictstatus") {
+        const auto& bounds=city_->settingsDistrictBounds();
+        std::string status="settings district city="+std::to_string(cityMode_)+" interior="+
+            (settingsInterior_.empty()?std::string("none"):settingsInterior_)+" groups="+
+            std::to_string(settingsCategories_.size())+" buildings="+std::to_string(settingsDistrict_->placements().size())+
+            " layout_clear="+std::to_string(city_->downtownLayoutClear())+
+            " bounds="+std::to_string(int(bounds.west()))+","+std::to_string(int(bounds.east()))+","+
+            std::to_string(int(bounds.north()))+","+std::to_string(int(bounds.south()));
+        for (const auto& category : settingsCategories_) {
+            Vec3 exterior; const auto id=settingsGroupId(category.name);
+            status+=" "+id+"="+std::to_string(city_->settingsBuildingExit(id,exterior))+
+                    "/"+std::to_string(category.items.size());
+        }
+        status+=" position="+std::to_string(camera_.position.x)+","+std::to_string(camera_.position.z);
+        if (cityMode_) {
+            Vec3 resolved=camera_.position; city_->resolve(resolved,0.8f,1.7f);
+            status+=" collision_safe="+std::to_string(length(resolved-camera_.position)<0.01f);
+        }
+        scriptLog(status);
+    } else if (cmd == "settingsvisit" || cmd == "settingsenter") {
+        std::string id; is>>id;
+        if (cmd=="settingsvisit") visitSettingsBuilding(id);
+        else {
+            Vec3 exterior; std::string picked;
+            if (!cityMode_ || !city_->settingsBuildingExit(id,exterior) ||
+                !city_->pickSettingsBuilding(exterior,{0,0,-1},picked) || picked!=id)
+                scriptLog("settings entrance pick failed");
+            else enterSettingsBuilding(id);
+        }
+    } else if (cmd == "settingsroomclick" || cmd == "settingsroomminus") {
+        std::string title; std::getline(is>>std::ws,title);
+        bool found=false;
+        for (auto& child : room_->root().children()) {
+            if (!child->isCard() || child->name!=title) continue;
+            found=true;
+            camera_.position={0,1.7f,child->position.z};
+            if (std::fabs(child->position.x)<0.1f)
+                camera_.position.z += child->yaw>kPi*0.5f ? -2.0f : 2.0f;
+            const auto direction=normalize(child->position-camera_.position);
+            if (pickNode(room_->root(),camera_.position,direction)!=child.get()) scriptLog("settings card pick blocked");
+            else if (cmd=="settingsroomminus") room_->nudge(child.get(),-1);
+            else room_->activate(child.get());
+            break;
+        }
+        if (!found) scriptLog("settings card not found: "+title);
+    } else if (cmd == "settingsroomstatus") {
+        const auto* category=settingsGroup(settingsInterior_);
+        std::string text="settings room "+settingsInterior_+" cards="+std::to_string(room_->cardCount());
+        bool parity=category!=nullptr;
+        if (category) for (const auto& item : category->items) {
+            text+=" ["+item.title+"="+(item.value?item.value():std::string())+"]";
+            size_t matches=0;
+            for (const auto& child : room_->root().children())
+                if (child->isCard() && child->name==item.title &&
+                    static_cast<const CardNode*>(child.get())->console) ++matches;
+            parity=parity && matches==1;
+        }
+        text+=" parity="+std::to_string(parity);
+        if (category) {
+            Vec3 edge{10000,1.7f,-10000};
+            room_->resolve(edge);
+            text+=" aisle_halfwidth="+std::to_string(edge.x)+" back_limit="+std::to_string(edge.z)+
+                  " max_eye="+std::to_string(room_->maxEye());
+        }
+        scriptLog(text+" notice="+settingsPanel_->notice());
+    } else if (cmd == "settingsdistrictclick") {
+        std::string title; std::getline(is>>std::ws,title);
+        if (!settingsPanel_->isOpen()) { buildSettingsHub(); openSettingsWin(); }
+        if (!settingsPanel_->scriptActivate("SETTINGS DISTRICT",title))
+            scriptLog("settings district item not found: "+title);
+    } else if (cmd == "settingsmenuclick") {
+        std::string text; std::getline(is>>std::ws,text);
+        const auto split=text.find('|');
+        if (!settingsPanel_->isOpen()) { buildSettingsHub(); openSettingsWin(); }
+        if (split==std::string::npos || !settingsPanel_->scriptActivate(text.substr(0,split),text.substr(split+1)))
+            scriptLog("settings menu item not found: "+text);
     } else if (cmd == "downtownstatus") {
         std::string status = "downtown city=" + std::to_string(cityMode_) + " interior=" +
             (downtownInterior_.empty() ? "none" : downtownInterior_) + " cards=" + std::to_string(room_->cardCount());
@@ -1642,6 +1766,7 @@ bool AppShell::scriptExec(const std::string& line) {
         std::string path;
         std::getline(is, path);
         while (!path.empty() && path.front() == ' ') path.erase(path.begin());
+        evacuateSettingsBuilding(); evacuateDowntown();
         if (cityMode_) toggleCity(false);
         room_->load(path);
         scriptWait_ = 1.5;
@@ -1838,6 +1963,7 @@ void AppShell::scriptTick(double dt) {
 }
 
 void AppShell::toggleCity(bool on) {
+    if (on && !settingsInterior_.empty()) { evacuateSettingsBuilding(); return; }
     if (on && !downtownInterior_.empty()) { evacuateDowntown(); return; }
     if (!city_ || on == cityMode_) return;
     if (on && !settings_.showCity) {
@@ -1875,6 +2001,8 @@ void AppShell::toggleCity(bool on) {
 }
 
 void AppShell::setCityEnabled(bool on) {
+    const bool wasSettingsRoom = !settingsInterior_.empty() || !downtownInterior_.empty();
+    if (!on) evacuateSettingsBuilding();
     if (!on) evacuateDowntown();
     settings_.showCity = on;
     settings_.save();
@@ -1886,6 +2014,7 @@ void AppShell::setCityEnabled(bool on) {
         toggleCity(true);
     } else {
         toggleCity(false);
+        if (wasSettingsRoom) room_->loadEmpty();
         menu_->setStatus("CITY OFF - press F9 to bring it back");
     }
 }
@@ -2914,7 +3043,13 @@ void AppShell::tick(double dt) {
                 std::vector<Vec3> routePath;
                 int standKind = -1;
                 std::string downtownId;
-                if (!overWin && city_ && !riding_ && city_->pickDowntown(o, d, downtownId)) {
+                if (!overWin && city_ && !riding_ && city_->pickSettingsBuilding(o,d,downtownId)) {
+                    hudTarget_ = "ENTER SETTINGS BUILDING - "+downtownId;
+                    if ((pointerSelect || keySelect) && !deferred_) {
+                        deferred_ = [this,downtownId] { enterSettingsBuilding(downtownId); };
+                        deferDelay_ = 3;
+                    }
+                } else if (!overWin && city_ && !riding_ && city_->pickDowntown(o, d, downtownId)) {
                     hudTarget_ = "ENTER PLUGIN BUILDING - " + downtownId;
                     if ((pointerSelect || keySelect) && !deferred_) {
                         deferred_ = [this, downtownId] { enterDowntown(downtownId); };
@@ -2959,6 +3094,10 @@ void AppShell::tick(double dt) {
             if (city_) city_->clearHover();
             Node* hit = overWin ? nullptr : pickNode(room_->root(), o, d);
             room_->setHover(hit);
+            if (!settingsInterior_.empty() && hit) {
+                if (in.left || pad.leftPressed) room_->nudge(hit,-1);
+                if (in.right || pad.rightPressed) room_->nudge(hit,1);
+            }
             if ((pointerSelect || keySelect) && hit && !deferred_) {
                 if (room_->opensRoom(hit)) {
                     deferred_ = [this, hit] { menu_->setStatus(room_->activate(hit)); };
@@ -2967,7 +3106,8 @@ void AppShell::tick(double dt) {
                     menu_->setStatus(room_->activate(hit));
                 }
             }
-            if (back || (in.escape && room_->inRoom())) menu_->setStatus(room_->goUp());
+            if (back && !settingsInterior_.empty()) evacuateSettingsBuilding();
+            else if (back || (in.escape && room_->inRoom())) menu_->setStatus(room_->goUp());
             else if (in.escape) toggleCity(true);
             }
             if (gameplayControl_.owner()) hudTarget_ = "SCRIPT CONTROL - ESC OR G TO EXIT";
@@ -3150,6 +3290,7 @@ void AppShell::tick(double dt) {
         clearRoomPending_ = false;
         if (cityMode_ && state_ == State::FileRoom) room_->loadEmpty();
     }
+    if (settingsRoomRefresh_) refreshSettingsRoom();
     activeRoot().updateTree(dt, time_);
 }
 
@@ -3343,11 +3484,11 @@ int AppShell::run() {
         renderer_.beginDesktopFrame();
         renderScene(camera_.world().rigidInverse(), Mat4::perspective(kFovY, renderer_.aspect(), 0.05f, 2500.0f),
                     camera_.position, true);
-        renderer_.present(!vrOn_ && settings_.vsync);
         if (shotPending_) {
             shotPending_ = false;
             saveScreenshot();
         }
+        renderer_.present(!vrOn_ && settings_.vsync);
     }
     fastExit();
 }

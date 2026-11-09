@@ -24,6 +24,7 @@ void City::buildTrack() {
     for (const Box& b : monuments) obstacles.push_back({b.x0, b.x1, b.z0, b.z1, b.y1});
     obstacles.push_back({downtownRegion_.west(), downtownRegion_.east(),
                          downtownRegion_.north(), downtownRegion_.south(), 16});
+    obstacles.push_back({settingsRegion_.west(),settingsRegion_.east(),settingsRegion_.north(),settingsRegion_.south(),32});
     for (const Platform& pl : platforms_) {
         if (pl.gone && pl.grow <= 0.0f) continue;
         obstacles.push_back({pl.cx - pl.side * 0.5f, pl.cx + pl.side * 0.5f,

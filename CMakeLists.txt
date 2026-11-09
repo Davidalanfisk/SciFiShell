@@ -94,6 +94,7 @@ set(SOURCES
     src/AppShell.cpp
     src/AppShellGameplay.cpp
     src/AppShellDowntown.cpp
+    src/AppShellSettingsDistrict.cpp
     src/Downtown.cpp
     src/plugins/AppShellCar.cpp
     src/plugins/AppShellParks.cpp
@@ -195,6 +196,10 @@ target_link_libraries(SciFiShell PRIVATE ${CMAKE_DL_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(SettingsModelTest tests/SettingsModelTest.cpp)
+    target_include_directories(SettingsModelTest PRIVATE src)
+    target_compile_definitions(SettingsModelTest PRIVATE NOMINMAX)
+    add_test(NAME SettingsModelTest COMMAND SettingsModelTest)
     add_executable(DowntownTest tests/DowntownTest.cpp src/Downtown.cpp)
     target_include_directories(DowntownTest PRIVATE src)
     target_compile_definitions(DowntownTest PRIVATE NOMINMAX)

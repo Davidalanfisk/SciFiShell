@@ -1,6 +1,24 @@
 # Plugins
 
-This guide targets the **SciFi Shell v0.9.24 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+This guide targets the **SciFi Shell v0.9.25 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+
+## v0.9.25 changelog
+
+Default Downtown buildings use the standard city door face/trim and a north-facing door at
+`(plot.x,0,plot.z-6.1)` (2.72 units wide, 3.4 high). The default-building exit remains
+`(plot.x,1.7,plot.z-12)`. Optional custom exteriors retain the separate host frame at `plot.z-9`;
+their model schema and validation limits are unchanged.
+
+A separate Settings quarter north of Computer is host-owned, not a plugin privilege. Its buildings
+are generated from the existing Settings taxonomy and use the exact menu callbacks, values,
+slider limits and confirmations. No package can replace these rooms, disable a settings group or
+acquire new filesystem/rendering/OS permissions through the district. Existing city collision and
+track-clearance queries account for both districts.
+
+Settings buildings and galleries use the enlarged scale (64-unit plot pitch), while Downtown
+keeps its existing scale and saved placements. Settings rooms use dark, color-correct live consoles,
+eye-height controls and the existing permission/destructive confirmation surfaces.
+All package manifest fields, `downtown_model` limits and gameplay API permissions remain unchanged.
 
 ## v0.9.24 changelog
 
@@ -31,8 +49,9 @@ Buildings represent
 installed packages, not running Lua scene objects; disabling a plugin does not remove its management
 entrance. Uninstalling removes it.
 
-Walk south from Computer or use **Settings > Downtown > Visit [name]**. Aim at the separate illuminated
-entrance frame from within 12 units and click/select. Every entrance leads to a host-managed, empty
+Walk south from Computer or use **Settings > Downtown > Visit [name]**. Aim at the standard door
+(or the separate illuminated host frame for a custom exterior) from within 12 units and click/select.
+Every entrance leads to a host-managed, empty
 room with package ID, name, version, description and status, an **On / Off** control, **Delete Plugin**,
 **Rearrange**, and an exit. Escape/Back also exits. No package filesystem is exposed in this room.
 The host retains these controls even if plugin code fails.
@@ -180,7 +199,7 @@ Use `scene_mesh(handle, texture, x, y, z, width, height, depth, red, green, blue
 
 ## Start here
 
-You do not need to build the shell to make a plugin: install [v0.9.24](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.24), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
+You do not need to build the shell to make a plugin: install [v0.9.25](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.25), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
 
 | What you want | Package | Start with |
 |---|---|---|

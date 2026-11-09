@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Text;
@@ -113,7 +114,7 @@ function Run-Scenario([string]$name, [string[]]$commands) {
     }
     if ($code -ne 0) { throw "$name exited $code; see $root" }
     $log = @(Get-Content -LiteralPath $control | Select-Object -Skip $previousLines)
-    if ($log -match 'not found|pick blocked|pick failed|entrance unavailable|card unavailable|layout_clear=0|collision_safe=0') { throw "Interaction failed: $root" }
+    if ($log -match 'not found|pick blocked|pick failed|entrance unavailable|card unavailable|layout_clear=0|collision_safe=0|parity=0') { throw "Interaction failed: $root" }
     return $log
 }
 function Require([string[]]$log, [string]$pattern) {
@@ -175,4 +176,86 @@ $last = ($log | Where-Object { $_ -like 'downtown *' })[-1]
 if ($last -match 'com.example.clock=|com.example.downtown=') { throw "Removed buildings remain: $root" }
 $log = Run-Scenario 'gap-fill' @('wait 2', "plugininstall $defaultZip", 'downtownstatus', 'quit')
 Require $log 'com.example.clock=3\(default\)'
+$commands=@('wait 2','settingsdistrictstatus',
+    'settingsvisit settings.graphics','settingsenter settings.graphics',
+    'cam 8.6 1.7 -6 -90 0','wait 1',("shot "+(Join-Path $root 'settings-console.png')),
+    'cam 0 1.7 4 0 0','wait 0.3',("shot "+(Join-Path $root 'settings-gallery.png')),'leave',
+    'settingsvisit settings.sound','cam -15 12 -112 -10 -12','wait 0.5',
+    ("shot "+(Join-Path $root 'settings-exterior.png')),
+    'cam 52 10 -310 24 -7','wait 0.5',("shot "+(Join-Path $root 'settings-sound.png')))
+foreach($name in @('shell','graphics','windows','plugins','downtown','display','sound','network','mouse',
+                   'personalisation','power','system','media-player','media-folders','media-tracks','media-queue','settings-district')) {
+    $commands+=@("settingsvisit settings.$name","settingsenter settings.$name",'wait 0.15','settingsroomstatus','leave')
+}
+$commands+=@(
+    'settingsvisit settings.graphics','settingsenter settings.graphics','settingsroomstatus',
+    'settingsroomclick CROSSHAIR','settingsroomstatus','settingsroomclick FOG DENSITY','settingsroomstatus',
+    'settingsroomminus FOG DENSITY','settingsroomstatus','settingsdistrictstatus','leave',
+    'settingsmenuclick GRAPHICS|CROSSHAIR','settingsclose',
+    'settingsvisit settings.graphics','settingsenter settings.graphics','settingsroomstatus',
+    'settingsroomclick CITY','settingsdistrictstatus','settingsmenuclick GRAPHICS|CITY','settingsclose',
+    'settingsdistrictclick ARRANGE DISPLAY','settingsdistrictclick NEXT PLOT','settingsdistrictclick MOVE / SWAP',
+    'settingsdistrictstatus','settingsvisit settings.display','settingsenter settings.display',
+    'settingsroomclick EXIT TO SETTINGS DISTRICT','settingsdistrictstatus',
+    'settingsdistrictclick ARRANGE GRAPHICS','settingsdistrictclick PREVIOUS PLOT',
+    'settingsdistrictclick PREVIOUS PLOT','settingsdistrictclick PREVIOUS PLOT',
+    'settingsdistrictclick MOVE / SWAP','settingsdistrictstatus',
+    'settingsvisit settings.graphics','settingsenter settings.graphics','wait 0.15','settingsroomstatus','leave',
+    'settingsdistrictclick ARRANGE GRAPHICS'
+)
+for($i=0;$i -lt 18;$i++) { $commands+='settingsdistrictclick NEXT PLOT' }
+$commands+=@('settingsdistrictclick MOVE / SWAP','settingsdistrictstatus',
+    'settingsvisit settings.media-tracks','settingsenter settings.media-tracks','settingsroomclick SHOW',
+    'wait 0.2','settingsroomstatus','settingsdistrictstatus','leave','quit')
+$log=Run-Scenario 'settings-district' $commands
+$screen=[System.Drawing.Bitmap]::new((Join-Path $root 'settings-console.png'))
+try {
+    $dark=0; $text=0; $pixels=0
+    for($y=[int]($screen.Height*0.09);$y -lt $screen.Height*0.66;$y+=4) {
+        for($x=[int]($screen.Width*0.33);$x -lt $screen.Width*0.66;$x+=4) {
+            $p=$screen.GetPixel($x,$y)
+            $v=[Math]::Max($p.R,[Math]::Max($p.G,$p.B))
+            if($v -lt 80) { $dark++ }
+            if($v -gt 140) { $text++ }
+            $pixels++
+        }
+    }
+    if($dark/$pixels -lt 0.85 -or $text/$pixels -lt 0.005 -or $text/$pixels -gt 0.15) {
+        throw "Console render lost its dark surface/contrasting text: $root"
+    }
+    Write-Output ("Console render: dark={0:P1}, text={1:P1}" -f ($dark/$pixels),($text/$pixels))
+} finally { $screen.Dispose() }
+Require $log 'groups=17 buildings=17'
+Require $log 'settings.graphics=1/'
+Require $log 'settings.sound=1/'
+Require $log 'settings.media-queue=1/'
+Require $log 'settings room settings.graphics.*CROSSHAIR=OFF'
+Require $log 'settings room settings.graphics.*CROSSHAIR=ON'
+Require $log 'settings room settings.graphics.*FOG DENSITY=1.75'
+Require $log 'settings room settings.graphics.*FOG DENSITY=1.60'
+Require $log 'settings room settings.graphics.*aisle_halfwidth=9.600000.*max_eye=9.600000'
+Require $log 'settings district city=0 interior=none'
+Require $log 'settings district city=1 interior=none'
+Require $log 'parity=1'
+Require $log 'bounds=-136,136,-2188,-124'
+Require $log 'bounds=-136,136,-460,-124'
+$log=Run-Scenario 'settings-plugin-consent' @('wait 2',"plugininstall $zip",
+    'settingsvisit settings.plugins','settingsenter settings.plugins','settingsroomclick DISTRICT TEST',
+    'pluginnotice','pluginstatus','settingsdistrictstatus','settingsclose','pluginstatus',
+    'settingsvisit settings.plugins','settingsenter settings.plugins','settingsroomclick DISTRICT TEST',
+    'pluginnotice','pluginclick DISTRICT TEST','pluginnotice','pluginstatus','settingsclose',
+    'settingsvisit settings.plugins','settingsenter settings.plugins','settingsroomclick REMOVE DISTRICT TEST',
+    'pluginnotice','settingsdistrictstatus','pluginclick REMOVE DISTRICT TEST','pluginnotice','quit')
+Require $log 'plugin notice.*ALLOW SCENE'
+Require $log 'com.example.downtown=off'
+Require $log 'com.example.downtown=on'
+Require $log 'CLICK REMOVE AGAIN'
+Require $log 'PLUGIN UNINSTALLED'
+Require $log 'settings district city=1 interior=none'
+$state=Join-Path $profile 'SciFiShell\settings-district.ini'
+$saved=[System.IO.File]::ReadAllText($state)
+$log=Run-Scenario 'settings-restart' @('wait 2','settingsdistrictstatus','settingsvisit settings.display',
+    'settingsenter settings.display','settingsroomstatus','leave','quit')
+if ([System.IO.File]::ReadAllText($state) -ne $saved) { throw "Settings placements changed on restart: $root" }
+Require $log 'settings room settings.display.*parity=1'
 Write-Output "Downtown normal Release integration passed. Artifacts: $root"

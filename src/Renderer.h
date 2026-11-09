@@ -50,6 +50,8 @@ public:
     void postWorld();
     void beginDesktopFrame();
     void present(bool vsync);
+    // Resolved app pixels only, including post effects/UI; call before present.
+    bool captureDesktop(Bitmap& bitmap, std::string& error);
 
     // Render into an externally owned target (VR swapchain image).
     void beginTarget(Diligent::ITextureView* rtv, Diligent::ITextureView* dsv, uint32_t w, uint32_t h, bool desktop = false);

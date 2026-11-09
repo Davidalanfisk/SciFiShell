@@ -61,6 +61,11 @@ public:
     bool downtownCustom(const std::string& id) const { return downtownModels_.count(id) != 0; }
     const DowntownRegion& downtownBounds() const { return downtownRegion_; }
     bool downtownLayoutClear() const; // Actual drive/route geometry must honor the occupied district.
+    void setSettingsDistrict(const std::map<std::string, int>& plots,
+                             const std::vector<std::pair<std::string, std::string>>& names);
+    bool pickSettingsBuilding(Vec3 origin, Vec3 dir, std::string& id) const;
+    bool settingsBuildingExit(const std::string& id, Vec3& pos) const;
+    const DowntownRegion& settingsDistrictBounds() const { return settingsRegion_; }
     // Returns -1 on unavailable/over-budget, 0 outside a grid cell, 1 with center, pitch and occupancy.
     int gameplayCell(float x, float z, double* result) const noexcept;
     bool gameplayTrackClearance(float x, float z, float radius, double* result) const;
@@ -101,6 +106,7 @@ public:
     float extent() const {
         float result = extent_;
         for (const auto& b : downtown_) result = std::max(result, downtownPlot(b.slot).z + 32);
+        for (const auto& b : settingsBuildings_) result = std::max(result, -downtownPlot(b.slot, true).z + 32);
         return result;
     }
     bool built() const { return built_; }
@@ -281,6 +287,12 @@ private:
     struct DowntownModel { uint64_t owner = 0, handle = 0; Mat4 fit; };
     std::vector<DowntownBuilding> downtown_;
     DowntownRegion downtownRegion_;
+    std::vector<DowntownBuilding> settingsBuildings_;
+    DowntownRegion settingsRegion_{0,-164,64,80};
+    Monument settingsDistrictLabel_;
+    void resizeDistrictGeometry();
+    void renderSettingsDistrict(Renderer& r, Vec3 eye);
+    void renderDistrictDoor(Renderer& r, DowntownBuilding& building, Vec3 plot, Vec3 tint, bool north);
     std::map<std::string, DowntownModel> downtownModels_;
     uint64_t downtownOwner_ = UINT64_MAX;
     Monument downtownLabel_;

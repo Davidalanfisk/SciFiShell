@@ -64,6 +64,48 @@ room cards, consent cancellation/grant, failure access, swap/restart,
 uninstall/gap reuse and drive/bus clearance without activating the installed app. This is not a visual,
 physical-controller/VR or frame-rate benchmark.
 
+### Settings quarter (v0.9.25)
+
+`buildSettingsHub()` remains the source of truth for category and option definitions.
+`SettingsModel.h` shares their data/callback types and bounded 5%-step slider operation between
+the floating menu and room consoles. The district enumerates the complete platform-specific
+taxonomy, not a second hand-maintained settings list (17 groups on the Windows CEF build).
+The home menu retains its controls/style and adapts its column count so every category remains visible.
+
+`AppShellSettingsDistrict.cpp` registers stable `settings.<lowercase-hyphenated-group>` IDs and
+reuses `Downtown`'s atomic allocator with a separate `%LOCALAPPDATA%\SciFiShell\settings-district.ini`.
+North is -Z: Settings plot centers start at `(-96,-164)`, four columns at 64-unit pitch, growing northward.
+The floor/outline/label, storage packing, bus avoidance and native/scripted track clearance share
+the occupied bounds with a 40-unit margin. Settings shells are 24x16x24, twice their original
+linear dimensions; conservative collision envelopes include the facades and rooftop motifs.
+The southern region edge stays at -124, clear of Computer. Downtown retains its existing scale.
+A move to a distant plot retains deliberate gaps;
+resizing safely releases city occupants before storage/route/track regeneration.
+
+Rooms contain spatial live-value consoles, explicit +/- slider controls and an exit, without
+plugin-style group enable/delete controls. Ordinary value edits do not rebuild the room.
+Settings gallery dimensions double while screens and slider controls stay at ergonomic eye height.
+Opaque console textures use the sRGB unlit-image path, not the alpha-only text-mask material
+(which otherwise turns every opaque background pixel pale). Local dark screens preserve the
+user's city lighting and post effects. Scripted `shot <path>` captures the resolved GPU frame
+before presentation, so isolated private-desktop diagnostics never capture another desktop.
+A changed item taxonomy updates the gallery in place and clamps the visitor into its bounded aisle.
+Callbacks are copied before invocation because actions can rebuild menus or leave/destroy the room.
+Long permission/error notices use the existing Settings panel rather than truncating consent.
+Leaving a room cancels key capture, clears input/control state and disarms power confirmation.
+Switching the city off from Graphics safely leaves the gallery before removing city geometry.
+
+`SettingsModelTest` covers callback/value/confirmation parity, slider bounds, stable IDs,
+non-resetting value edits, menu category visibility and all northern plot bounds.
+`DowntownTest` also covers independent Settings placement persistence/migration/swaps.
+`RunDowntownIntegration.ps1` enters every actual group, checks item-card parity, tests a live
+Graphics toggle and slider, shared menu state, city-off evacuation, distant-plot resize/swap/restart,
+and package consent/removal through the Settings Plugins building, alongside the Downtown regression.
+It uses an isolated profile/private inactive desktop and never changes OS volume, pointer,
+power or personalisation settings. It also writes console/gallery/exterior diagnostic PNGs.
+Physical VR/controllers and the user's active view still require manual review; no installer
+or release is produced by these checks.
+
 Linux:
 ```
 sudo apt install build-essential cmake libsdl2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libvulkan-dev
