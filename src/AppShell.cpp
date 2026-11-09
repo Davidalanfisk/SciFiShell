@@ -182,6 +182,9 @@ bool AppShell::init() {
         return false;
     }
     const auto statePath = PluginManager::defaultStatePath();
+    downtown_ = std::make_unique<Downtown>(
+        statePath.empty() ? std::filesystem::path{} : statePath.parent_path() / "downtown.ini");
+    if (!downtown_->load()) std::fprintf(stderr, "%s\n", downtown_->error().c_str());
     gameplayConsent_ = std::make_unique<GameplayConsent>(
         statePath.empty() ? std::filesystem::path{} : statePath.parent_path() / "plugin-consents");
     pluginPackages_ = std::make_unique<PluginPackageStore>(
@@ -211,6 +214,7 @@ bool AppShell::init() {
     pluginPackages_->discover();
     if (!pluginPackages_->error().empty()) std::fprintf(stderr, "%s\n", pluginPackages_->error().c_str());
     plugins_.initialize();
+    syncDowntown();
     if (settings_.showCity) {
         city_->start();
         cityStarted_ = true;
@@ -346,6 +350,7 @@ bool AppShell::init() {
         if (deferred_) return;
         if (city_) { city_->markEntered(); city_->clearHover(); }
         deferred_ = [this, folder] {
+            evacuateDowntown();
             room_->load(folder);
             if (cityMode_) toggleCity(false);
             if (room_->building()) {
@@ -484,6 +489,7 @@ void AppShell::enterFileRoom() {
 }
 
 void AppShell::leaveFileRoom() {
+    evacuateDowntown();
     state_ = State::Menu;
     camera_ = Camera{};
     input_.setRelativeMouse(false);
@@ -630,10 +636,12 @@ void AppShell::buildSettingsHub() {
                                  openPanel(files2d_.get());
                                  files2d_->pickHandler = [this](const std::string& path) {
                                      const bool installed = pluginPackages_->install(std::filesystem::u8path(path));
+                                     syncDowntown();
                                      buildSettingsHub();
                                      openSettingsWin();
                                      settingsPanel_->openPage("PLUGINS");
-                                     settingsPanel_->setNotice(installed ? "PLUGIN INSTALLED - manage it in Plugins" : pluginPackages_->error());
+                                     settingsPanel_->setNotice(installed ? (downtown_->error().empty()
+                                         ? "PLUGIN INSTALLED - visit Settings > Downtown" : downtown_->error()) : pluginPackages_->error());
                                  };
                              }});
     for (const auto& plugin : plugins_.plugins()) {
@@ -659,29 +667,7 @@ void AppShell::buildSettingsHub() {
                                      return uninstallConfirm_ == id && std::chrono::steady_clock::now() < uninstallDeadline_
                                          ? std::string("CONFIRM REMOVE") : std::string();
                                  },
-                                 [this, id] {
-                                     if (uninstallConfirm_ != id || std::chrono::steady_clock::now() >= uninstallDeadline_) {
-                                         uninstallConfirm_ = id;
-                                         uninstallDeadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(15);
-                                         settingsPanel_->setNotice("CLICK REMOVE AGAIN WITHIN 15 SECONDS");
-                                         return;
-                                     }
-                                     uninstallConfirm_.clear();
-                                     if (!plugins_.setEnabled(id, false)) { settingsPanel_->setNotice(plugins_.error()); return; }
-                                     if (gameplay_.count(id)) {
-                                         std::string error;
-                                         if (!gameplayConsent_->revoke(id, error)) { settingsPanel_->setNotice(error); return; }
-                                     }
-                                     if (!pluginPackages_->uninstall(id)) { settingsPanel_->setNotice(pluginPackages_->error()); return; }
-                                     if (!plugins_.remove(id)) { settingsPanel_->setNotice(plugins_.error()); return; }
-                                     gameplay_.erase(id);
-                                     pluginScripts_.erase(id);
-                                     pluginMessages_.erase(id);
-                                     installedPluginIds_.erase(id);
-                                     buildSettingsHub();
-                                     settingsPanel_->openPage("PLUGINS");
-                                     settingsPanel_->setNotice("PLUGIN UNINSTALLED");
-                                 }});
+                                 [this, id] { removePlugin(id); }});
         }
         const auto game = gameplay_.find(id);
         std::string permissions;
@@ -699,6 +685,9 @@ void AppShell::buildSettingsHub() {
         if (game != gameplay_.end()) {
             plugins.items.push_back({"DISABLE " + plugin.name, "Stop this gameplay plugin, including after an error",
                                      nullptr, [this, id] {
+                                         const bool inside = !downtownInterior_.empty();
+                                         evacuateDowntown();
+                                         if (inside) { settingsPanel_->close(); openSettingsWin(); settingsPanel_->openPage("PLUGINS"); }
                                          gameplayConfirm_.clear();
                                          if (!plugins_.setEnabled(id, false)) settingsPanel_->setNotice(plugins_.error());
                                          else settingsPanel_->setNotice("PLUGIN DISABLED");
@@ -710,25 +699,48 @@ void AppShell::buildSettingsHub() {
                                          return p.enabled && !p.running ? std::string("ERROR") : onOff(p.running);
                                      return std::string("UNAVAILABLE");
                                  },
-                                 [this, id] {
-                                     if (gameplay_.count(id)) { toggleGameplay(id); return; }
-                                     for (const auto& p : plugins_.plugins()) {
-                                         if (p.id == id) {
-                                             if (!plugins_.setEnabled(id, !p.enabled)) settingsPanel_->setNotice(plugins_.error());
-                                             else {
-                                                 if (!p.enabled) pluginMessages_.erase(id);
-                                                 settingsPanel_->setNotice(p.running ? "PLUGIN ENABLED" : "PLUGIN DISABLED");
-                                             }
-                                             break;
-                                         }
-                                     }
-                                 }});
+                                 [this, id] { togglePlugin(id); }});
     }
     plugins.items.push_back({"PLUGIN STORAGE", "Status of plugin preferences",
                              [this] { return plugins_.error().empty() ? std::string("OK") : plugins_.error(); }, nullptr});
     plugins.items.push_back({"PACKAGES", "Discovery and install status",
                              [this] { return pluginPackages_->error().empty() ? std::string("OK") : pluginPackages_->error(); }, nullptr});
     cats.push_back(std::move(plugins));
+
+    SettingsCategory district{"DOWNTOWN", "South of Computer - installed plugins keep buildings even when off", "CITY", {}};
+    district.items.push_back({"PLOT STORAGE", "Arrangements survive restart; new installs fill gaps",
+        [this] { return downtown_->error().empty() ? std::string("OK") : downtown_->error(); }, nullptr});
+    district.items.push_back({"SELECTED PLUGIN", "Select an ARRANGE card below first",
+        [this] { return downtownSelected_.empty() ? std::string("NONE") : downtownSelected_; }, nullptr});
+    district.items.push_back({"PREVIOUS PLOT", "Choose a destination plot",
+        [this] { return std::to_string(downtownTarget_+1); },
+        [this] { downtownTarget_ = (downtownTarget_+kDowntownSlots-1)%kDowntownSlots; }});
+    district.items.push_back({"NEXT PLOT", "Choose a destination plot",
+        [this] {
+            std::string occupant = "EMPTY";
+            for (const auto& [id, slot] : downtown_->placements()) if (slot == downtownTarget_) occupant = id;
+            return std::to_string(downtownTarget_+1) + " - " + occupant;
+        }, [this] { downtownTarget_ = (downtownTarget_+1)%kDowntownSlots; }});
+    district.items.push_back({"MOVE / SWAP", "Move selected plugin here; swap if occupied",
+        nullptr, [this] { moveDowntown(); }});
+    for (const auto& plugin : plugins_.plugins()) {
+        const auto id = plugin.id;
+        if (!installedPluginIds_.count(id)) continue;
+        district.items.push_back({"VISIT " + plugin.name, "Go outside the host entrance; aim and click to enter",
+            [this, id] {
+                const auto it = downtown_->placements().find(id);
+                return it == downtown_->placements().end() ? std::string("UNAVAILABLE") : "PLOT " + std::to_string(it->second+1);
+            }, [this, id] { visitDowntown(id); }});
+        district.items.push_back({"ARRANGE " + plugin.name, "Then choose previous/next plot and MOVE / SWAP",
+            [this, id] { const auto it = pluginMessages_.find(id); return it == pluginMessages_.end() ? std::string() : it->second; },
+            [this, id] {
+                downtownSelected_ = id;
+                downtownTarget_ = downtown_->placements().at(id);
+                settingsPanel_->openPage("DOWNTOWN");
+                settingsPanel_->setNotice("SELECTED " + id + " - CHOOSE PLOT THEN MOVE / SWAP");
+            }});
+    }
+    cats.push_back(std::move(district));
 
 #ifdef _WIN32
     // Windows options, all native: no hosted Windows pages.
@@ -1461,6 +1473,7 @@ bool AppShell::scriptExec(const std::string& line) {
         std::getline(is, path);
         while (!path.empty() && path.front() == ' ') path.erase(path.begin());
         const bool ok = pluginPackages_->install(std::filesystem::u8path(path));
+        syncDowntown();
         scriptLog(ok ? "plugin install ok" : "plugin install failed: " + pluginPackages_->error());
         buildSettingsHub();
     } else if (cmd == "pluginmessage") {
@@ -1564,6 +1577,52 @@ bool AppShell::scriptExec(const std::string& line) {
 #endif
     } else if (cmd == "pluginnotice") {
         scriptLog("plugin notice " + settingsPanel_->notice());
+    } else if (cmd == "downtownstatus") {
+        std::string status = "downtown city=" + std::to_string(cityMode_) + " interior=" +
+            (downtownInterior_.empty() ? "none" : downtownInterior_) + " cards=" + std::to_string(room_->cardCount());
+        status += " built=" + std::to_string(city_->built()) + " layout_clear=" + std::to_string(city_->downtownLayoutClear());
+        for (const auto& [id, slot] : downtown_->placements())
+            status += " " + id + "=" + std::to_string(slot+1) + (city_->downtownCustom(id) ? "(custom)" : "(default)");
+        if (cityMode_) {
+            Vec3 resolved = camera_.position;
+            city_->resolve(resolved, 0.8f, 1.7f);
+            status += " collision_safe=" + std::to_string(length(resolved-camera_.position) < 0.01f);
+        }
+        status += " storage=" + (downtown_->error().empty() ? std::string("ok") : downtown_->error());
+        scriptLog(status);
+    } else if (cmd == "downtownclick") {
+        std::string title;
+        std::getline(is, title);
+        while (!title.empty() && title.front() == ' ') title.erase(title.begin());
+        if (!settingsPanel_->isOpen()) { buildSettingsHub(); openSettingsWin(); }
+        if (!settingsPanel_->scriptActivate("DOWNTOWN", title)) scriptLog("downtown settings item not found: " + title);
+    } else if (cmd == "downtownenter") {
+        std::string id;
+        is >> id;
+        Vec3 exterior;
+        if (!cityMode_ || !city_->downtownExit(id, exterior)) scriptLog("downtown entrance unavailable");
+        else {
+            std::string picked;
+            if (city_->pickDowntown(exterior, {0,0,1}, picked) && picked == id) enterDowntown(id);
+            else scriptLog("downtown entrance pick failed");
+        }
+    } else if (cmd == "downtowncard") {
+        const int index = static_cast<int>(num(0));
+        if (downtownInterior_.empty() || index < 0 ||
+            index >= room_->cardCount()) scriptLog("downtown card unavailable");
+        else {
+            int cardIndex = 0;
+            for (auto& child : room_->root().children()) {
+                if (!child->isCard()) continue;
+                if (cardIndex++ == index) {
+                    const Vec3 direction = normalize(child->position-camera_.position);
+                    if (pickNode(room_->root(), camera_.position, direction) != child.get())
+                        scriptLog("downtown card pick blocked");
+                    else room_->activate(child.get());
+                    break;
+                }
+            }
+        }
     } else if (cmd == "pluginclick") {
         std::string title;
         std::getline(is, title);
@@ -1776,6 +1835,7 @@ void AppShell::scriptTick(double dt) {
 }
 
 void AppShell::toggleCity(bool on) {
+    if (on && !downtownInterior_.empty()) { evacuateDowntown(); return; }
     if (!city_ || on == cityMode_) return;
     if (on && !settings_.showCity) {
         menu_->setStatus("CITY IS OFF - press F9 or use Settings > Graphics to turn it on");
@@ -1812,6 +1872,7 @@ void AppShell::toggleCity(bool on) {
 }
 
 void AppShell::setCityEnabled(bool on) {
+    if (!on) evacuateDowntown();
     settings_.showCity = on;
     settings_.save();
     if (on) {
@@ -2849,7 +2910,14 @@ void AppShell::tick(double dt) {
                 std::string path, name;
                 std::vector<Vec3> routePath;
                 int standKind = -1;
-                if (!overWin && city_ && !riding_ && city_->holding() && pointerSelect) {
+                std::string downtownId;
+                if (!overWin && city_ && !riding_ && city_->pickDowntown(o, d, downtownId)) {
+                    hudTarget_ = "ENTER PLUGIN BUILDING - " + downtownId;
+                    if ((pointerSelect || keySelect) && !deferred_) {
+                        deferred_ = [this, downtownId] { enterDowntown(downtownId); };
+                        deferDelay_ = 3;
+                    }
+                } else if (!overWin && city_ && !riding_ && city_->holding() && pointerSelect) {
                     city_->throwHeld(head_.eye);
                     hudTarget_.clear();
                 } else if (!overWin && city_ && !riding_ && !city_->holding() && city_->pickStand(o, d, standKind)) {

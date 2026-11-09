@@ -98,6 +98,16 @@ private:
     bool syntheticGameplayFocus_ = false;
 #endif
     void toggleGameplay(const std::string& id);
+    void togglePlugin(const std::string& id);
+    void removePlugin(const std::string& id);
+    void syncDowntown();
+    void enterDowntown(const std::string& id);
+    void evacuateDowntown();
+    void visitDowntown(const std::string& id);
+    void moveDowntown();
+    std::unique_ptr<Downtown> downtown_;
+    std::string downtownInterior_, downtownSelected_;
+    int downtownTarget_ = 0;
     void tickGameplay(double dt, const FrameInput& input, const PadState& pad, bool allowInput);
     uint64_t gameplayClickTarget(const Vec3& origin, const Vec3& direction) const;
     void releaseGameplayControl();

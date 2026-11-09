@@ -22,6 +22,8 @@ void City::buildTrack() {
     std::vector<Box> monuments;
     monumentBoxes(monuments);
     for (const Box& b : monuments) obstacles.push_back({b.x0, b.x1, b.z0, b.z1, b.y1});
+    // Reserve all future plots too, so installing a package cannot invalidate an occupied track.
+    obstacles.push_back({kDowntownWest, kDowntownEast, kDowntownNorth, kDowntownSouth, 16});
     for (const Platform& pl : platforms_) {
         if (pl.gone && pl.grow <= 0.0f) continue;
         obstacles.push_back({pl.cx - pl.side * 0.5f, pl.cx + pl.side * 0.5f,

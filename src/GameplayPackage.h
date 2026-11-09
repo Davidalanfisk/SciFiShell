@@ -13,6 +13,7 @@ namespace sf {
 
 struct GameplayPackage {
     std::string id, name, version, author, description, script;
+    std::string downtownModel; // Optional validated assets/*.glb; rendered by the host even when disabled.
     bool scene = false;
     bool world = false;
     bool layout = false;

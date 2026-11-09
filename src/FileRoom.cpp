@@ -364,6 +364,7 @@ CardNode* FileRoom::addCard(std::unique_ptr<CardNode> card) {
 }
 
 void FileRoom::loadEmpty() {
+    pluginRoom_ = false;
     building_ = false;
     inRoom_ = false;
     path_.clear();
@@ -371,7 +372,51 @@ void FileRoom::loadEmpty() {
     resetScene();
 }
 
+void FileRoom::loadPlugin(const std::string& name, const std::vector<std::string>& details,
+                          std::function<void()> toggle, std::function<void()> remove,
+                          std::function<void()> arrange) {
+    loadEmpty();
+    pluginRoom_ = true;
+    building_ = true;
+    loaded_ = true;
+    slots_.clear();
+    walk_ = {{-6.5f, 6.5f, -6.5f, 5.5f}};
+    rows_ = 0;
+    levels_ = roomFloors_ = 1;
+    roomTop_ = 5;
+    spawnPending_ = false;
+    extent_ = 10;
+    auto block = [&](Vec3 at, Vec3 size) {
+        auto wall = std::make_unique<BlockNode>(renderer_, Vec3{0.06f,0.10f,0.16f}, false);
+        wall->position = at; wall->scale = size; root_->add(std::move(wall));
+    };
+    block({0,2.5f,-7}, {14,5,0.2f});
+    block({-7,2.5f,0}, {0.2f,5,14});
+    block({7,2.5f,0}, {0.2f,5,14});
+    block({0,2.5f,7}, {14,5,0.2f});
+    block({0,5,0}, {14,0.2f,14});
+    auto card = [&](const std::string& title, float x, float z, std::function<void()> action) {
+        DirEntry entry;
+        auto c = std::make_unique<CardNode>(renderer_, entry, title);
+        c->position = {x,1.8f,z};
+        c->scale = {2.8f,2.8f,0.08f};
+        c->onActivate = std::move(action);
+        return addCard(std::move(c));
+    };
+    auto* info = card(name, 0, -6.5f, [] {});
+    info->position.y = 3.4f;
+    info->scale = {6,2.4f,0.08f};
+    info->tall = true;
+    info->setInfo(details);
+    card("ON / OFF", -4, -4, std::move(toggle));
+    card("DELETE PLUGIN", 0, -4, std::move(remove));
+    card("REARRANGE", 4, -4, std::move(arrange));
+    card("EXIT TO DOWNTOWN", 0, 5, [this] { if (onExitBuilding) onExitBuilding(); });
+    cards_.back()->yaw = kPi;
+}
+
 void FileRoom::load(std::string path) {
+    pluginRoom_ = false;
     building_ = false;
     inRoom_ = false;
     loaded_ = true;
@@ -447,6 +492,7 @@ void FileRoom::load(std::string path) {
 
 void FileRoom::refresh() {
     if (!loaded_) return;
+    if (pluginRoom_) return;
     if (inRoom_) enterRoom(roomIdx_, false);
     else load(path_);
 }
@@ -1166,6 +1212,7 @@ float FileRoom::floorHeight(const Vec3& p) const {
 }
 
 float FileRoom::maxEye() const {
+    if (pluginRoom_) return 4.6f;
     if (inRoom_) return std::max(3.5f, roomTop_);
     return levels_ > 1 ? (levels_ - 1) * kLevelH + 3.5f : 6.0f;
 }
@@ -1331,6 +1378,11 @@ bool FileRoom::opensRoom(Node* node) const {
 std::string FileRoom::activate(Node* node) {
     auto* card = (node && node->isCard()) ? static_cast<CardNode*>(node) : nullptr;
     if (!card) return "";
+    if (card->onActivate) {
+        auto action = card->onActivate;
+        action();
+        return "DOWNTOWN - plugin management";
+    }
     if (card->roomIndex >= 0) {
         const int idx = card->roomIndex;
         const std::string name = rooms_[idx].name;

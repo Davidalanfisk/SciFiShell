@@ -40,7 +40,7 @@ public:
                     if (!take(']')) return false;
                 }
             } else if (!string(value.text)) return false;
-            if (out.size() >= 10 || !out.emplace(key, value).second) return false;
+            if (out.size() >= 11 || !out.emplace(key, value).second) return false;
             if (take('}')) return finish();
         } while (take(','));
         return false;
@@ -182,7 +182,8 @@ bool PluginPackageStore::parseGameplayManifest(const std::string& text, Gameplay
     if (text.size() > kMaxBytes || !Parser(text).parse(fields)) { error = "Invalid gameplay manifest JSON"; return false; }
     const char* keys[] = {"id", "name", "version", "author", "description", "entry", "type",
                           "platforms", "permissions", "api_version"};
-    if (fields.size() != sizeof(keys) / sizeof(keys[0])) { error = "Unexpected or missing gameplay manifest fields"; return false; }
+    const bool downtown = fields.count("downtown_model") != 0;
+    if (fields.size() != sizeof(keys) / sizeof(keys[0]) + (downtown ? 1 : 0)) { error = "Unexpected or missing gameplay manifest fields"; return false; }
     for (const char* key : keys) if (!fields.count(key)) { error = "Missing gameplay manifest field"; return false; }
     for (const auto& [key, value] : fields)
         if (value.array != (key == "platforms" || key == "permissions")) { error = "Invalid gameplay manifest field type"; return false; }
@@ -228,6 +229,15 @@ bool PluginPackageStore::parseGameplayManifest(const std::string& text, Gameplay
     out.view = view;
     out.sound = sound;
     out.hud = hud;
+    if (downtown) {
+        const auto& model = fields["downtown_model"].text;
+        if (model.size() < 12 || model.size() > 120 || model.rfind("assets/", 0) != 0 ||
+            model.substr(model.size() - 4) != ".glb" || model.find("..") != std::string::npos ||
+            model.find('\\') != std::string::npos) {
+            error = "downtown_model must name a bounded assets/*.glb package asset"; return false;
+        }
+        out.downtownModel = model;
+    }
     error.clear();
     return true;
 }

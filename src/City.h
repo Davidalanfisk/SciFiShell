@@ -3,6 +3,7 @@
 // top-level folder is a city block and each of its subfolders a building. Built from the CityData snapshot; grows out of
 // the floor and reacts to filesystem changes.
 #include <memory>
+#include <algorithm>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -12,6 +13,8 @@
 #include "NativePlugin.h"
 #include "TrackSamplingApi.h"
 #include "ParksSceneApi.h"
+#include "Downtown.h"
+#include "GameplayModel.h"
 
 namespace sf {
 
@@ -50,6 +53,13 @@ public:
     bool exitSpawn(Vec3& pos) const;
     bool debugPond(Vec3& pos);  // nearest pond park to the hub, for scripted checks
     bool debugStreet(Vec3& pos) const;  // debugging aid: street in front of the first grown tower
+    void setDowntown(const std::map<std::string, int>& plots,
+                     const std::vector<std::pair<std::string, std::string>>& names);
+    bool setDowntownModel(const std::string& id, const GameplayModel& model, std::string& error);
+    bool pickDowntown(Vec3 origin, Vec3 dir, std::string& id) const;
+    bool downtownExit(const std::string& id, Vec3& pos) const;
+    bool downtownCustom(const std::string& id) const { return downtownModels_.count(id) != 0; }
+    bool downtownLayoutClear() const; // Diagnostic: actual drive/route geometry must honor the reserved corridor.
     // Returns -1 on unavailable/over-budget, 0 outside a grid cell, 1 with center, pitch and occupancy.
     int gameplayCell(float x, float z, double* result) const noexcept;
     bool gameplayTrackClearance(float x, float z, float radius, double* result) const;
@@ -87,7 +97,11 @@ public:
     bool takeSfx(SfxEvent& e) { if (sfxQ_.empty()) return false; e = sfxQ_.front(); sfxQ_.erase(sfxQ_.begin()); return true; }
     bool takeBlast(Vec3& impulse);  // a blast that reached the player since the last call
 
-    float extent() const { return extent_; }
+    float extent() const {
+        float result = extent_;
+        for (const auto& b : downtown_) result = std::max(result, downtownPlot(b.slot).z + 32);
+        return result;
+    }
     bool built() const { return built_; }
     bool settled() const {  // every drive scanned and its buildings laid out
         if (!built_ || snap_.empty()) return false;
@@ -258,6 +272,17 @@ private:
     uint64_t lastRebuildVersion_ = 0;
     double lastRefresh_ = 0;
     std::vector<CityDrive> snap_;
+    struct DowntownBuilding {
+        std::string id, name;
+        int slot = 0;
+        std::shared_ptr<GpuLabel> label;
+    };
+    struct DowntownModel { uint64_t owner = 0, handle = 0; Mat4 fit; };
+    std::vector<DowntownBuilding> downtown_;
+    std::map<std::string, DowntownModel> downtownModels_;
+    uint64_t downtownOwner_ = UINT64_MAX;
+    Monument downtownLabel_;
+    void renderDowntown(Renderer& r, Vec3 eye);
 };
 
 }  // namespace sf

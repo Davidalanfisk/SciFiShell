@@ -599,6 +599,50 @@ int main() {
     const std::string gameplayManifest =
         R"({"id":"com.example.game","name":"GAME","version":"1.0.0","author":"Example","description":"Example game","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","world"],"api_version":"1"})";
     sf::GameplayPackage game;
+    const auto downtownManifest = gameplayManifest.substr(0, gameplayManifest.size()-1) +
+        R"(,"downtown_model":"assets/garage.glb"})";
+    check(sf::readGameplayPackage(archive({{"plugin.json", downtownManifest}, {"scripts/main.lua", "return {}"},
+                                          {"assets/garage.glb", modelData}}), game, error) &&
+          game.downtownModel == "assets/garage.glb", "optional Downtown model validated without script execution");
+    auto downtownGeometry = [&](size_t vertices, size_t triangles) {
+        std::string data = binary.substr(0, 36);
+        data.resize(vertices*12, '\0');
+        const auto offset = data.size();
+        for (size_t i = 0; i < triangles; ++i) data.append("\0\1\2", 3);
+        while (data.size()%4) data += '\0';
+        const std::string json =
+            "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":" + std::to_string(data.size()) +
+            "}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":" + std::to_string(offset) +
+            "},{\"buffer\":0,\"byteOffset\":" + std::to_string(offset) + ",\"byteLength\":" + std::to_string(triangles*3) +
+            "}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":" + std::to_string(vertices) +
+            ",\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5121,\"count\":" + std::to_string(triangles*3) +
+            ",\"type\":\"SCALAR\"}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],"
+            "\"nodes\":[{\"mesh\":0}],\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+        return archive({{"plugin.json", downtownManifest}, {"scripts/main.lua", "return {}"},
+                        {"assets/garage.glb", glb(json, data)}});
+    };
+    check(sf::readGameplayPackage(downtownGeometry(8192,8192), game, error),
+          "Downtown accepts inclusive 8192 vertex and triangle limits");
+    check(!sf::readGameplayPackage(downtownGeometry(8193,1), game, error) &&
+          error.find("Downtown model exceeds") != std::string::npos, "Downtown rejects 8193 vertices");
+    check(!sf::readGameplayPackage(downtownGeometry(3,8193), game, error) &&
+          error.find("Downtown model exceeds") != std::string::npos, "Downtown rejects 8193 triangles");
+    check(!sf::readGameplayPackage(archive({{"plugin.json", downtownManifest},
+                                           {"scripts/main.lua", "return {}"}}), game, error) &&
+          error.find("Downtown model is missing") != std::string::npos, "missing Downtown model rejected");
+    auto invalidDowntown = gameplayManifest.substr(0, gameplayManifest.size()-1) +
+        R"(,"downtown_model":"assets/../garage.glb"})";
+    check(!sf::PluginPackageStore::parseGameplayManifest(invalidDowntown, game, error), "Downtown traversal rejected");
+    invalidDowntown = gameplayManifest.substr(0, gameplayManifest.size()-1) +
+        R"(,"downtown_model":["assets/garage.glb"]})";
+    check(!sf::PluginPackageStore::parseGameplayManifest(invalidDowntown, game, error), "Downtown field type enforced");
+    {
+        std::ifstream in(fs::path(SCIFI_TEST_ASSETS) / "models" / "Duck.glb", std::ios::binary);
+        const std::string duck((std::istreambuf_iterator<char>(in)), {});
+        check(!sf::readGameplayPackage(archive({{"plugin.json", downtownManifest}, {"scripts/main.lua", "return {}"},
+                                               {"assets/garage.glb", duck}}), game, error) &&
+              error.find("256px") != std::string::npos, "Downtown texture budget stricter than gameplay model budget");
+    }
     check(sf::readGameplayPackage(archive({{"plugin.json", gameplayManifest}, {"scripts/main.lua", code},
                                           {"assets/nodes.glb", glb(nodesJson, binary)}}), game, error) &&
           game.models.at("assets/nodes.glb").vertices[24] == 5,
@@ -611,6 +655,7 @@ int main() {
                                       {"assets/car.glb", modelData}, {"assets/car.png", validPng}});
     check(sf::readGameplayPackage(fullGameZip, game, error) && game.id == "com.example.game" &&
           game.scene && game.world && game.script == "return {}" &&
+          game.downtownModel.empty() &&
           game.models.at("assets/car.glb").indices.size() == 3 &&
           game.textures.at("assets/car.png").rgba.size() == 4, "validate gameplay package and assets");
     const std::string sceneScript =

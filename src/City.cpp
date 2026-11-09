@@ -80,12 +80,124 @@ City::City(Renderer& renderer) : renderer_(renderer) {
     dummy_ = renderer.createLabel(b);
 }
 
-City::~City() { data_.stop(); }
+City::~City() {
+    for (const auto& [id, model] : downtownModels_) renderer_.releaseGameplayModels(model.owner);
+    data_.stop();
+}
+
+void City::setDowntown(const std::map<std::string, int>& plots,
+                       const std::vector<std::pair<std::string, std::string>>& names) {
+    downtown_.clear();
+    for (const auto& [id, name] : names) {
+        const auto it = plots.find(id);
+        if (it == plots.end()) continue;
+        downtown_.push_back({id, name, it->second, {}});
+    }
+    for (auto it = downtownModels_.begin(); it != downtownModels_.end();) {
+        if (!plots.count(it->first)) {
+            renderer_.releaseGameplayModels(it->second.owner);
+            it = downtownModels_.erase(it);
+        } else ++it;
+    }
+}
+
+bool City::setDowntownModel(const std::string& id, const GameplayModel& model, std::string& error) {
+    Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+    for (size_t i = 0; i + 7 < model.vertices.size(); i += 8) {
+        lo.x = std::min(lo.x, model.vertices[i]); hi.x = std::max(hi.x, model.vertices[i]);
+        lo.y = std::min(lo.y, model.vertices[i+1]); hi.y = std::max(hi.y, model.vertices[i+1]);
+        lo.z = std::min(lo.z, model.vertices[i+2]); hi.z = std::max(hi.z, model.vertices[i+2]);
+    }
+    const float span = std::max({hi.x-lo.x, hi.y-lo.y, hi.z-lo.z});
+    if (!std::isfinite(span) || span < 0.0001f) { error = "Degenerate Downtown model"; return false; }
+    const float scale = 12.0f / span;
+    DowntownModel gpu;
+    gpu.owner = downtownOwner_--;
+    gpu.fit = Mat4::scale({scale, scale, scale}) *
+              Mat4::translate({-(hi.x+lo.x)*0.5f, -lo.y, -(hi.z+lo.z)*0.5f});
+    if (!renderer_.createGameplayModel(gpu.owner, model, nullptr, gpu.handle, error)) return false;
+    const auto old = downtownModels_.find(id);
+    if (old != downtownModels_.end()) renderer_.releaseGameplayModels(old->second.owner);
+    downtownModels_[id] = gpu;
+    return true;
+}
+
+bool City::downtownExit(const std::string& id, Vec3& pos) const {
+    for (const auto& b : downtown_) if (b.id == id) {
+        const auto p = downtownPlot(b.slot);
+        pos = {p.x, 1.7f, p.z - 12};
+        resolve(pos, 0.8f, 1.7f);
+        pos.y = floorAt(pos, 0.8f, 1.7f) + 1.7f;
+        return true;
+    }
+    return false;
+}
+
+bool City::downtownLayoutClear() const {
+    for (const auto& p : platforms_)
+        if (!(p.gone && p.grow <= 0) && downtownIntersects(p.cx, p.cz, p.side*0.5f)) return false;
+    if (!netBuilt_ && built_) buildNetwork();
+    for (const auto& route : net_)
+        for (size_t i = 1; i < route.pts.size(); ++i) {
+            const auto a = route.pts[i-1], b = route.pts[i];
+            if (std::max(a.x,b.x)+4 > kDowntownWest && std::min(a.x,b.x)-4 < kDowntownEast &&
+                std::max(a.z,b.z)+4 > kDowntownNorth && std::min(a.z,b.z)-4 < kDowntownSouth) return false;
+        }
+    return true;
+}
+
+bool City::pickDowntown(Vec3 o, Vec3 d, std::string& id) const {
+    float best = 12.0f;
+    for (const auto& b : downtown_) {
+        const auto p = downtownPlot(b.slot);
+        if (std::fabs(d.z) < 1e-6f) continue;
+        const float t = (p.z - 9 - o.z) / d.z;
+        const float x = o.x + d.x*t, y = o.y + d.y*t;
+        if (t >= 0 && t < best && std::fabs(x-p.x) < 2 && y >= 0 && y <= 4) {
+            id = b.id; best = t;
+        }
+    }
+    return best < 12.0f;
+}
+
+void City::renderDowntown(Renderer& r, Vec3 eye) {
+    const auto& th = currentTheme();
+    const auto region = downtownRegion();
+    // The same glass-pane region floor and colored rim as storage districts, below the roads and plots.
+    renderBox(r, {region.x, 0.01f, region.z}, {region.width, 0.02f, region.depth},
+              th.alt, 0.5f, 6, 1, 1, 0);
+    float end = kDowntownNorth + 20;
+    for (const auto& b : downtown_) end = std::max(end, downtownPlot(b.slot).z + 16);
+    renderBox(r, {0, 0.025f, (80+end)*0.5f}, {8, 0.05f, end-80}, th.accent, 0, 5, 1, 0, 0);
+    moduleLabel(r, downtownLabel_, "DOWNTOWN - PLUGIN DISTRICT", {region.x, 5, kDowntownNorth-2}, 2, eye, th.alt);
+    for (auto& b : downtown_) {
+        const auto p = downtownPlot(b.slot);
+        if (std::fabs(eye.z-p.z) > 400*drawScale_ || std::fabs(eye.x-p.x) > 400*drawScale_) continue;
+        renderBox(r, {p.x, 0.025f, p.z}, {28, 0.05f, 28}, th.alt*0.4f, 0, 6, 1, 0, 0);
+        const auto model = downtownModels_.find(b.id);
+        if (model == downtownModels_.end()) {
+            renderBox(r, {p.x, 4, p.z}, {12, 8, 12}, th.accent*0.65f, 0.5f, 3, 1, 0, 0);
+        } else if (!r.drawGameplayModel(model->second.owner, model->second.handle,
+                                       Mat4::translate({p.x, 0, p.z}) * model->second.fit, {1,1,1})) {
+            std::fprintf(stderr, "Downtown model draw failed: %s\n", b.id.c_str());
+        }
+        // The separate host portal is always in front of (and outside) the bounded custom geometry.
+        renderBox(r, {p.x-2, 2, p.z-9}, {0.15f,4,0.2f}, th.alt, 0, 5, 1, 0, 0);
+        renderBox(r, {p.x+2, 2, p.z-9}, {0.15f,4,0.2f}, th.alt, 0, 5, 1, 0, 0);
+        renderBox(r, {p.x, 4, p.z-9}, {4.15f,0.15f,0.2f}, th.alt, 0, 5, 1, 0, 0);
+        if (!b.label && labelBudget_ > 0) {
+            b.label = makeText(std::to_string(b.slot+1) + "  " + b.name + " - ENTER");
+            --labelBudget_;
+        }
+        if (b.label) drawLabel(r, *b.label, {p.x, 5, p.z-9}, 0.8f, eye, th.accent);
+    }
+}
 
 bool City::gameplayTrackClearance(float x, float z, float radius, double* result) const {
     if (!built_ || !result) return false;
     std::vector<Box> monuments;
     monumentBoxes(monuments);
+    monuments.push_back({kDowntownWest, kDowntownEast, 16, kDowntownNorth, kDowntownSouth});
     return sf::gameplayTrackClearance(platforms_, monuments, x, z, radius, *result);
 }
 
@@ -278,6 +390,7 @@ void City::layoutPlatforms(const std::vector<CityDrive>& snap, int first, int co
                 const float a = target + off;
                 const float x = r * std::cos(a), z = r * std::sin(a);
                 bool ok = std::fabs(x) > kHubHalf + half + kClear || std::fabs(z) > kHubHalf + half + kClear;
+                if (downtownIntersects(x, z, half, kClear)) ok = false;
                 for (size_t q = 0; ok && q < placed.size(); ++q) {
                     const int j = placed[q];
                     const float need = half + platforms_[j].side * 0.5f + kClear;
@@ -1360,6 +1473,7 @@ void City::render(Renderer& r, Vec3 eye) {
     lodEye_ = eye;
     labelBudget_ = 2;
     pendingLabels_.clear();
+    renderDowntown(r, eye);
     {
         // The computer's own components stand on a region floor of their own; it is drawn first so it never covers them.
         const float g0 = ease(coreGrow_[0]);
@@ -1675,6 +1789,7 @@ void City::buildNetwork() const {
         stamp(pl.cx - h - 3.5f, pl.cx + h + 3.5f, pl.cz - h - 3.5f, pl.cz + h + 3.5f, [&](int c) { inf[c] = (inf[c] == -1 || inf[c] == j) ? j : -3; });
     }
     for (const Rect& r : solids) stamp(r.x0 - 3.5f, r.x1 + 3.5f, r.z0 - 3.5f, r.z1 + 3.5f, [&](int c) { solid[c] = 1; });
+    stamp(kDowntownWest-4, kDowntownEast+4, kDowntownNorth-4, kDowntownSouth+4, [&](int c) { solid[c] = 1; });
     stamp(-13, 13, -13, 13, [&](int c) { solid[c] = 1; });
     auto markPoly = [&](const Poly& pts) {
         const float hw = 1.5f + cs * 0.5f - 0.01f;
@@ -1899,6 +2014,11 @@ void City::monumentBoxes(std::vector<Box>& out) const {
 
 void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const {
     monumentBoxes(boxes);
+    for (const auto& b : downtown_) {
+        const auto plot = downtownPlot(b.slot);
+        if (std::fabs(p.x-plot.x) > 8+rad || std::fabs(p.z-plot.z) > 8+rad) continue;
+        boxes.push_back({plot.x-6, plot.x+6, downtownModels_.count(b.id) ? 12.0f : 8.0f, plot.z-6, plot.z+6});
+    }
     if (car_.show && car_.solid && car_.spawn > 0.9f) {  // a parked car is a solid, climbable object
         const float sx = -std::sin(car_.yaw), sz = -std::cos(car_.yaw);
         for (int k = -2; k <= 2; ++k) {

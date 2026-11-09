@@ -8,6 +8,17 @@
 
 namespace sf {
 namespace {
+bool validateDowntown(const GameplayPackage& package, std::string& error) {
+    if (package.downtownModel.empty()) return true;
+    const auto it = package.models.find(package.downtownModel);
+    if (it == package.models.end()) { error = "Downtown model is missing from package assets"; return false; }
+    const auto& model = it->second;
+    if (model.vertices.empty() || model.vertices.size() / 8 > 8192 || model.indices.size() > 24576 ||
+        model.embeddedTexture.width > 256 || model.embeddedTexture.height > 256) {
+        error = "Downtown model exceeds 8192 vertices/triangles or 256px embedded texture"; return false;
+    }
+    return true;
+}
 bool decodeAsset(const std::string& path, const std::string& bytes, GameplayPackage& loaded,
                  size_t& decoded, std::string& error) {
     std::string assetError;
@@ -55,6 +66,7 @@ bool readGameplayPackage(const std::string& data, GameplayPackage& out, std::str
         error = "Cannot allocate gameplay package";
         return false;
     }
+    if (!validateDowntown(loaded, error)) return false;
     out = std::move(loaded);
     error.clear();
     return true;
@@ -73,7 +85,8 @@ bool readGameplayPackageFile(const std::filesystem::path& path, GameplayPackage&
         [&](const std::string& name, const std::string& bytes, std::string& failure) {
             return decodeAsset(name, bytes, loaded, decoded, failure);
         }, error);
-    if (ok) out = std::move(loaded);
-    return ok;
+    if (!ok || !validateDowntown(loaded, error)) return false;
+    out = std::move(loaded);
+    return true;
 }
 }  // namespace sf

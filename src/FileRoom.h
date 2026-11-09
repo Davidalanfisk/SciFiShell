@@ -48,6 +48,7 @@ private:
     std::string text_;
 public:
     bool leavesBuilding = false;
+    std::function<void()> onActivate; // Host-owned management cards; never interpreted as filesystem entries.
 private:
     std::vector<std::string> info_;
     std::shared_ptr<GpuLabel> label_;
@@ -59,6 +60,9 @@ public:
     explicit FileRoom(Renderer& renderer);
     void load(std::string path);
     void loadEmpty();  // grid floor only, no cards
+    void loadPlugin(const std::string& name, const std::vector<std::string>& details,
+                    std::function<void()> toggle, std::function<void()> remove,
+                    std::function<void()> arrange);
     bool loaded() const { return loaded_; }
     int cardCount() const { return static_cast<int>(cards_.size()); }
     float extent() const { return extent_; }  // walkable radius, grows with the number of files
@@ -140,6 +144,7 @@ private:
     bool loaded_ = false;
     float extent_ = 12.0f;
     bool building_ = false, cardsVisible_ = true;
+    bool pluginRoom_ = false;
     int rows_ = 0, roomIdx_ = -1;
     bool inRoom_ = false, spawnPending_ = false;
     float spawnYaw_ = 0.0f;

@@ -159,6 +159,13 @@ bool AppShell::registerGameplay(const GameplayPackage& package, const std::files
     };
     if (!plugins_.add(std::move(plugin))) { gameplay_.erase(package.id); return false; }
     installedPluginIds_.insert(package.id);
+    if (!package.downtownModel.empty()) {
+        std::string error;
+        if (!city_->setDowntownModel(package.id, package.models.at(package.downtownModel), error)) {
+            pluginMessages_[package.id] = "DEFAULT BUILDING: " + error;
+            std::fprintf(stderr, "Downtown %s: %s\n", package.id.c_str(), error.c_str());
+        }
+    }
     return true;
 }
 

@@ -1,6 +1,81 @@
 # Plugins
 
-This guide targets the **SciFi Shell v0.9.22 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+This guide targets the **SciFi Shell v0.9.23 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+
+## v0.9.23 changelog
+
+Downtown gives every installed package a stable physical building south of Computer, surrounded by
+a theme-colored glass-region outline matching the district's full reserved bounds. Host-owned entrances,
+management rooms, safe evacuation, persisted plot moves/swaps, and the optional gameplay manifest
+field `downtown_model` are new in this release. Existing packages need no changes and receive a default
+building; disabled and failed plugins keep their entrances. Existing source/archive/runtime limits and
+digest-bound consent and removal-confirmation checks are retained. The model field is optional but requires v0.9.23.
+
+## Downtown district (v0.9.23)
+
+Downtown is a host-owned district **south of Computer** (+Z in city coordinates). Every installed
+theme, message-script or gameplay package gets a building, including disabled or failed packages.
+Bundled native features are managed in Plugins and do not consume package plots. Buildings represent
+installed packages, not running Lua scene objects; disabling a plugin does not remove its management
+entrance. Uninstalling removes it.
+
+Walk south from Computer or use **Settings > Downtown > Visit [name]**. Aim at the separate illuminated
+entrance frame from within 12 units and click/select. Every entrance leads to a host-managed, empty
+room with package ID, name, version, description and status, an **On / Off** control, **Delete Plugin**,
+**Rearrange**, and an exit. Escape/Back also exits. No package filesystem is exposed in this room.
+The host retains these controls even if plugin code fails.
+
+Toggling or deleting from inside first moves you safely outside and opens Plugins. Enabling gameplay
+uses the same digest-bound permission notice as Settings: select the plugin again within 30 seconds
+to consent. Dismiss the panel to cancel without enabling. Delete arms the ordinary Remove confirmation:
+select **Remove [name]** again within 15 seconds to confirm, or let that deadline expire to cancel. A failed operation
+reports its error and leaves the remaining package/building accessible; removal may already have disabled
+the package or revoked consent. Re-enable through the normal permission flow if removal failed.
+
+To rearrange, select **Arrange [name]** in Downtown (or the room's Rearrange card), choose
+**Previous Plot / Next Plot**, then **Move / Swap**. The target card names the current occupant;
+occupied destinations swap both buildings, empty destinations move only the selected building.
+Rearrangement returns a city visitor to the district gateway before changing geometry.
+Numbered plots use a four-column, 32-unit-pitch layout starting at `(x=-48,z=128)`.
+There are 128 selectable plots for the existing 64-package installation limit. Drives, bus routes and
+native track supports reserve the corridor `x=-80..80,z=104..1152`; the colored region outline uses those
+same bounds, even while plots are empty, so later installs never require
+moving existing buildings. The track may pass overhead with clearance.
+
+Arrangements are saved atomically to `%LOCALAPPDATA%\SciFiShell\downtown.ini` on Windows
+(alongside `plugins.ini` on other platforms), keyed by package ID. New packages take the lowest free
+plot; uninstall releases only its plot. Disable/re-enable, failures, city rebuilds and restarts retain
+placements. Corrupt preferences are preserved and reported; buildings use a deterministic read-only
+recovery layout until the preferences are repaired. Write failures are reported, not presented as saved
+moves. Lifecycle changes still reconcile the live city. As with other plugin preferences, concurrent
+writers from multiple shell instances are not supported.
+
+### Optional exterior model
+
+Gameplay ZIP manifests may add one optional string, without changing `api_version`:
+
+```json
+"downtown_model": "assets/garage.glb"
+```
+
+Include that exact file in the existing package asset table. It must pass the normal restricted GLB
+decoder (including rejection of external resources) and package/archive/decoded limits, **plus**
+8,192 vertices, 8,192 triangles and an embedded texture no larger than 256x256.
+The model's baked scene bounds are uniformly scaled to fit a 12x12x12 box, horizontally centered on
+the plot and grounded at y=0. Existing scene-node transforms and embedded material/texture are retained.
+The host uses a conservative solid box for collision, not triangle or doorway collision.
+The entrance is always a separate host frame at `(plot.x,0,plot.z-9)`; exit is at
+`(plot.x,1.7,plot.z-12)`. Do not depend on a model doorway, interior geometry, Lua startup, or enabled
+state for entry. Custom exteriors currently use the same host room as default buildings.
+
+The exterior is uploaded through bounded, host-owned GPU resources during registration, independently
+of script consent or execution. It stays visible when the plugin is off/failed. Renderer budget/allocation
+failure is logged and shown on the package's Arrange card and uses the default building rather than
+losing management access. Uninstall releases its exterior GPU resources. Theme and message-script
+packages have no asset table and always use the procedural host-default building. Missing or invalid
+declared models reject installation; omitting the field preserves all existing package behavior.
+No new Lua functions, arbitrary filesystem loading, remote downloads, custom interiors or marketplace
+are introduced. This manifest field is not accepted by v0.9.22 and earlier installers.
 
 ## v0.9.22 changelog
 
@@ -87,7 +162,7 @@ Use `scene_mesh(handle, texture, x, y, z, width, height, depth, red, green, blue
 
 ## Start here
 
-You do not need to build the shell to make a plugin: install [v0.9.22](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.22), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
+You do not need to build the shell to make a plugin: install [v0.9.23](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.23), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
 
 | What you want | Package | Start with |
 |---|---|---|

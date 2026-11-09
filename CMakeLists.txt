@@ -93,6 +93,8 @@ set(SOURCES
     src/main.cpp
     src/AppShell.cpp
     src/AppShellGameplay.cpp
+    src/AppShellDowntown.cpp
+    src/Downtown.cpp
     src/plugins/AppShellCar.cpp
     src/plugins/AppShellParks.cpp
     src/TaskSwitcher.cpp
@@ -193,6 +195,10 @@ target_link_libraries(SciFiShell PRIVATE ${CMAKE_DL_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(DowntownTest tests/DowntownTest.cpp src/Downtown.cpp)
+    target_include_directories(DowntownTest PRIVATE src)
+    target_compile_definitions(DowntownTest PRIVATE NOMINMAX)
+    add_test(NAME DowntownTest COMMAND DowntownTest)
     add_executable(GameplayAudioTest tests/GameplayAudioTest.cpp)
     target_include_directories(GameplayAudioTest PRIVATE src)
     target_compile_definitions(GameplayAudioTest PRIVATE "SCIFI_TEST_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\"")
