@@ -1,6 +1,6 @@
 # Plugins
 
-This guide targets the **SciFi Shell v0.9.25 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+This guide targets the **SciFi Shell v0.9.26 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
 
 ## v0.9.25 changelog
 
@@ -19,6 +19,93 @@ Settings buildings and galleries use the enlarged scale (64-unit plot pitch), wh
 keeps its existing scale and saved placements. Settings rooms use dark, color-correct live consoles,
 eye-height controls and the existing permission/destructive confirmation surfaces.
 All package manifest fields, `downtown_model` limits and gameplay API permissions remain unchanged.
+
+## Neon Circuit Arcade (v0.9.26)
+
+**NEON CIRCUIT ARCADE** (`org.scifishell.arcade`) is a bundled
+precompiled C++ native plugin, not a Lua package.
+Visit through **Settings > Downtown > Visit Neon Circuit Arcade**, or its cyan/magenta-trimmed
+building south of Computer. Twelve cabinets occupy three rows. The back half is covered by a
+furnished office/bedroom mezzanine; the front has a double-height ceiling. The stairs start at
+the right front corner, turn left at the landing, and open into the upstairs railing.
+Walk into stairs normally; jumping/flying is unnecessary. The entry wall has Exit, On / Off
+and Rearrange controls. Escape/Back exits the room when no cabinet is selected.
+The upper stair ends at a level landing with a guarded opening onto the full-width loft.
+Disabled/failed plugins retain the ordinary host management room and cannot be uninstalled.
+
+Aim at a cabinet screen and click, press Enter / gamepad A, or use the VR controller ray and
+trigger. Selection opens that cabinet's menu and seats the desktop view at the screen.
+Choose Play, Game, Difficulty (1-3), Invert Y or Browse for NES ROM. Use arrows, mouse wheel,
+D-pad, left stick or VR left stick to select a row; left/right changes its value, and
+Enter/click/A/VR trigger activates it. Configuration is independent for every cabinet.
+Escape/gamepad B/Back/VR Back stops the game and returns to the cabinet menu; a second
+press releases the cabinet and restores the previous viewpoint. The shell's other hotkeys,
+camera movement and controller shortcuts are suppressed while a cabinet owns input.
+F12 and the app-close action remain available.
+
+| Original game | Play |
+|---|---|
+| Pulse Rally | Move paddle with W/S, arrows, mouse up/down, gamepad left stick or VR left stick. Outlast the opposite paddle. |
+| Orbit Breaker | A/D or left/right stick rotates; W or stick up thrusts; Space/mouse button/gamepad A or right trigger/VR trigger fires. Clear the drifting vector rocks. |
+| Sky Rescue | WASD/arrows or left stick moves. Fire as above; Shift/gamepad X/VR left grip rescues when close to the ground. |
+| River Runner | Tap/release a direction (arrows/WASD/D-pad/stick) to hop. Avoid traffic, stay on river platforms and reach the far bank. |
+
+These are independently authored mechanics/graphics, not ports or replicas of commercial games.
+Inactive cabinets run only a procedural attract painter at 8 Hz: there are no background game
+sessions, emulator pages, ROM loads or audio voices. One cabinet may run at a time; original
+games use a fixed 60 Hz simulation, and NES uses one isolated CEF surface. Leaving a cabinet,
+focus loss, leaving/rebuilding the district, disabling the plugin or shutting down stops its
+session and owned sounds. Focus loss ends rather than suspends a run. Native effects and NES
+audio follow the shell SFX volume.
+
+Preferences and original-game best scores reuse the bounded atomic storage format
+(64 entries / 64 KiB maximum) in `%LOCALAPPDATA%\SciFiShell\arcade\builtin.arcade.store`
+on Windows. Scores are saved at game over and when a run ends. Imported ROMs are copied to fixed
+`cabinet-0.nes` through `cabinet-11.nes` names in that same private profile directory, never
+into the application or installation assets. At most twelve 1 MiB imports can be retained.
+Corrupt preferences are preserved and reported as a failed plugin start; failed writes are
+shown on the cabinet, not reported as saved. Back up or repair a corrupt file before retrying.
+Native code is trusted, not an OS sandbox, and multiple writers to one profile are unsupported.
+
+### NES import and limits
+
+The Windows CEF build bundles **JSNES 2.1.0**, Apache-2.0, with its licence in
+`assets\arcade\JSNES-LICENSE.txt`. No commercial ROMs, BIOS files, artwork or music are included
+or fetched. Select an idle cabinet, choose **Browse for NES ROM**, select a local `.nes` file
+in the Windows file picker, and then choose **Play**. You can also drop exactly one local
+`.nes` file onto the shell while the cabinet menu is open. Cancelling leaves the cabinet unchanged.
+The picker starts at the Windows system drive root.
+Only use material you are entitled to run. The file is bounded to 1 MiB, must have an exact
+iNES or supported NES 2.0 header and payload, mapper 0, 16/32 KiB PRG and 0/8 KiB CHR.
+NES 2.0 is limited to NTSC/multiregion NROM, no PRG RAM, standard controllers, no extra ROMs
+or submapper, and 8 KiB volatile CHR RAM when no CHR ROM is present. Its compatible header is
+adapted only in memory for JSNES; the original and imported file remain unchanged. Trainers,
+battery saves, PAL/Dendy-only NES 2.0, other mappers, archives, links and mismatched/trailing data are rejected
+with a visible error. This deliberately does **not** claim all NES games work. Non-CEF builds
+report that NES requires CEF while retaining the four native games.
+
+NES directions use WASD/arrows, D-pad or left sticks. A is Space/mouse/gamepad A/right
+trigger/VR trigger; B is Shift/gamepad X/VR left grip. Start is Enter/gamepad Start/VR menu,
+and Select is Tab/gamepad LB/VR right grip. Back always releases emulator input instead of
+being sent to the game. There is no save-state, battery-save, ROM browser, arbitrary URL,
+download button or JavaScript filesystem bridge. Importing requires an explicit selection or drop,
+not a directory scan. The native picker is available on Windows; other builds use drag and drop.
+The Windows picker appears on the desktop monitor, including when using VR.
+
+The host verifies the pinned engine SHA-256 before execution and passes only validated bytes
+as base64 to an ephemeral `about:blank` surface. Its separate request context has no disk cache;
+navigation, subresources, network requests and popups are denied. Frame/startup errors are
+reported on the cabinet. Closing mutes/hides and closes that page; the next cabinet never
+inherits its input or audio. These restrictions are in-process safeguards, not an OS sandbox.
+
+**Not implemented:** MAME-compatible emulation/engine fetching, other console engines,
+save states, two-player games, arbitrary control remapping, and pinball. MAME as a whole
+is GPL-2.0-or-later with mixed component licences; a pinned compatible browser distribution,
+its source/compliance materials, driver/ROM requirements and resource limits still need
+validation before integration. No placeholder fetch button pretends that this work is done.
+Pinball remains on the [wishlist](todo.md#arcade-wishlist).
+Physical headset/controller comfort, audio listening and broad ROM compatibility need
+manual review; simulated input checks are not hardware certification.
 
 ## v0.9.24 changelog
 
@@ -199,7 +286,7 @@ Use `scene_mesh(handle, texture, x, y, z, width, height, depth, red, green, blue
 
 ## Start here
 
-You do not need to build the shell to make a plugin: install [v0.9.25](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.25), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
+You do not need to build the shell to make a plugin: install [v0.9.26](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.26), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
 
 | What you want | Package | Start with |
 |---|---|---|

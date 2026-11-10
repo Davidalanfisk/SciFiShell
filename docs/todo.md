@@ -109,6 +109,13 @@ dry, friendly but not infantilised, clearly non-human (Bob, Clippy, JARVIS, HAL 
 ### 3.6 Later
 - [ ] Dependency resolution, update notifications, ratings, HARVI plugin tutorials, vehicle plugins, custom districts, multiplayer packs, developer SDK and docs
 
+## Arcade wishlist
+
+- [ ] Basic original pinball machines: table physics, flippers, scoring and cabinet interaction.
+- [ ] Validate a pinned, licence-compliant browser MAME-compatible engine and its driver/resource limits before adding explicit verified engine fetching. Never fetch commercial ROMs or BIOS files.
+- [ ] Expand NES mapper support, save states and per-cabinet input remapping after compatibility testing.
+- [ ] Physical VR/controller comfort and audio listening checks for Neon Circuit.
+
 ## Carried over
 
 - [ ] Visualizer: projectM hardware-accelerated option (see `visualizer-plan.md`)

@@ -61,7 +61,7 @@ and just *fly around inside your own machine*.
 | Car: drive / drift / boost / camera | `W` `A` `S` `D` / `Space` / `Shift` / `C` |
 | Hot dog / ice cream stand: take one, then throw it | Click the stand, click again |
 
-**Xbox controller:** left stick move · right stick look (snap turn in VR) · **RT / LT** up / down · **A** select · **B** back · **Y** Start menu · **X** on-screen keyboard · **LB / RB** previous / next window (then **A**). While driving: **RT / LT** accelerate / brake, left stick steers, **RB / LB** boost / drift; **Y** exits the car or exits a stunt-track lap.
+**Xbox controller:** left stick move · right stick look (snap turn in VR) · **RT / LT** up / down · **A** select / throw a held snack · **B** back · **Y** Start menu · **X** on-screen keyboard · **LB / RB** previous / next window (then **A**). While driving: **RT / LT** accelerate / brake, left stick steers, **RB / LB** boost / drift; **Y** exits the car or exits a stunt-track lap.
 
 **VR headset only (no controllers needed):** a gaze reticle aims; use mouse, keyboard or Xbox pad for everything else. The on-screen keyboard (`F7`) floats in front of you and pops up when a text field is focused. Picking up a controller switches aiming to its ray; touching mouse, keyboard or pad switches back to gaze.
 
@@ -145,6 +145,12 @@ Permission/error dialogs retain the existing readable Settings confirmation surf
 door panel, illuminated jambs, canopy and threshold as ordinary city buildings. Custom plugin
 models retain their separate host-managed entrance frame.
 
+**Neon Circuit Arcade (v0.9.26).** A bundled precompiled C++ plugin adds twelve configurable
+cabinets, four original homebrew games, cheap animated attract screens and a furnished half-mezzanine
+apartment reached by corner-turn stairs. Only a selected cabinet runs a game. The Windows CEF build
+also includes Apache-licensed JSNES for explicitly imported, user-supplied mapper-0 NES ROMs; no games
+or BIOS files are bundled or downloaded. See [arcade controls and current limits](docs/plugins.md#neon-circuit-arcade-v0926).
+
 **Downtown (v0.9.24).** South of Computer, a colored glass-region outline grows and shrinks around
 the occupied plots instead of reserving a fixed-size district. Installed plugins and the bundled
 **Car and Track** and **Parks and Toys** get persistent physical buildings, including plugins that are off
@@ -163,13 +169,13 @@ Ground-level fog drifts between the towers (tune it with the fog sliders in Sett
 
 ![Ducks in a park pond](docs/ducks.jpg)
 
-**Hot dog and ice cream stands.** Click a stand to be handed a neon-outline snack, held just off to one side. Click again to lob it like a grenade: five seconds later it bursts in a neon explosion that shoves you back if you're close. Blow up a duck and a score pops up on your HUD. Every effect has a synthesised retro sound.
+**Hot dog and ice cream stands.** Click a stand or press **A** to take a neon-outline snack. Click, use the VR trigger, or press **A** again to throw it: five seconds later it bursts in a neon explosion that shoves you back if you're close. Blow up a duck and a score pops up on your HUD. Every effect has a synthesised retro sound.
 
 ![Hot dog](docs/hotdog.jpg)
 
 **The car.** Press `F10` anywhere in the city to summon a neon hologram sports car, and `F10` again to leave it. `C` swaps first and third person; `Space` drifts and `Shift` boosts. A speedo appears on the HUD. The wheels steer and spin, and a quiet electric hum rises with speed. Parked, it is solid: you can stand on it. Ramps on every region let you drive up onto the platforms.
 
-**Make a plugin.** The Windows x64 build **v0.9.25** supports data-only themes, Lua message scripts, and experimental Lua gameplay plugins, including persistent storage, controller input, audio samples, local messages and procedural meshes. Every installed package gets a Downtown building, and gameplay packages may supply a bounded custom exterior through `downtown_model`. Plugin manifests and Lua source files accept up to **10 MiB each**, with bounded Lua compilation and runtime memory. Start with the [plugin developer guide](docs/plugins.md): it walks through installation, a first gameplay plugin, packaging, permissions, limits and the API, including the [v0.9.25 changelog](docs/plugins.md#v0925-changelog). Try the downloadable [clock](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.19/scifishell-clock-example.zip), [scripted car and track](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-car-track.zip), or [scripted parks and toys](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-parks-toys.zip) in **Settings > Plugins**. The gameplay examples are simplified, not replacements for the separately enabled native Car and Track and Parks and Toys. Scripts and asset decoders run in the shell process, not an OS sandbox; only install and enable packages you trust.
+**Make a plugin.** The Windows x64 build **v0.9.26** supports data-only themes, Lua message scripts, and experimental Lua gameplay plugins, including persistent storage, controller input, audio samples, local messages and procedural meshes. Every installed package gets a Downtown building, and gameplay packages may supply a bounded custom exterior through `downtown_model`. Plugin manifests and Lua source files accept up to **10 MiB each**, with bounded Lua compilation and runtime memory. Start with the [plugin developer guide](docs/plugins.md): it walks through installation, a first gameplay plugin, packaging, permissions, limits and the API, including the [v0.9.25 changelog](docs/plugins.md#v0925-changelog). Try the downloadable [clock](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.19/scifishell-clock-example.zip), [scripted car and track](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-car-track.zip), or [scripted parks and toys](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-parks-toys.zip) in **Settings > Plugins**. The gameplay examples are simplified, not replacements for the separately enabled native Car and Track and Parks and Toys. Scripts and asset decoders run in the shell process, not an OS sandbox; only install and enable packages you trust.
 
 ![Plugins settings](docs/screenshot-plugins-2026.jpg)
 

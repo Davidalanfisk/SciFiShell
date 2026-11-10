@@ -313,6 +313,7 @@ void VRSystem::frame(Renderer& renderer, const Mat4& rig, const DrawScene& drawS
         gi.subactionPath = d.rightHand;
         xrGetActionStateBoolean(d.session, &gi, &b);
         bool sel = b.isActive && b.currentState;
+        input.selectHeld = sel;
         input.selectPressed = sel && !d.prevSelect;
         d.prevSelect = sel;
 
@@ -345,6 +346,7 @@ void VRSystem::frame(Renderer& renderer, const Mat4& rig, const DrawScene& drawS
         };
         input.kbdPressed = edge(d.kbdAction, d.leftHand, d.prevKbd);
         input.switchPressed = edge(d.switchAction, d.rightHand, d.prevSwitch);
+        input.kbdHeld = d.prevKbd;
 
         XrActionStateVector2f v{XR_TYPE_ACTION_STATE_VECTOR2F};
         gi.action = d.moveAction;

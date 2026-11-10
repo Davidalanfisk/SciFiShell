@@ -26,6 +26,7 @@ struct VRInput {
     float lookX = 0, lookY = 0;   // right thumbstick / trackpad: turn and climb
     bool kbdPressed = false;      // left grip or X / A edge (on-screen keyboard)
     bool switchPressed = false;   // right grip edge (window switcher)
+    bool selectHeld = false, kbdHeld = false;
     bool active() const {         // a controller is being used right now
         return selectPressed || backPressed || menuPressed || kbdPressed || switchPressed || moveX != 0 || moveY != 0 || lookX != 0 || lookY != 0;
     }

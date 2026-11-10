@@ -43,6 +43,7 @@ void AppShell::syncDowntown() {
 
 void AppShell::evacuateDowntown() {
     if (downtownInterior_.empty()) return;
+    if(arcade_)arcade_->leave();
     Vec3 exterior{0,1.7f,96};
     city_->downtownExit(downtownInterior_, exterior);
     downtownInterior_.clear();
@@ -119,6 +120,17 @@ void AppShell::enterDowntown(const std::string& id) {
         toggleCity(false);
         downtownInterior_ = id;
         clearRoomPending_ = false;
+        if(id==kDowntownArcadeId && p.running && arcade_->running()) {
+            room_->loadArcade(arcade_->screens(),[this](int i){selectArcade(i);},
+                [this,id]{togglePlugin(id);},[this,id]{
+                    evacuateDowntown(); downtownSelected_=id; downtownTarget_=downtown_->placements().at(id);
+                    openSettingsWin(); settingsPanel_->openPage("DOWNTOWN");
+                });
+            camera_.position={0,1.7f,3}; camera_.yaw=camera_.pitch=0;
+            vy_=0; flying_=false; room_->setEye(camera_.position);
+            menu_->setStatus("NEON CIRCUIT - select a cabinet; stairs on right; ESC exits");
+            return;
+        }
         room_->loadPlugin(p.name, {p.id, "VERSION " + p.version, p.description,
                           p.running ? "ON" : (p.enabled ? "FAILED - RETRY OR DISABLE" : "OFF"),
                           downtownBuiltin(id) ? "Bundled native plugin - cannot uninstall; ESC exits" :

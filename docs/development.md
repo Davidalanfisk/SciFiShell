@@ -64,6 +64,45 @@ room cards, consent cancellation/grant, failure access, swap/restart,
 uninstall/gap reuse and drive/bus clearance without activating the installed app. This is not a visual,
 physical-controller/VR or frame-rate benchmark.
 
+### Arcade plugin (v0.9.26)
+
+`ArcadeModule` is a separately compiled native DLL/module using the existing trusted
+`NativePlugin` ABI and the versioned POD `ArcadeApi.h` interface. It owns one game context,
+fixed-step original games and stateless attract painters. `Arcade` owns the host textures,
+cabinet menus, bounded `GameplayStorage`, ROM copies and the optional `ArcadeEmulator`.
+`AppShellArcade.cpp` captures input **before** shell shortcuts and clears controller/VR actions;
+the normal room and Downtown evacuations release the session. `ArcadeRoom.h` supplies both
+procedural room boxes and collision/floor/stair queries, with focused up/down traversal tests.
+There is no change to package manifest permissions or Lua APIs.
+
+The unmodified vendored `assets\arcade\jsnes.js` is the minified distribution from
+[`jsnes@2.1.0`](https://registry.npmjs.org/jsnes/2.1.0), upstream revision
+`cbad9f1db57dfb275b90ffa26f9c479c355d8d5c` (Apache-2.0; licence beside the engine).
+The npm archive was checked against SHA-512
+`LUa++E5Dfs1A6ZYB5HiSOR4JrUzrZEXGLZ5Imczhu9lkg7f+94SqnLZ/MXwGa7oc02+j/xYyHR0azGQ6LCU68g==`.
+The runtime engine SHA-256 is
+`84946f0dae4bcf3b2dfebe84ad3bfeb1dbcb413bd9b1a69e1f45910a95fd7b41`.
+Update the checked digest deliberately when updating the engine; never replace it with an
+unversioned download. CMake copies the engine/licence with existing runtime assets.
+`ArcadeEmulator` uses CEF 156 off-screen rendering, a fresh ephemeral request context,
+an allowlisted initial blank page with all resource/network loads blocked, bounded host-side
+NROM validation and a fixed 320x240 surface. There is no general browser/ROM bridge.
+The WebAudio ring buffer is bounded; native game blips use one reserved SFX owner revoked
+on session end. See [supported imports and controls](plugins.md#neon-circuit-arcade-v0926).
+
+Run `ArcadeTest`, `DowntownTest`, `NativePluginTest` and `GameplayStorageTest` in Release.
+`tests\RunDowntownIntegration.ps1 -Executable <Release\SciFiShell.exe> -OutputDirectory <existing-artifact-directory> -ArcadeOnly`
+runs normal app entrance/cabinet cards, keyboard/gamepad/VR input paths (the latter two
+simulated, with explicit scripted focus on the inactive desktop), persistence/restart,
+toggle/failure-management access, native picker cancellation/invalid/valid selection and original
+NROM CEF lifecycle checks, capturing only the arcade exterior, floor, loft, landing and original game.
+An optional `-ArcadeRom <explicitly-authorized-local-file.nes>` tests a user ROM without
+capturing it; imports stay in the isolated test profile, never the redistributable build.
+The optional test verifies the original is unchanged, checks the imported copy byte-for-byte,
+then removes that private test copy. Sustained VR trigger/grip input and short button pulses
+are routed to games; fixed-step input latches prevent taps disappearing between emulated frames.
+Never check in or distribute user ROMs or their screenshots.
+
 ### Settings quarter (v0.9.25)
 
 `buildSettingsHub()` remains the source of truth for category and option definitions.

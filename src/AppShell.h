@@ -6,6 +6,8 @@
 #include <unordered_map>
 
 #include "FileRoom.h"
+#include "Arcade.h"
+#include "ArcadeInput.h"
 #include "City.h"
 #include "InputSystem.h"
 #include "LCARSUI.h"
@@ -105,6 +107,18 @@ private:
     void evacuateDowntown();
     void visitDowntown(const std::string& id);
     void moveDowntown();
+    Plugin makeArcadePlugin();
+    void selectArcade(int cabinet);
+    void tickArcade(double dt,FrameInput& input,PadState& pad);
+    std::unique_ptr<Arcade> arcade_;
+    Camera arcadeReturn_;
+    float arcadeMouseY_=0;
+    ArcadeMenuAxis arcadeVrX_,arcadeVrY_,arcadePadX_,arcadePadY_;
+    bool arcadePadBack_=false,arcadePadStart_=false;
+    bool arcadePickerRelease_=false;
+    bool scriptPadA_=false;
+    bool snackPadCaptured_=false;
+    bool arcadeScriptFocus_=false;
     std::unique_ptr<Downtown> downtown_;
     std::string downtownInterior_, downtownSelected_;
     int downtownTarget_ = 0;

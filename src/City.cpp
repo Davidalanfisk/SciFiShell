@@ -239,6 +239,15 @@ void City::renderDowntown(Renderer& r, Vec3 eye) {
         const auto model = downtownModels_.find(b.id);
         if (model == downtownModels_.end()) {
             renderBox(r, {p.x, 4, p.z}, {12, 8, 12}, th.accent*0.65f, 0.5f, 3, 1, 0, 0);
+            if(b.id==kDowntownArcadeId) {
+                const Vec3 cyan{.12f,.8f,.75f},pink{.65f,.13f,.46f};
+                renderBox(r,{p.x,5.7f,p.z-6.2f},{11,.5f,.2f},pink,0,5,1,0,0);
+                renderBox(r,{p.x,7.4f,p.z-6.2f},{11,.1f,.2f},cyan,0,5,1,0,0);
+                for(float dx:{-5.3f,5.3f})
+                    renderBox(r,{p.x+dx,3.8f,p.z-6.2f},{.16f,7.2f,.2f},cyan,0,5,1,0,0);
+                for(float dx:{-3.8f,3.8f})
+                    renderBox(r,{p.x+dx,2.4f,p.z-6.15f},{2.5f,2.6f,.2f},{.07f,.06f,.12f},0,6,1,0,0);
+            }
             renderDistrictDoor(r,b,{p.x,0,p.z},th.alt,false);
             continue;
         } else if (!r.drawGameplayModel(model->second.owner, model->second.handle,

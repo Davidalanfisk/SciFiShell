@@ -10,11 +10,12 @@
 namespace sf {
 // +Z is south. Plot coordinates stay stable while the occupied district grows and shrinks.
 struct DowntownPlot { float x, z; };
-inline constexpr int kDowntownSlots = 128; // Includes spare user-selected plots and the two bundled plugins.
+inline constexpr int kDowntownSlots = 128; // Includes spare user-selected plots and bundled plugins.
 inline constexpr const char* kDowntownDrivingId = "org.scifishell.driving";
 inline constexpr const char* kDowntownParksId = "org.scifishell.parks";
+inline constexpr const char* kDowntownArcadeId = "org.scifishell.arcade";
 inline bool downtownBuiltin(const std::string& id) {
-    return id == kDowntownDrivingId || id == kDowntownParksId;
+    return id == kDowntownDrivingId || id == kDowntownParksId || id == kDowntownArcadeId;
 }
 struct DowntownRegion {
     float x = 0, z = 124, width = 32, depth = 40;

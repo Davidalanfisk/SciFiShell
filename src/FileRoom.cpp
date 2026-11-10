@@ -1,4 +1,5 @@
 #include "FileRoom.h"
+#include "ArcadeRoom.h"
 
 #include <chrono>
 
@@ -383,6 +384,7 @@ void FileRoom::addSky() {
 }
 
 void FileRoom::resetScene() {
+    arcadeRoom_ = false;
     hovered_ = nullptr;
     doorCards_.clear();
     liftCar_ = nullptr;
@@ -460,6 +462,37 @@ void FileRoom::loadPlugin(const std::string& name, const std::vector<std::string
     card("REARRANGE", 4, -4, std::move(arrange));
     card("EXIT TO DOWNTOWN", 0, 5, [this] { if (onExitBuilding) onExitBuilding(); });
     cards_.back()->yaw = kPi;
+}
+
+void FileRoom::loadArcade(const std::array<std::shared_ptr<GpuLabel>,SF_ARCADE_CABINETS>& screens,
+                          std::function<void(int)> select,std::function<void()> toggle,std::function<void()> arrange) {
+    loadEmpty();
+    arcadeRoom_=pluginRoom_=building_=loaded_=true;
+    slots_.clear(); walk_.clear();
+    rows_=0; levels_=roomFloors_=1; roomTop_=9; extent_=30; spawnPending_=false;
+    prevPos_={0,1.7f,3};
+    for(const auto& b:arcade::roomBoxes()) {
+        auto node=std::make_unique<BlockNode>(renderer_,Vec3{b.color.x,b.color.y,b.color.z},false);
+        node->position={b.at.x,b.at.y,b.at.z}; node->scale={b.size.x,b.size.y,b.size.z};
+        root_->add(std::move(node));
+    }
+    auto card=[&](std::string title,Vec3 at,Vec3 size,float yaw,std::function<void()> action) {
+        auto c=std::make_unique<CardNode>(renderer_,DirEntry{},title);
+        c->position=at; c->scale=size; c->yaw=yaw; c->onActivate=std::move(action);
+        return addCard(std::move(c));
+    };
+    for(int i=0;i<SF_ARCADE_CABINETS;++i) {
+        auto p=arcade::cabinet(i);
+        auto* screen=card("CABINET "+std::to_string(i+1),{p.x,1.7f,p.z+.05f},{1.2f,.9f,.025f},0,[select,i]{select(i);});
+        screen->setThumbnail(screens[i]);
+        emitters_.push_back({{p.x,1.8f,p.z+.5f},{.65f,.4f,.1f},.65f});
+    }
+    card("NEON CIRCUIT / ARCADE",{0,7.3f,5.7f},{12,1.3f,.04f},kPi,[]{});
+    card("LOFT / OFFICE + BEDROOM",{-4,7.6f,-21.7f},{6,.55f,.03f},0,[]{});
+    card("SELECT A SCREEN TO PLAY OR CONFIGURE",{0,3.8f,5.7f},{12,.65f,.04f},kPi,[]{});
+    card("EXIT TO DOWNTOWN",{0,1.7f,5.7f},{2.5f,2.4f,.06f},kPi,[this]{if(onExitBuilding)onExitBuilding();});
+    card("ON / OFF",{-4,1.7f,5.7f},{2,1.2f,.04f},kPi,std::move(toggle));
+    card("REARRANGE",{4,1.7f,5.7f},{2,1.2f,.04f},kPi,std::move(arrange));
 }
 
 void FileRoom::loadSettings(const SettingsCategory& category, std::function<void(size_t,int)> invoke,
@@ -1246,6 +1279,10 @@ bool FileRoom::takeSpawn(Vec3& pos, float& yaw) {
 }
 
 void FileRoom::resolve(Vec3& p) const {
+    if(arcadeRoom_) {
+        auto q=arcade::resolve({prevPos_.x,prevPos_.y,prevPos_.z},{p.x,p.y,p.z});
+        p={q.x,q.y,q.z}; prevPos_=p; return;
+    }
     if (!building_) return;
     if (!inRoom_ && !slots_.empty()) { resolveLobby(p); return; }
     float bd = 1e30f;
@@ -1315,6 +1352,7 @@ void FileRoom::resolveLobby(Vec3& p) const {
 
 // Height of the surface under a player: the lift car, a walkway slab, or the ground.
 float FileRoom::floorHeight(const Vec3& p) const {
+    if(arcadeRoom_)return arcade::floor({p.x,p.y,p.z});
     if (building_ && inRoom_ && roomFloors_ > 1) {
         const float h = roomHalf_;
         if (std::fabs(p.x - podX_) < 1.2f && std::fabs(p.z - podZ_) < 1.2f && p.y > liftY_ + 0.2f && p.y < liftY_ + 3.0f) return liftY_;

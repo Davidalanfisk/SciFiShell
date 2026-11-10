@@ -99,6 +99,7 @@ AppShell::AppShell() = default;
 
 AppShell::~AppShell() {
     plugins_.shutdown();
+    arcade_.reset();
     sfx_.shutdown();
     renderer_.waitIdle();
     vr_.stop();
@@ -175,9 +176,11 @@ bool AppShell::init() {
     room_ = std::make_unique<FileRoom>(renderer_);
     settings_.load();
     city_ = std::make_unique<City>(renderer_);
+    arcade_ = std::make_unique<Arcade>(renderer_,sfx_);
     const bool drivingRegistered = plugins_.add(makeDrivingPlugin());
     const bool parksRegistered = plugins_.add(makeParksPlugin());
-    if (!drivingRegistered || !parksRegistered) {
+    const bool arcadeRegistered = plugins_.add(makeArcadePlugin());
+    if (!drivingRegistered || !parksRegistered || !arcadeRegistered) {
         std::fprintf(stderr, "Failed to register built-in plugins\n");
         return false;
     }
@@ -1473,6 +1476,8 @@ bool AppShell::scriptExec(const std::string& line) {
         vy_ = 0;
     } else if (cmd == "give") {
         if (city_) { city_->giveItem((int)num(0)); if (city_->holding()) sfx_.play(SfxId::Pickup); }
+    } else if (cmd == "testpada") {
+        scriptPadA_=true;
     } else if (cmd == "car") {
         toggleCar();
     } else if (cmd == "track") {
@@ -1701,6 +1706,47 @@ bool AppShell::scriptExec(const std::string& line) {
         if (!settingsPanel_->isOpen()) { buildSettingsHub(); openSettingsWin(); }
         if (split==std::string::npos || !settingsPanel_->scriptActivate(text.substr(0,split),text.substr(split+1)))
             scriptLog("settings menu item not found: "+text);
+    } else if (cmd == "arcadefocus") {
+        arcadeScriptFocus_=num(0)!=0;
+    } else if (cmd == "arcadegeometry") {
+        scriptLog("arcade floor="+std::to_string(room_->floorHeight(camera_.position))+
+            " position="+std::to_string(camera_.position.x)+","+std::to_string(camera_.position.y)+","+std::to_string(camera_.position.z));
+    } else if (cmd == "arcadestatus") {
+        const auto s=arcade_->state();
+        scriptLog("arcade running="+std::to_string(arcade_->running())+" selected="+std::to_string(arcade_->selected())+
+            " active="+std::to_string(s.cabinet)+" game="+std::to_string(s.game)+" ticks="+std::to_string(s.ticks)+
+            " score="+std::to_string(s.score)+" focus="+std::to_string((SDL_GetWindowFlags(window_)&SDL_WINDOW_INPUT_FOCUS)!=0)+
+            " simulated_focus="+std::to_string(arcadeScriptFocus_)+
+            " notice="+arcade_->notice());
+    } else if (cmd == "arcadekey") {
+        std::string name;std::getline(is>>std::ws,name);
+        const auto key=SDL_GetKeyFromName(name.c_str());
+        if(key==SDLK_UNKNOWN)scriptLog("arcade invalid key");
+        else {
+            SDL_Event event{};event.type=SDL_KEYDOWN;event.key.windowID=SDL_GetWindowID(window_);
+            event.key.state=SDL_PRESSED;event.key.keysym.sym=key;
+            if(SDL_PushEvent(&event)!=1)scriptLog("arcade key injection failed");
+            event.type=SDL_KEYUP;event.key.state=SDL_RELEASED;
+            if(SDL_PushEvent(&event)!=1)scriptLog("arcade key release failed");
+        }
+    } else if (cmd == "arcadeimport") {
+        std::string path;std::getline(is>>std::ws,path);
+        scriptLog(std::string("arcade import ")+(arcade_->importRom(std::filesystem::u8path(path))?"ok":"failed"));
+    } else if (cmd == "arcadepad" || cmd == "arcadevr") {
+        const float x=num(0),y=num(0);const int button=int(num(0));
+        FrameInput input;PadState pad;
+        const auto savedVR=vrInput_;
+        if(cmd=="arcadepad") {
+            pad.connected=true;pad.lx=x;pad.ly=y;
+            pad.aHeld=pad.aPressed=button==1;pad.bPressed=button==2;pad.xHeld=pad.xPressed=button==3;
+            pad.yPressed=button==4;pad.startHeld=button==5;
+        } else {
+            vrInput_.moveX=x;vrInput_.moveY=y;
+            vrInput_.selectPressed=button==1;vrInput_.backPressed=button==2;
+            vrInput_.kbdPressed=button==3;vrInput_.menuPressed=button==4;
+            vrInput_.selectHeld=button==1;vrInput_.kbdHeld=button==3;
+        }
+        tickArcade(1.0/60,input,pad);vrInput_=savedVR;
     } else if (cmd == "downtownstatus") {
         std::string status = "downtown city=" + std::to_string(cityMode_) + " interior=" +
             (downtownInterior_.empty() ? "none" : downtownInterior_) + " cards=" + std::to_string(room_->cardCount());
@@ -2463,6 +2509,13 @@ void AppShell::tick(double dt) {
         settings_.save();
     }
     input_.arrangeKey = settings_.arrangeKey ? settings_.arrangeKey : SDLK_F8;
+    PadState pad = pad_.poll();
+    if(scriptPadA_) {pad.aPressed=true;scriptPadA_=false;}
+    if(snackPadCaptured_) {
+        if(!pad.aHeld)snackPadCaptured_=false;
+        pad.aPressed=pad.aHeld=false;
+    }
+    tickArcade(dt,in,pad);
     if (in.harvi && !(focus_.p && winTyping(focus_)))
         harvi_->toggle(vrOn_ ? head_.eye : camera_.position, vrOn_ ? head_.forward : camera_.forward(), vrOn_);
     if (in.escape && harvi_->active() && !(focus_.p && winTyping(focus_))) {
@@ -2473,7 +2526,6 @@ void AppShell::tick(double dt) {
     if (in.arrange && !((focus_.p && winTyping(focus_)) && input_.arrangeKey < 256)) arrangeCycle();
     // Only the focused window can take typed text; otherwise the keyboard walks the camera.
     const bool winTypingNow = focus_.p && winTyping(focus_);
-    PadState pad = pad_.poll();
     const PadState gameplayPad = pad;
     if (gameplayControl_.owner() && gameplayWindowFocused() && gameplayWorldAvailable() &&
         !focus_.p && !winFocus_ && !settingsPanel_->isOpen() && !start_->isOpen() &&
@@ -3023,7 +3075,7 @@ void AppShell::tick(double dt) {
                 const bool available = motionContext.available() && gameplayWorldAvailable();
                 if (!available && gameplayControl_.owner()) releaseGameplayControl();
                 if (available && in.gameplayControl) acquireGameplayControl();
-                if (!gameplayControl_.owner())
+                if (!gameplayControl_.owner() && !(arcade_ && arcade_->engaged()))
                     updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed, available);
             }
             static bool dbgPlaced = std::getenv("SCIFI_CITY_STREET") == nullptr;
@@ -3043,7 +3095,13 @@ void AppShell::tick(double dt) {
                 std::vector<Vec3> routePath;
                 int standKind = -1;
                 std::string downtownId;
-                if (!overWin && city_ && !riding_ && city_->pickSettingsBuilding(o,d,downtownId)) {
+                if (!overWin && city_ && !riding_ && city_->holding() && pad.aPressed) {
+                    city_->throwHeld(head_.eye);
+                    snackPadCaptured_=true;
+                    pad.aPressed=pad.aHeld=false;
+                    keySelect=false;
+                    hudTarget_.clear();
+                } else if (!overWin && city_ && !riding_ && city_->pickSettingsBuilding(o,d,downtownId)) {
                     hudTarget_ = "ENTER SETTINGS BUILDING - "+downtownId;
                     if ((pointerSelect || keySelect) && !deferred_) {
                         deferred_ = [this,downtownId] { enterSettingsBuilding(downtownId); };
@@ -3090,6 +3148,8 @@ void AppShell::tick(double dt) {
                 } else if (!overWin && pointerSelect && city_ && !riding_ && city_->pickRoute(o, d, routePath)) {
                     startRide(routePath);
                 }
+                if (!overWin && city_ && !riding_ && city_->holding())
+                    hudTarget_ = "HOLDING SNACK - CLICK / VR TRIGGER / A TO THROW";
             } else {
             if (city_) city_->clearHover();
             Node* hit = overWin ? nullptr : pickNode(room_->root(), o, d);
@@ -3208,6 +3268,7 @@ void AppShell::tick(double dt) {
     if (!gameplayInputContext.available() || !gameplayWorldAvailable()) gameplayClicks_.begin(false, false, 0);
     gameplayClicks_.finish(in.clickUp);
     scriptTick(dt);
+    if(arcade_ && downtownInterior_==kDowntownArcadeId)arcade_->update(dt,time_,settings_.sfxVol);
     {
         const Vec3 hEye = vrOn_ ? head_.eye : camera_.position;
         const Vec3 hFwd = vrOn_ ? head_.forward : camera_.forward();

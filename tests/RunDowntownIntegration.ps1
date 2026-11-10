@@ -2,7 +2,9 @@
 # Does not activate the installed shell, use its profile, or inject physical input.
 param(
     [Parameter(Mandatory = $true)][string]$Executable,
-    [Parameter(Mandatory = $true)][string]$OutputDirectory
+    [Parameter(Mandatory = $true)][string]$OutputDirectory,
+    [switch]$ArcadeOnly,
+    [string]$ArcadeRom
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression
@@ -12,6 +14,7 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Text;
 using System.Runtime.InteropServices;
+using System.Threading;
 public static class DowntownDesktop {
     [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
     struct Startup { public int cb; public string reserved,desktop,title; public int x,y,xSize,ySize,xChars,yChars,fill,flags; public short show,reserved2; public IntPtr reservedPtr,stdin,stdout,stderr; }
@@ -26,9 +29,19 @@ public static class DowntownDesktop {
     [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr h,out uint c);
     [DllImport("kernel32.dll")] static extern bool TerminateProcess(IntPtr h,uint c);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    delegate bool WindowProc(IntPtr window,IntPtr data);
+    [DllImport("user32.dll")] static extern bool EnumDesktopWindows(IntPtr desktop,WindowProc callback,IntPtr data);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr window,WindowProc callback,IntPtr data);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window,StringBuilder text,int count);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window,StringBuilder text,int count);
+    [DllImport("user32.dll")] static extern int GetDlgCtrlID(IntPtr window);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr window);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr wparam,string text);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr window,uint message,IntPtr wparam,IntPtr lparam);
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
     static extern IntPtr CreateFile(string p,uint a,uint s,ref Security sec,uint c,uint f,IntPtr t);
-    public static int Run(string exe,string log,string cwd) {
+    public static int Run(string exe,string log,string cwd,string dialogAction) {
         string name="SciFiDowntown_"+Guid.NewGuid().ToString("N");
         IntPtr desktop=CreateDesktop(name,IntPtr.Zero,IntPtr.Zero,0,0x01ff,IntPtr.Zero);
         if(desktop==IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
@@ -42,9 +55,43 @@ public static class DowntownDesktop {
                 if(!CreateProcess(exe,new StringBuilder("\""+exe+"\""),IntPtr.Zero,IntPtr.Zero,true,0x08000000,IntPtr.Zero,cwd,ref si,out pi))
                     throw new System.ComponentModel.Win32Exception();
                 try {
-                    if(WaitForSingleObject(pi.process,90000)!=0) {
-                        TerminateProcess(pi.process,99); WaitForSingleObject(pi.process,5000); return 99;
+                    bool done=false, dialogHandled=false;
+                    Thread dialogThread=null;
+                    if(!String.IsNullOrEmpty(dialogAction)) {
+                        dialogThread=new Thread(() => {
+                            for(int i=0;i<600 && !done;i++) {
+                                IntPtr dialog=IntPtr.Zero;
+                                EnumDesktopWindows(desktop,(w,d) => {
+                                    var title=new StringBuilder(256);GetWindowText(w,title,title.Capacity);
+                                    if(title.ToString()=="Select a lawful NES ROM" && IsWindowVisible(w) && IsWindowEnabled(w)) {dialog=w;return false;}
+                                    return true;
+                                },IntPtr.Zero);
+                                if(dialog!=IntPtr.Zero) {
+                                    if(dialogAction=="cancel") {PostMessage(dialog,0x10,IntPtr.Zero,IntPtr.Zero);dialogHandled=true;return;}
+                                    IntPtr edit=IntPtr.Zero,open=IntPtr.Zero;
+                                    EnumChildWindows(dialog,(w,d) => {
+                                        var cls=new StringBuilder(128);GetClassName(w,cls,cls.Capacity);
+                                        if(cls.ToString()=="Edit" && GetDlgCtrlID(w)==1148) edit=w;
+                                        if(cls.ToString()=="Button" && GetDlgCtrlID(w)==1) open=w;
+                                        return true;
+                                    },IntPtr.Zero);
+                                    if(edit!=IntPtr.Zero && open!=IntPtr.Zero) {
+                                        SendMessage(edit,0x000c,IntPtr.Zero,dialogAction);
+                                        PostMessage(open,0x00f5,IntPtr.Zero,IntPtr.Zero);
+                                        dialogHandled=true;return;
+                                    }
+                                }
+                                Thread.Sleep(50);
+                            }
+                        });
+                        dialogThread.IsBackground=true;dialogThread.Start();
                     }
+                    if(WaitForSingleObject(pi.process,String.IsNullOrEmpty(dialogAction)?90000u:30000u)!=0) {
+                        TerminateProcess(pi.process,99); WaitForSingleObject(pi.process,5000);
+                        done=true;if(dialogThread!=null)dialogThread.Join();return 99;
+                    }
+                    done=true;if(dialogThread!=null)dialogThread.Join();
+                    if(dialogThread!=null && !dialogHandled)return 98;
                     uint code; GetExitCodeProcess(pi.process,out code); return (int)code;
                 } finally { CloseHandle(pi.thread); CloseHandle(pi.process); }
             } finally { CloseHandle(output); }
@@ -57,6 +104,9 @@ $root = Join-Path (Resolve-Path -LiteralPath $OutputDirectory).Path ('downtown-'
 New-Item -ItemType Directory -Path $root | Out-Null
 $profile = Join-Path $root 'profile'
 New-Item -ItemType Directory -Path $profile | Out-Null
+foreach($folder in @('Desktop','Documents','Downloads','Pictures','Music','Videos')) {
+    New-Item -ItemType Directory -Path (Join-Path $profile $folder) | Out-Null
+}
 $zip = Join-Path $root 'custom.zip'
 $defaultZip = Join-Path $root 'default.zip'
 $failedZip = Join-Path $root 'failed.zip'
@@ -91,7 +141,7 @@ New-Package $failedZip ($manifest.Replace('com.example.downtown','com.example.fa
 $clock = Join-Path $PSScriptRoot '..\examples\plugins\clock'
 New-Package $defaultZip ([System.IO.File]::ReadAllText((Join-Path $clock 'plugin.json'))) ([System.IO.File]::ReadAllText((Join-Path $clock 'scripts\main.lua')))
 
-function Run-Scenario([string]$name, [string[]]$commands) {
+function Run-Scenario([string]$name, [string[]]$commands, [string]$dialogAction = '') {
     $control = Join-Path $profile 'SciFiShell\control.log'
     $previousLines = 0
     if (Test-Path -LiteralPath $control) { $previousLines = @(Get-Content -LiteralPath $control).Count }
@@ -106,7 +156,7 @@ function Run-Scenario([string]$name, [string[]]$commands) {
             ForEach-Object { Remove-Item -LiteralPath ("Env:\"+$_.Name) }
         $env:LOCALAPPDATA=$profile; $env:APPDATA=$profile; $env:USERPROFILE=$profile; $env:HOME=$profile
         $env:SDL_AUDIODRIVER='dummy'; $env:SCIFI_NO_UPDATE='1'; $env:SCIFI_SCRIPT=$script
-        $code = [DowntownDesktop]::Run($exe, (Join-Path $root "$name-app.log"), (Split-Path -Parent $exe))
+        $code = [DowntownDesktop]::Run($exe, (Join-Path $root "$name-app.log"), (Split-Path -Parent $exe),$dialogAction)
     } finally {
         Get-ChildItem Env: | Where-Object { $_.Name -like 'SCIFI_*' -or $_.Name -in $names } |
             ForEach-Object { Remove-Item -LiteralPath ("Env:\"+$_.Name) }
@@ -120,6 +170,135 @@ function Run-Scenario([string]$name, [string[]]$commands) {
 function Require([string[]]$log, [string]$pattern) {
     if (!($log -match $pattern)) { throw "Missing $pattern; see $root" }
 }
+if($ArcadeOnly) {
+    $exterior=Join-Path $root 'arcade-exterior.png'
+    $floor=Join-Path $root 'arcade-floor.png'
+    $loft=Join-Path $root 'arcade-loft.png'
+    $landing=Join-Path $root 'arcade-landing.png'
+    $game=Join-Path $root 'arcade-game.png'
+    $menu=Join-Path $root 'arcade-menu.png'
+    $log=Run-Scenario 'arcade-originals' @(
+        'wait 2','arcadefocus 1','downtownclick VISIT NEON CIRCUIT ARCADE','wait 1',"shot $exterior",
+        'downtownenter org.scifishell.arcade','wait 1','arcadestatus',"shot $floor",
+        'cam 9 1.7 4 0 0 0','walk 11 4','look 90 0','walk 7 3','look 0 0','walk 2 1',
+        'wait .2','arcadegeometry','cam 0 6.5 -10 0 -8 0','wait 1',"shot $loft",
+        'cam 1 6.5 -10 -90 -8 0','wait 1',"shot $landing",
+        'cam 0 1.7 2 0 0 0','downtowncard 0','wait .5',"shot $menu",'arcadekey Return','wait 2',
+        'arcadestatus',"shot $game",
+        'arcadekey F9','arcadekey F10','arcadekey F2','wait .2','arcadestatus','downtownstatus',
+        'arcadekey Escape','wait .2','arcadestatus',
+        'arcadepad 0 -1 0','arcadepad 0 0 0','arcadepad 1 0 0','arcadepad 0 0 0',
+        'arcadepad 0 1 0','arcadepad 0 0 0','arcadepad 0 0 1','wait 1','arcadestatus',
+        'arcadevr 0 0 2','arcadevr 0 0 2','wait .2','arcadestatus',
+        'cam -2 1.7 2 0 0 0','downtowncard 1','arcadevr 0 0 1','wait 1','arcadestatus',
+        'arcadevr 0 0 2','arcadevr 0 0 2','leave',
+        'pluginclick NEON CIRCUIT ARCADE','pluginstatus','settingsclose',
+        'downtownenter org.scifishell.arcade','downtownstatus','downtowncard 2',
+        'downtowncard 1','pluginstatus','settingsclose',
+        'downtownenter org.scifishell.arcade','downtowncard 0','arcadekey Return','wait .2','arcadestatus',
+        'arcadefocus 0','wait .2','arcadestatus','quit'
+    )
+    Require $log 'active=0 game=0 ticks=[1-9]'
+    Require $log 'active=0 game=1 ticks=[1-9]'
+    Require $log 'active=1 game=1 ticks=[1-9]'
+    Require $log 'arcade floor=4.800'
+    Require $log 'selected=-1 active=-1.*simulated_focus=0'
+    Require $log 'selected=-1 active=-1'
+    Require $log 'org.scifishell.arcade=off'
+    Require $log 'org.scifishell.arcade=on'
+    Require $log 'interior=org.scifishell.arcade cards=5'
+    foreach($image in @($exterior,$floor,$loft,$landing,$game,$menu)) {
+        if(!(Test-Path -LiteralPath $image) -or (Get-Item -LiteralPath $image).Length -lt 10000) {
+            throw "Missing diagnostic image $image"
+        }
+        $log=Run-Scenario 'arcade-snack-pad' @(
+            'wait 2','downtownclick VISIT NEON CIRCUIT ARCADE','wait .5','give 0','pluginstatus','testpada','wait .2','pluginstatus',
+            'wait .2','pluginstatus','give 1','pluginstatus','testpada','wait .2','pluginstatus',
+            'wait .2','pluginstatus','downtownstatus','quit'
+        )
+        $states=@($log | Where-Object {$_ -like 'plugins *'})
+        if($states.Count -ne 6 -or $states[0] -notmatch 'holding=1' -or
+           $states[1] -notmatch 'holding=0' -or $states[2] -notmatch 'holding=0' -or
+           $states[3] -notmatch 'holding=1' -or $states[4] -notmatch 'holding=0' -or $states[5] -notmatch 'holding=0') {
+            throw "Xbox snack interaction failed: $root"
+        }
+        Require $log 'city=1 interior=none'
+    }
+    $log=Run-Scenario 'arcade-persistence' @(
+        'wait 2','arcadefocus 1','downtownclick VISIT NEON CIRCUIT ARCADE','downtownenter org.scifishell.arcade',
+        'downtowncard 0','arcadekey Return','wait 1','arcadestatus','quit'
+    )
+    Require $log 'active=0 game=1 ticks=[1-9]'
+    # Original NROM diagnostic, authored here; no commercial data or assets.
+    $fixture=Join-Path $root 'diagnostic.nes'
+    $rom=New-Object byte[] (16+16384+8192)
+    $header=[byte[]]@(0x4e,0x45,0x53,0x1a,1,1)
+    $header.CopyTo($rom,0)
+    [byte[]]$program=@(0x78,0xd8,0xa2,0xff,0x9a,0xe8,0x8e,0,0x20,0x8e,1,0x20,
+        0x2c,2,0x20,0x10,0xfb,0xa9,0x3f,0x8d,6,0x20,0xa9,0,0x8d,6,0x20,
+        0xa9,0x21,0x8d,7,0x20,0x4c,0x20,0x80)
+    $program.CopyTo($rom,16)
+    for($i=0;$i -lt 3;$i++) { $rom[16+16384-6+$i*2]=0; $rom[16+16384-5+$i*2]=0x80 }
+    [System.IO.File]::WriteAllBytes($fixture,$rom)
+    $invalid=Join-Path $root 'invalid.nes'
+    [System.IO.File]::WriteAllBytes($invalid,[byte[]]@(1,2,3))
+    $log=Run-Scenario 'arcade-picker-cancel' @(
+        'wait 2','arcadefocus 1','downtownclick VISIT NEON CIRCUIT ARCADE','downtownenter org.scifishell.arcade',
+        'downtowncard 0','arcadekey Up','arcadekey Return','wait .5','arcadestatus',
+        'arcadekey Down','arcadekey Return','wait 1','arcadestatus','quit'
+    ) 'cancel'
+    Require $log 'active=0 game=1 ticks=[1-9]'
+    $log=Run-Scenario 'arcade-picker-invalid' @(
+        'wait 2','arcadefocus 1','downtownclick VISIT NEON CIRCUIT ARCADE','downtownenter org.scifishell.arcade',
+        'downtowncard 0','arcadekey Up','arcadekey Return','wait .5','arcadestatus','quit'
+    ) $invalid
+    Require $log 'notice=NES IMPORT LIMIT'
+    $log=Run-Scenario 'arcade-picker-valid' @(
+        'wait 2','arcadefocus 1','downtownclick VISIT NEON CIRCUIT ARCADE','downtownenter org.scifishell.arcade',
+        'downtowncard 0','arcadekey Up','arcadekey Return','wait .5','arcadestatus',
+        'arcadekey Down','arcadekey Return','wait 4','arcadestatus','quit'
+    ) $fixture
+    Require $log 'notice=ROM IMPORTED'
+    Require $log 'active=0 game=4 ticks=[1-9]'
+    $log=Run-Scenario 'arcade-nes' @(
+        'wait 2','arcadefocus 1','downtownclick VISIT NEON CIRCUIT ARCADE','downtownenter org.scifishell.arcade',
+        'downtowncard 0',"arcadeimport $fixture",'arcadekey Return','wait 5','arcadestatus',
+        'arcadepad 0 0 1','arcadevr 1 0 1','wait 1','arcadestatus',
+        'pluginclick NEON CIRCUIT ARCADE','arcadestatus','settingsclose',
+        'pluginclick NEON CIRCUIT ARCADE','settingsclose','downtownenter org.scifishell.arcade',
+        'downtowncard 0','arcadekey Return','wait 3','arcadestatus',
+        'arcadekey Escape','wait .2','arcadestatus','arcadekey Escape','wait .2',
+        'downtowncard 1','arcadekey Return','wait 1','arcadestatus','leave','arcadestatus','quit'
+    )
+    Require $log 'arcade import ok'
+    Require $log 'active=0 game=4 ticks=[1-9]'
+    Require $log 'active=1 game=1 ticks=[1-9]'
+    Require $log 'arcade running=0 selected=-1 active=-1'
+    if($log -match 'ARCADE_ERROR|TIMED OUT|INITIALIZATION FAILED|INTEGRITY CHECK FAILED') { throw "NES failed: $root" }
+    if($ArcadeRom) {
+        # Never capture screenshots of a user-supplied game.
+        $originalHash=(Get-FileHash -LiteralPath $ArcadeRom -Algorithm SHA256).Hash
+        $imported=Join-Path $profile 'SciFiShell\arcade\cabinet-0.nes'
+        try {
+            $log=Run-Scenario 'arcade-user-rom' @(
+            'wait 2','arcadefocus 1','downtownclick VISIT NEON CIRCUIT ARCADE','downtownenter org.scifishell.arcade',
+            'downtowncard 0',"arcadeimport $ArcadeRom",'arcadekey Return','wait 5','arcadestatus',
+            'arcadepad 0 0 5','arcadepad 0 0 0','wait 2','arcadestatus','arcadekey Escape','wait .2','arcadestatus','quit'
+        )
+            Require $log 'arcade import ok'
+            Require $log 'active=0 game=4 ticks=[1-9]'
+            if($log -match 'ARCADE_ERROR|TIMED OUT') { throw "User ROM failed: $root" }
+            if((Get-FileHash -LiteralPath $ArcadeRom -Algorithm SHA256).Hash -ne $originalHash -or
+               (Get-FileHash -LiteralPath $imported -Algorithm SHA256).Hash -ne $originalHash) {
+                throw 'User ROM changed or import is not an exact copy'
+            }
+        } finally {
+            if(Test-Path -LiteralPath $imported) { Remove-Item -LiteralPath $imported }
+        }
+    }
+    Write-Output "Arcade integration passed: $root"
+    return
+}
 $log = Run-Scenario 'builtins' @(
     'wait 2', 'downtownstatus', 'downtownclick VISIT CAR AND TRACK', 'downtownenter org.scifishell.driving',
     'downtowncard 2', 'downtownstatus', 'downtowncard 1', 'pluginstatus', 'downtownstatus',
@@ -128,7 +307,7 @@ $log = Run-Scenario 'builtins' @(
     'downtowncard 2', 'downtownstatus', 'downtowncard 1', 'pluginstatus',
     'settingsclose', 'downtownenter org.scifishell.parks', 'downtowncard 1', 'pluginstatus', 'quit'
 )
-Require $log 'bounds=-68,4,108,148'
+Require $log 'bounds=-68,36,108,148'
 Require $log 'interior=org.scifishell.driving cards=5'
 Require $log 'interior=org.scifishell.parks cards=5'
 Require $log 'org.scifishell.driving=off'
@@ -153,7 +332,7 @@ $log = Run-Scenario 'lifecycle' @(
     'leave', 'downtownclick VISIT DISTRICT TEST', 'wait 1', 'quit'
 )
 Require $log 'interior=com.example.clock cards=5'
-Require $log 'com.example.downtown=3\(custom\).*com.example.clock=4\(default\)|com.example.clock=4\(default\).*com.example.downtown=3\(custom\)'
+Require $log 'com.example.downtown=4\(custom\).*com.example.clock=5\(default\)|com.example.clock=5\(default\).*com.example.downtown=4\(custom\)'
 Require $log 'collision_safe=1'
 Require $log 'built=1 layout_clear=1'
 Require $log 'com.example.clock=on'
@@ -171,11 +350,11 @@ $log = Run-Scenario 'restart-remove' @(
 )
 Require $log 'CLICK REMOVE AGAIN'
 Require $log 'PLUGIN UNINSTALLED'
-Require $log 'com.example.clock=4\(default\).*com.example.downtown=3\(custom\)'
+Require $log 'com.example.clock=5\(default\).*com.example.downtown=4\(custom\)'
 $last = ($log | Where-Object { $_ -like 'downtown *' })[-1]
 if ($last -match 'com.example.clock=|com.example.downtown=') { throw "Removed buildings remain: $root" }
 $log = Run-Scenario 'gap-fill' @('wait 2', "plugininstall $defaultZip", 'downtownstatus', 'quit')
-Require $log 'com.example.clock=3\(default\)'
+Require $log 'com.example.clock=4\(default\)'
 $commands=@('wait 2','settingsdistrictstatus',
     'settingsvisit settings.graphics','settingsenter settings.graphics',
     'cam 8.6 1.7 -6 -90 0','wait 1',("shot "+(Join-Path $root 'settings-console.png')),

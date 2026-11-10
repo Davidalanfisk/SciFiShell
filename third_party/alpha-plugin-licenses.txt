@@ -1,3 +1,9 @@
+JSNES 2.1.0
+Upstream: https://github.com/bfirsh/jsnes
+Unmodified distribution: assets/arcade/jsnes.js
+Apache License 2.0: see assets/arcade/JSNES-LICENSE.txt (distributed alongside the engine).
+No ROMs or BIOS files are included.
+
 PicoSHA2
 MIT License
 

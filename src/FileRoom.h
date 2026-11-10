@@ -14,6 +14,8 @@
 #include "Thumbnails.h"
 #include "Viewer.h"
 #include "SettingsModel.h"
+#include "ArcadeApi.h"
+#include <array>
 
 namespace sf {
 
@@ -68,6 +70,8 @@ public:
     explicit FileRoom(Renderer& renderer);
     void load(std::string path);
     void loadEmpty();  // grid floor only, no cards
+    void loadArcade(const std::array<std::shared_ptr<GpuLabel>,SF_ARCADE_CABINETS>& screens,
+                    std::function<void(int)> select,std::function<void()> toggle,std::function<void()> arrange);
     void loadPlugin(const std::string& name, const std::vector<std::string>& details,
                     std::function<void()> toggle, std::function<void()> remove,
                     std::function<void()> arrange);
@@ -157,6 +161,7 @@ private:
     float extent_ = 12.0f;
     bool building_ = false, cardsVisible_ = true;
     bool pluginRoom_ = false;
+    bool arcadeRoom_ = false;
     int rows_ = 0, roomIdx_ = -1;
     bool inRoom_ = false, spawnPending_ = false;
     float spawnYaw_ = 0.0f;

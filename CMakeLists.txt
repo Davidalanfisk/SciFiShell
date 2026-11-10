@@ -96,6 +96,9 @@ set(SOURCES
     src/AppShellDowntown.cpp
     src/AppShellSettingsDistrict.cpp
     src/Downtown.cpp
+    src/Arcade.cpp
+    src/ArcadeEmulator.cpp
+    src/plugins/AppShellArcade.cpp
     src/plugins/AppShellCar.cpp
     src/plugins/AppShellParks.cpp
     src/TaskSwitcher.cpp
@@ -187,15 +190,22 @@ if(SCIFI_TEST_SYNTHETIC_CITY)
 endif()
 add_library(TrackSamplingModule MODULE src/plugins/TrackSamplingModule.cpp src/plugins/TrackGenerationModule.cpp src/plugins/TrackRenderingModule.cpp src/plugins/DrivingModule.cpp src/plugins/CarRenderingModule.cpp src/Math.cpp)
 add_library(ParksSceneModule MODULE src/plugins/ParksSceneModule.cpp src/plugins/ParksSceneRendering.cpp src/plugins/ParksToysModule.cpp src/Math.cpp)
+add_library(ArcadeModule MODULE src/plugins/ArcadeModule.cpp)
+target_include_directories(ArcadeModule PRIVATE src)
 target_include_directories(TrackSamplingModule PRIVATE src)
 target_include_directories(ParksSceneModule PRIVATE src)
-add_dependencies(SciFiShell TrackSamplingModule ParksSceneModule)
+add_dependencies(SciFiShell TrackSamplingModule ParksSceneModule ArcadeModule)
 target_compile_definitions(SciFiShell PRIVATE SCIFI_TRACK_MODULE_FILENAME="$<TARGET_FILE_NAME:TrackSamplingModule>"
-    SCIFI_PARKS_MODULE_FILENAME="$<TARGET_FILE_NAME:ParksSceneModule>")
+    SCIFI_PARKS_MODULE_FILENAME="$<TARGET_FILE_NAME:ParksSceneModule>"
+    SCIFI_ARCADE_MODULE_FILENAME="$<TARGET_FILE_NAME:ArcadeModule>")
 target_link_libraries(SciFiShell PRIVATE ${CMAKE_DL_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(ArcadeTest tests/ArcadeTest.cpp src/plugins/ArcadeModule.cpp src/ArcadeEmulator.cpp)
+    target_include_directories(ArcadeTest PRIVATE src)
+    target_compile_definitions(ArcadeTest PRIVATE NOMINMAX)
+    add_test(NAME ArcadeTest COMMAND ArcadeTest)
     add_executable(SettingsModelTest tests/SettingsModelTest.cpp)
     target_include_directories(SettingsModelTest PRIVATE src)
     target_compile_definitions(SettingsModelTest PRIVATE NOMINMAX)
@@ -341,7 +351,7 @@ target_link_libraries(SciFiShell PRIVATE
 
 if(WIN32)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineD3D12-static xinput d3d12 dxgi pdh
-                          mfplat mfreadwrite mfuuid d3d11 dwmapi windowsapp propsys ole32 oleaut32 iphlpapi powrprof ws2_32 psapi wininet)
+                          mfplat mfreadwrite mfuuid d3d11 dwmapi windowsapp propsys ole32 oleaut32 iphlpapi powrprof ws2_32 psapi wininet comdlg32)
 elseif(APPLE)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineMetal-static)
 else()

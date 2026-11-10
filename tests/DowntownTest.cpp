@@ -54,7 +54,8 @@ int main() {
     check(!small.intersects(0, 500, 20) && sparse.intersects(0,500,20),
           "unused future rows are not reserved; intentional gaps remain reserved");
     check(sf::downtownBuiltin(sf::kDowntownDrivingId) && sf::downtownBuiltin(sf::kDowntownParksId) &&
-          !sf::downtownBuiltin("com.example.plugin"), "only the two bundled IDs have protected management");
+          sf::downtownBuiltin(sf::kDowntownArcadeId) &&
+          !sf::downtownBuiltin("com.example.plugin"), "only bundled IDs have protected management");
     for (int i = 0; i < sf::kDowntownSlots; ++i) {
         const auto p = sf::downtownPlot(i);
         const auto region = sf::downtownRegion({{"occupant",i}});
@@ -75,8 +76,8 @@ int main() {
     for (int i = 0; i < 64; ++i) many.insert("plugin." + std::to_string(i));
     check(restart.reconcile(many) && restart.placements().size() == 64, "full package-store capacity supported");
     const auto packages = restart.placements();
-    many.insert(sf::kDowntownDrivingId); many.insert(sf::kDowntownParksId);
-    check(restart.reconcile(many) && restart.placements().size() == 66, "bundled buildings fit beside full package capacity");
+    many.insert(sf::kDowntownDrivingId); many.insert(sf::kDowntownParksId);many.insert(sf::kDowntownArcadeId);
+    check(restart.reconcile(many) && restart.placements().size() == 67, "bundled buildings fit beside full package capacity");
     for (const auto& [id, slot] : packages)
         check(restart.placements().at(id) == slot, "adding native buildings preserves existing package placements");
     const auto withBuiltins = restart.placements();

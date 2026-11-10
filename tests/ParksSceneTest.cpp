@@ -76,6 +76,11 @@ int main(int argc, char** argv) {
               !toys->take_blast(toys->context, &impulse), "blast consumed once");
         toys->give(toys->context, 1);
         check(toys->holding(toys->context), "hold ice cream");
+        const int before=counts.sounds;
+        check(toys->throw_held(toys->context, &toyHost, {0, 2, 0}) &&
+              !toys->holding(toys->context) && counts.sounds==before+1, "throw ice cream once");
+        check(toys->throw_held(toys->context, &toyHost, {0, 2, 0}) &&
+              counts.sounds==before+1, "empty throw does not repeat sound");
         plugin.unload();
         check(!plugin.getInterface(SF_PARKS_SCENE_INTERFACE), "interface unavailable after unload");
     }
