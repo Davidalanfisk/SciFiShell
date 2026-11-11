@@ -283,7 +283,7 @@ int main() {
               0.1, 100, wall, resolved) == Result::Applied && calls == 4 &&
               resolved.x <= 0.3 && resolved.yaw == 0.2,
               "host substeps a valid proposal and stops at a synthetic wall");
-        const auto tallStep = [](Pose& p) { p.y += 2; return true; };
+        const auto tallStep = [](Pose& p) { p.y += sf::kGameplayControlSpeedLimit * 0.01 + 1; return true; };
         check(sf::resolveGameplayControlMotion(lease, 42, true, camera, Pose{0.1,1.7,0,0,0},
               0.01, 100, tallStep, resolved) == Result::Applied && resolved.x == camera.x &&
               resolved.y == camera.y && lease.owner() == 42,
@@ -297,9 +297,78 @@ int main() {
               0.1, 100, badWorld, resolved) == Result::InvalidWorld,
               "invalid collision result fails explicitly");
         calls = 0;
-        check(sf::resolveGameplayControlMotion(lease, 42, true, camera, Pose{3,1.7,0,0,0},
+        check(sf::resolveGameplayControlMotion(lease, 42, true, camera,
+              Pose{sf::kGameplayControlSpeedLimit * 0.1 + 0.001,1.7,0,0,0},
               0.1, 100, wall, resolved) == Result::InvalidProposal && calls == 0,
               "excessive proposal is rejected before collision queries");
+    }
+    {
+        sf::GameplayControlLease lease;
+        using Pose = sf::GameplayControlLease::Pose;
+        using Result = sf::GameplayControlMotionResult;
+        const Pose camera{2000, 100, 0, 0, 0};
+        check(lease.acquire(42, true, true, true, camera, camera), "acquire fast motion lease");
+        for (const double dt : {0.0001, 0.001, 0.0137, 0.016, 0.1}) {
+            for (const double speed : {100.0, 500.0, 1000.0}) {
+                const Pose proposed{camera.x + speed * dt, camera.y, camera.z, 0, 0};
+                check(lease.accepts(42, true, camera, proposed, dt),
+                      "lease accepts 100, 500 and 1000 units per second at small and maximum dt");
+                Pose resolved{}, previous = camera;
+                int calls = 0;
+                bool smallSteps = true;
+                const auto unobstructed = [&](Pose& p) {
+                    ++calls;
+                    smallSteps = smallSteps && std::hypot(p.x - previous.x, p.y - previous.y,
+                                                         p.z - previous.z) <= sf::kGameplayControlStepLimit + 1e-9;
+                    previous = p;
+                    return true;
+                };
+                check(sf::resolveGameplayControlMotion(lease, 42, true, camera, proposed,
+                      dt, 10000, unobstructed, resolved) == Result::Applied &&
+                      smallSteps && calls <= 401 && std::abs(resolved.x - proposed.x) < 0.001,
+                      "fast valid motion uses bounded quarter-unit collision steps without a stale displacement cap");
+                const Pose diagonal{camera.x, camera.y + speed * dt * 0.6,
+                                    camera.z - speed * dt * 0.8, 0, 0};
+                check(lease.accepts(42, true, camera, diagonal, dt),
+                      "speed limit uses three-dimensional displacement, including reverse travel");
+            }
+            const Pose tooFast{camera.x + (sf::kGameplayControlSpeedLimit + 0.01) * dt, camera.y, 0, 0, 0};
+            check(!lease.accepts(42, true, camera, tooFast, dt),
+                  "lease rejects motion just over 1000 units per second");
+            check(!lease.accepts(42, true, camera,
+                  Pose{camera.x + sf::kGameplayControlSpeedLimit * dt, camera.y,
+                       camera.z + sf::kGameplayControlSpeedLimit * dt, 0, 0}, dt),
+                  "diagonal motion cannot exceed the limit by applying it separately to each axis");
+        }
+        Pose resolved{};
+        int calls = 0;
+        const Pose origin{0, 1.7, 0, 0, 0};
+        // Same nearest-face rule as City::resolve for a 0.02-unit wall and 0.8-unit player radius.
+        const auto thinWall = [&](Pose& p) {
+            ++calls;
+            if (p.x > 2.0 - 0.8 && p.x < 2.02 + 0.8)
+                p.x = p.x - (2.0 - 0.8) < 2.02 + 0.8 - p.x ? 2.0 - 0.8 : 2.02 + 0.8;
+            return true;
+        };
+        check(sf::resolveGameplayControlMotion(lease, 42, true, origin, Pose{100,1.7,0,0,0},
+              0.1, 1000, thinWall, resolved) == Result::Applied && resolved.x <= 1.2 &&
+              resolved.x > 0 && calls <= 400 && lease.owner() == 42,
+              "1000 units per second cannot tunnel through a thin wall");
+        calls = 0;
+        const auto clear = [&](Pose&) { ++calls; return true; };
+        check(sf::resolveGameplayControlMotion(lease, 42, true, origin, Pose{101,1.7,0,0,0},
+              0.1, 1000, clear, resolved) == Result::InvalidProposal && calls == 0,
+              "over-limit movement is rejected without spending a collision budget");
+        check(sf::resolveGameplayControlMotion(lease, 42, true, origin, Pose{100,1.7,0,0,0},
+              0.1, 99, clear, resolved) == Result::InvalidProposal && calls == 0,
+              "fast movement cannot bypass the city extent");
+        check(!lease.accepts(42, true, origin, Pose{0,1.7,0,0.401,0}, 0.1) &&
+              !lease.accepts(42, true, origin, Pose{0,1.7,0,0,0.401}, 0.1),
+              "raising linear speed leaves angular limits unchanged");
+        check(sf::resolveGameplayControlMotion(lease, 42, false, origin, Pose{100,1.7,0,0,0},
+              0.1, 1000, clear, resolved) == Result::InvalidProposal && lease.owner() == 0 &&
+              calls == 0 && !lease.accepts(42, true, origin, origin, 0.1),
+              "fast-motion lease revokes on focus loss and cannot keep moving");
     }
     check(!runtime.start("control_offer(0/0,0,0) return {}", error, false, nullptr, nullptr, nullptr,
                          false, false, nullptr, false, true) && !runtime.running(),

@@ -14,4 +14,8 @@ inline constexpr std::size_t kGameplayTextLimit = kPluginTextLimit;
 inline constexpr unsigned kGameplayEntryLimit = 34;
 inline constexpr std::size_t kGameplayDecodedLimit = 16 * 1024 * 1024;
 inline constexpr int kGameplayTextureDimensionLimit = 1024;
+inline constexpr double kGameplayControlSpeedLimit = 1000.0;
+inline constexpr double kGameplayControlAngularSpeedLimit = 4.0;
+inline constexpr double kGameplayControlDeltaTimeLimit = 0.1;
+inline constexpr double kGameplayControlStepLimit = 0.25;
 }  // namespace sf

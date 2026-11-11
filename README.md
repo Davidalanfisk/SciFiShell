@@ -59,6 +59,7 @@ and just *fly around inside your own machine*.
 | Summon / exit the car | `F10` |
 | H.A.R.V.I assistant (summon / dismiss) | `F1` (or `Esc`) |
 | Car: drive / drift / boost / camera | `W` `A` `S` `D` / `Space` / `Shift` / `C` |
+| Scripted vehicle: enter / exit a nearby control offer | `G` / `Esc` (Xbox: `Start` enter/exit, `B` or `View/Back` exit) |
 | Hot dog / ice cream stand: take one, then throw it | Click the stand, click again |
 
 **Xbox controller:** left stick move · right stick look (snap turn in VR) · **RT / LT** up / down · **A** select / throw a held snack · **B** back · **Y** Start menu · **X** on-screen keyboard · **LB / RB** previous / next window (then **A**). While driving: **RT / LT** accelerate / brake, left stick steers, **RB / LB** boost / drift; **Y** exits the car or exits a stunt-track lap.
@@ -122,6 +123,24 @@ Districts sit on glass-pane floors with a neon outline, and the whole city has a
 
 ### Play in the city
 
+**Scripted flight (v0.9.27).** Scripted player/camera control now permits **1000 shell units/second**,
+with the existing city bounds, angular limits and quarter-unit collision substeps. Existing scripts
+that hardcode a 25-unit speed do not accelerate automatically; native car tuning is unchanged.
+Plugins can receive Left Shift boost and relative mouse steering while they own control.
+Xbox **Start** activates the nearest permitted offer within four units; **Start**, **B** or
+**View/Back** exits. Controller flight buttons do not also open shell panels, and focus loss,
+overlays or disconnection release control and clear input. Scripted control is unavailable in VR.
+
+Try the optional [TrackFly 2.2.1 package](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.27/TrackFly2-2.2.1.zip)
+by Davidalanfisk in **Settings > Plugins > Install Package**, then review and confirm its
+permissions. It requires **v0.9.27 or newer**, is not enabled or installed automatically, and
+does not replace the bundled car example. Approach its launch pad, press **G / Start**, steer with
+the **mouse** or left-stick yaw/right-stick pitch, and use **W/S** or **RT/LT** for thrust/braking.
+**Left Shift / mouse button / A / RB** boosts; **Space / Left Ctrl** or **Y/X** climbs/descends.
+The speed HUD shows actual camera travel in units/second, not km/h or desired craft speed.
+Cruise/boost targets are 300/800; collision, acceleration, camera lag and low frame rates can reduce
+actual speed. See the [full controls, installation and limitations](docs/plugins.md#trackfly-221-example-v0927).
+
 **Settings quarter (v0.9.25).** North of Computer/CPU, the gold-toned
 **SETTINGS - CONTROL QUARTER** has one building for every real Settings group, including Windows
 and media pages. Walk north or use **Settings > Settings District > Visit [group]**. Enter the
@@ -175,7 +194,7 @@ Ground-level fog drifts between the towers (tune it with the fog sliders in Sett
 
 **The car.** Press `F10` anywhere in the city to summon a neon hologram sports car, and `F10` again to leave it. `C` swaps first and third person; `Space` drifts and `Shift` boosts. A speedo appears on the HUD. The wheels steer and spin, and a quiet electric hum rises with speed. Parked, it is solid: you can stand on it. Ramps on every region let you drive up onto the platforms.
 
-**Make a plugin.** The Windows x64 build **v0.9.26** supports data-only themes, Lua message scripts, and experimental Lua gameplay plugins, including persistent storage, controller input, audio samples, local messages and procedural meshes. Every installed package gets a Downtown building, and gameplay packages may supply a bounded custom exterior through `downtown_model`. Plugin manifests and Lua source files accept up to **10 MiB each**, with bounded Lua compilation and runtime memory. Start with the [plugin developer guide](docs/plugins.md): it walks through installation, a first gameplay plugin, packaging, permissions, limits and the API, including the [v0.9.25 changelog](docs/plugins.md#v0925-changelog). Try the downloadable [clock](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.19/scifishell-clock-example.zip), [scripted car and track](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-car-track.zip), or [scripted parks and toys](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-parks-toys.zip) in **Settings > Plugins**. The gameplay examples are simplified, not replacements for the separately enabled native Car and Track and Parks and Toys. Scripts and asset decoders run in the shell process, not an OS sandbox; only install and enable packages you trust.
+**Make a plugin.** The Windows x64 build **v0.9.27** supports data-only themes, Lua message scripts, and experimental Lua gameplay plugins, including persistent storage, controller input, audio samples, local messages and procedural meshes. Every installed package gets a Downtown building, and gameplay packages may supply a bounded custom exterior through `downtown_model`. Plugin manifests and Lua source files accept up to **10 MiB each**, with bounded Lua compilation and runtime memory. Start with the [plugin developer guide](docs/plugins.md): it walks through installation, a first gameplay plugin, packaging, permissions, limits and the API, including the [v0.9.27 changelog](docs/plugins.md#v0927-changelog). Try the downloadable [clock](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.19/scifishell-clock-example.zip), [scripted car and track](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-car-track.zip), or [scripted parks and toys](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-parks-toys.zip) in **Settings > Plugins**. The gameplay examples are simplified, not replacements for the separately enabled native Car and Track and Parks and Toys. Scripts and asset decoders run in the shell process, not an OS sandbox; only install and enable packages you trust.
 
 ![Plugins settings](docs/screenshot-plugins-2026.jpg)
 

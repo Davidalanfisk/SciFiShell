@@ -18,10 +18,12 @@
 #include "PluginPackage.h"
 #include "GameplayConsent.h"
 #include "GameplayInput.h"
+#include "GameplayMouseInput.h"
 #include "GameplayControllerInput.h"
 #include "GameplayMessaging.h"
 #include "GameplayClickRouter.h"
 #include "GameplayControlLease.h"
+#include "GameplayControlInput.h"
 #include "GameplayImpulse.h"
 #include "GameplaySoundBudget.h"
 #include "GameplaySceneRenderer.h"
@@ -98,6 +100,9 @@ private:
     bool gameplayWindowFocused() const;
 #ifdef SCIFI_TEST_SYNTHETIC_CITY
     bool syntheticGameplayFocus_ = false;
+    bool syntheticGameplayPadEnabled_ = false;
+    PadState syntheticGameplayPad_, previousSyntheticGameplayPad_;
+    int syntheticGameplayBoost_ = -1;
 #endif
     void toggleGameplay(const std::string& id);
     void togglePlugin(const std::string& id);
@@ -138,8 +143,8 @@ private:
     void tickGameplay(double dt, const FrameInput& input, const PadState& pad, bool allowInput);
     uint64_t gameplayClickTarget(const Vec3& origin, const Vec3& direction) const;
     void releaseGameplayControl();
-    void acquireGameplayControl();
-    std::string nearbyGameplayControl() const;
+    void acquireGameplayControl(bool controllerOnly = false);
+    std::string nearbyGameplayControl(bool controllerOnly = false) const;
     void prepareGameplay();
     void renderGameplay();
     Node& activeRoot();
@@ -178,12 +183,14 @@ private:
         std::unique_ptr<GameplaySceneRenderer> scene;
         std::string pendingError;
         GameplayInput inputState;
+        GameplayMouseInput mouseInput;
         GameplayControllerInput controllerInput;
     };
     std::map<std::string, std::shared_ptr<GameplayEntry>> gameplay_;
     GameplayMessaging gameplayMessages_;
     std::uint64_t gameplayFrame_ = 0;
     GameplayControlLease gameplayControl_;
+    GameplayControlInput gameplayControlInput_;
     GameplayClickRouter gameplayClicks_;
     std::unique_ptr<GameplayConsent> gameplayConsent_;
     uint64_t nextGameplayOwner_ = 1;

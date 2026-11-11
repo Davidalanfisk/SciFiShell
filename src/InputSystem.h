@@ -16,6 +16,7 @@ struct FrameInput {
     float wheel = 0;                // mouse wheel notches (positive = up)
     float moveX = 0, moveY = 0;     // strafe / forward, -1..1
     float lookX = 0, lookY = 0;     // mouse delta in pixels (relative mode only)
+    bool mouseReset = false;       // focus/capture changed; discard relative motion this frame
     bool select = false, back = false, up = false, down = false;  // edge-triggered
     bool space = false;             // space pressed this frame (menu select; fly-up in the room)
     bool escape = false;            // Escape pressed this frame
@@ -68,6 +69,7 @@ public:
 
 private:
     bool relative_ = false;
+    bool resetLook_ = false;
     bool seekLeftHeld_ = false, seekRightHeld_ = false;
 };
 

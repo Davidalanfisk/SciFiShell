@@ -1,6 +1,63 @@
 # Plugins
 
-This guide targets the **SciFi Shell v0.9.26 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+This guide targets the **SciFi Shell v0.9.27 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+
+## v0.9.27 changelog
+
+Scripted player/camera control now permits **1000 units/second**, up from 25, while retaining
+0.25-unit collision substeps, a 0.1-second host tick cap, 4-radian/second angular limits and
+the existing finite-pose, world, permission, focus and explicit-activation checks.
+This is not a native vehicle-speed change. Scripts hardcoding the old speed must update their
+own motion/chase-camera pacing; upgrading the host alone does not speed them up.
+
+The [input contract](#controller-input) now includes Left Shift `boost`, Xbox Start acquisition
+and Start/Back/B release with exclusive controller routing, held-state cleanup/resynchronization,
+and active-owner-only `mouse_yaw` / `mouse_pitch` relative angular impulses. Mouse impulses are
+consumed once, not multiplied by dt or treated as held axes. No new manifest permission or
+API-version value is required; the older v0.9.26 host does not supply these new controls.
+
+### TrackFly 2.2.1 example (v0.9.27)
+
+Download [TrackFly2-2.2.1.zip](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.27/TrackFly2-2.2.1.zip)
+from the release, separately from the installer. This is the exact reviewed package by
+**Davidalanfisk**, supplied by its author and published with their approval; its asset bytes
+and authorship are preserved. No additional asset licence or public-domain status is asserted.
+It is optional, not bundled/enabled by the installer, and does not replace existing examples.
+The manifest's review-host wording refers to the controls now released in **v0.9.27**.
+
+Use **Settings > Plugins > Install Package**, select the ZIP without extracting it, then select
+**TRACKFLY 2** twice within 30 seconds to review and grant the requested permissions.
+If the same ID is already installed, back up your profile first and use the normal disable/remove
+flow before installing the new package; import does not overwrite existing packages, and removal
+can remove saved data. The ID remains `com.davidalanfisk.trackfly2`; score-key naming is unchanged.
+Wait for its city survey, approach the launch pad within four units, and press **G / Xbox Start**.
+Keep the world focused with panels closed. **Escape/G/Start/B/View-Back** releases flight.
+
+| Action | Keyboard / mouse | Xbox |
+|---|---|---|
+| Yaw | Mouse left/right; A/D adds yaw | Left stick X |
+| Pitch | Mouse up/down, following shell sensitivity/invert-Y | Right stick Y |
+| Throttle / brake-reverse | W/S | Left stick Y or RT/LT |
+| Strafe | No separate key | Right stick X or D-pad left/right |
+| Climb / descend | Space / Left Ctrl | Y/X or D-pad up/down |
+| Boost | Hold Left Shift or left mouse | Hold A or RB |
+| Full brake (overrides boost/throttle) | S brakes/reverses | Hold LB |
+
+Boost sources are independent; releasing one does not cancel another held source.
+Boost can launch from rest, with about 3.6 seconds of energy and 7.1 seconds to recharge.
+The cruise/boost targets are 300/800 units/second, with smoothed acceleration and a combined
+800-unit velocity ceiling. The package paces camera corrections below 900 units/second and
+combined rotation below 3.8 radians/second; excess mouse motion is discarded, not backlogged.
+Only plugin-generated fake ground shadows were removed, not global renderer shadows.
+
+The in-flight HUD starts with **actual camera/player speed** in shell units/second (not km/h),
+measured from the last accepted view-position displacement and callback dt, then compact course/time
+guidance. It updates about four times/second, resets on acquisition and reads zero for a blocked
+camera; craft speed can differ because of camera lag and collision.
+The plugin caps physics steps at 66 ms, so very low frame rates slow flight rather than enlarging
+steps. Host collision is still player-sized city collision, not full swept vehicle-body physics;
+the plugin also performs its own bounded craft sweep. City bounds and geometry can constrain travel.
+This is not an unlimited-world, FPS, physical-controller or VR-flight certification.
 
 ## v0.9.25 changelog
 
@@ -237,7 +294,30 @@ python -c "import zipfile,pathlib; p=pathlib.Path('examples/plugins/storage-demo
 
 Gameplay manifests may request `"controller"` together with `"input"`. Consent lists controller input separately. `on_input(control,value)` receives `gamepad_left_x`, `gamepad_left_y`, `gamepad_right_x`, `gamepad_right_y`, `left_trigger`, `right_trigger`, `button_a`, `button_b`, `button_x`, `button_y`, `button_start`, `button_back`, `dpad_up`, `dpad_down`, `dpad_left`, and `dpad_right`. For compatibility each change is also delivered first under its legacy `pad_lx`, `pad_ly`, `pad_rx`, `pad_ry`, `pad_lt`, `pad_rt`, `pad_a`, `pad_b`, `pad_x`, `pad_y`, `pad_start`, `pad_back`, `pad_up`, `pad_down`, `pad_left`, or `pad_right` name respectively. Handle only one naming family to avoid acting twice. `pad_connected`, `pad_lb`, `pad_rb`, `pad_ls`, and `pad_rs` have no new alias. Sticks are dead-zoned in `[-1,1]`, Y is positive up, triggers are in `[0,1]`, and buttons and availability use 0/1. Only changes are delivered; leaving the available interaction context or disconnecting resets held values to zero. On Windows this uses the first XInput controller; elsewhere it uses the first SDL game controller. VR controller events are not included.
 
-Controller input is shared with the shell unless the plugin holds the existing `control` lease. In shared mode shell shortcuts may act on a button first or open a panel, preventing that press from reaching the plugin; for example X opens the keyboard and Y opens Start. While a controller-enabled plugin holds control, shell button shortcuts are suppressed in the focused city, and Escape or G still releases control. Input remains unavailable when interacting with panels, typing, driving natively, or in VR.
+Controller input is shared with the shell unless the plugin holds the existing `control` lease. In shared mode shell shortcuts may act on a button first or open a panel, preventing that press from reaching the plugin; for example X opens the keyboard and Y opens Start. A nearby offer from a controller-enabled plugin displays **G / Start: Enter**. A fresh Xbox **Start** press activates it using the same focus, consent, proximity and world-context gates as G; connecting a pad or regaining focus with Start held does not activate it. While it owns control, **Start**, **Back/View** or **B** releases it, as do Escape/G and controller disconnection. These three buttons are reserved by the host while owned, not delivered as script actions. Other pad axes/buttons go to the plugin, without shell keyboard/ring/window-switcher shortcuts. After exit or context loss, held pad controls must return to neutral before controlling the shell again. Input remains unavailable when interacting with panels, typing, driving natively, or in VR.
+
+With `input`, Left Shift also produces `on_input("boost",1)` when held and
+`on_input("boost",0)` on release or unavailable interaction context. It is independent of
+controller buttons; combine it with your chosen pad boost action in the script.
+On activation the host resets the keyboard/controller change snapshots so currently held values are
+resent after `on_input("control",1)`. Before `control=0`, previously delivered axes, buttons, click
+and boost receive zero/release values. Scripts should still clear their local input state on release
+or disconnect and must not propose poses before activation. In shared mode the existing input
+permission still allows remote controls when no lease is held.
+
+With `input` and an **active control lease**, captured flat-screen mouse movement produces
+`on_input("mouse_yaw",delta)` and `on_input("mouse_pitch",delta)` before `on_tick`.
+These are relative **radian impulses**, not held axes: positive yaw turns right (subtract from
+camera yaw), positive pitch looks down (subtract from pitch). Shell look sensitivity and invert-Y
+are already applied at 0.0025 radians/pixel before sensitivity scaling. Accumulate and consume
+them once per tick; **do not multiply by dt**. Identical nonzero deltas repeat on consecutive
+frames; zero deltas generate no callback. Each axis is clamped to `4*dt` radians with no backlog
+and at most two mouse callbacks per frame; scripts must still clamp their combined
+mouse/keyboard/controller rotation to the pose limits. Nonfinite deltas are discarded.
+No mouse input is delivered to unowned plugins or while UI, focus, capture or VR makes world
+input unavailable. Acquisition and capture/context recovery frames discard relative motion;
+it is never resent with held-state snapshots. Clear pending impulses on `control=0`.
+The native camera does not also rotate while a plugin owns control.
 
 ### Packaged samples
 
@@ -286,7 +366,7 @@ Use `scene_mesh(handle, texture, x, y, z, width, height, depth, red, green, blue
 
 ## Start here
 
-You do not need to build the shell to make a plugin: install [v0.9.26](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.26), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
+You do not need to build the shell to make a plugin: install [v0.9.27](https://github.com/Davidalanfisk/SciFiShell/releases/tag/v0.9.27), a text editor, and optionally Python 3 for the ZIP commands below. The installer is unsigned. Launch the **installed** shortcut rather than an older source build or taskbar pin.
 
 | What you want | Package | Start with |
 |---|---|---|
@@ -467,7 +547,7 @@ The manifest has exactly `id`, `name`, `version`, `author`, `description`, `entr
 
 Install through **Settings > Plugins > Install Package**. New packages start disabled. Selecting a gameplay plugin without a matching grant displays its ID and requested permissions; select it again within 30 seconds to consent and enable it. Consent is stored against the exact ZIP contents, so changed contents require consent again. Disabling releases its objects and GPU resources but retains consent for re-enabling; uninstall revokes consent. Use **Disable** to stop a failed plugin, or select its name to retry. An enabled plugin can restart automatically if its unchanged package still has consent. Callback errors stop the plugin and are reported in Settings and stderr. Do not approve packages you do not trust: Lua and image/model decoders run in the shell process, not an OS sandbox.
 
-The script chunk returns a table with optional `on_start()`, `on_tick(dt)`, `on_input(control, value)` and `on_stop()` functions. The host calls `on_start` when enabling, `on_tick` each frame, `on_input` for permitted input changes and `on_stop` when stopping normally. State in local variables persists while the plugin runs, but a restart creates a fresh Lua state. The chunk and each callback have a 100,000-instruction budget; each plugin has 1 MiB of additional Lua allocations above its compiled-code baseline, with a 128 MiB compilation/total ceiling. `dt` is seconds, capped by the host at 0.1 per frame. Only Lua's `math` library and the functions below are opened: there is no base library, filesystem, network, module loader or operating-system API. Callbacks run on the application thread; exceeding the budget or raising an error stops the plugin and releases its scene.
+The script chunk returns a table with optional `on_start()`, `on_tick(dt)`, `on_input(control, value)` and `on_stop()` functions. The host calls `on_start` when enabling, `on_tick` each frame, `on_input` for permitted input changes and relative mouse impulses, and `on_stop` when stopping normally. State in local variables persists while the plugin runs, but a restart creates a fresh Lua state. The chunk and each callback have a 100,000-instruction budget; each plugin has 1 MiB of additional Lua allocations above its compiled-code baseline, with a 128 MiB compilation/total ceiling. `dt` is seconds, capped by the host at 0.1 per frame. Only Lua's `math` library and the functions below are opened: there is no base library, filesystem, network, module loader or operating-system API. Callbacks run on the application thread; exceeding the budget or raising an error stops the plugin and releases its scene.
 
 * `scene_box(x,y,z,width,height,depth,r,g,b)` and `scene_model(model,texture,x,y,z,width,height,depth,r,g,b)` return owned integer handles. Texture `0` uses the GLB's embedded texture or white; otherwise use `asset_texture(path)`. `asset_model(path)` and `asset_texture(path)` return a package-local numeric asset ID or raise an error for an unknown path.
 * `scene_move(handle,x,y,z)`, `scene_rotate(handle,x,y,z)` (radians), `scene_resize(handle,width,height,depth)`, `scene_colour(handle,r,g,b)` and `scene_remove(handle)` update owned objects. Coordinates are world-space, with Y vertical; box positions are their centres. Positions and rotations must be finite and at most 10,000 in magnitude, sizes must be in `(0,1000]`, and colour components in `[0,1]`. Up to 128 boxes and model instances combined are allowed.
@@ -476,12 +556,24 @@ The script chunk returns a table with optional `on_start()`, `on_tick(dt)`, `on_
 * With `world`, `world_track_clearance(x,z,radius)` returns the maximum height of native track-generation obstacle footprints intersecting the square from `(x-radius,z-radius)` to `(x+radius,z+radius)`, or zero if none intersects. It uses monuments, platforms and current/target tower dimensions, matching the native generator's obstacle inputs; it is **not** a complete city collision or bridge-clearance query. Coordinates must be finite within ±10,000 and radius between 0 and 100. It fails if the city is unavailable, the data is invalid, or the combined traversal exceeds 4,096 monuments, platforms, blocks and towers. It shares the 64-call callback budget. City geometry can change, so callers must resample.
 * With `layout` and `world`, `city_cell(x,z)` returns `centerX, floorY, centerZ, pitch, occupied` for the grown city grid cell containing the point, or nil outside a cell. It reveals positions and occupancy, not names or paths. It fails when the city is unavailable or a query exceeds 4,096 examined platforms, 4,096 examined blocks or 4,096 towers in the selected block. City layout and occupancy may change; scripts must recheck and remove or relocate their objects. It does not enumerate every cell or reserve one, and multiple plugins may select the same cell.
 * With `view`, `view_pose()` returns `x,y,z,dx,dy,dz` for the in-world camera or VR headset; it returns nil before entering the file room. Direction is the view direction, not a VR controller pointer. This is read-only and available while panels are open. At most 64 scene-hit, world, layout and view calls combined are allowed per callback.
-* With `input`, `on_input` receives `move_x`, `move_y`, `move_z` axis changes in `[-1,1]` and routed `click` press/release values `1`/`0`. With `scene` and `input`, `scene_interactive(handle,true)` makes an owned object a click target; `false` removes it. The host chooses the nearest target within 14 units, breaking equal-distance ties by plugin ID, and consumes the click before native shell actions; misses go to the shell instead. Removing an object removes its target. `scene_hit` alone does not register one. With an active control lease, clicks go to its owner instead. A plugin can call `input_capture_clicks(true)` in a routed click press to capture later world clicks (for example while holding an item), then call `input_capture_clicks(false)` when finished. Capture cannot start without a routed press, never overrides UI or unavailable input, and is cleared on disable, failure or uninstall. The host resets held input when interaction becomes unavailable, including UI focus, native driving, VR and focus loss. Picking uses approximate object boxes, does not account for city occlusion, and targets behind walls can receive clicks. For controller events, also request `controller` as described above; VR controller input is not exposed.
+* With `input`, `on_input` receives `move_x`, `move_y`, `move_z` axis changes in `[-1,1]`, Left Shift `boost` changes in `0/1`, and routed `click` press/release values `1`/`0`. An active lease owner also receives `mouse_yaw` / `mouse_pitch` radian impulses under the [relative mouse contract](#controller-input); these are not held axes. With `scene` and `input`, `scene_interactive(handle,true)` makes an owned object a click target; `false` removes it. The host chooses the nearest target within 14 units, breaking equal-distance ties by plugin ID, and consumes the click before native shell actions; misses go to the shell instead. Removing an object removes its target. `scene_hit` alone does not register one. With an active control lease, clicks go to its owner instead. A plugin can call `input_capture_clicks(true)` in a routed click press to capture later world clicks (for example while holding an item), then call `input_capture_clicks(false)` when finished. Capture cannot start without a routed press, never overrides UI or unavailable input, and is cleared on disable, failure or uninstall. The host resets held input when interaction becomes unavailable, including UI focus, native driving, VR and focus loss. Picking uses approximate object boxes, does not account for city occlusion, and targets behind walls can receive clicks. For controller events, also request `controller` as described above; VR controller input is not exposed.
 * With `sound`, `sound_play(name, volume)` queues one built-in effect: `pickup`, `throw`, `boom`, `duck_pop`, `car_summon` or `rail_on`. Volume must be finite and in `[0,1]`, and the shell's sound volume applies. At most eight events can be queued before the host processes them; the host permits a burst of four and replenishes four per second per plugin. Exceeding either limit, lacking an audio device or exhausting the shared voice limit stops the plugin with an error. Events from a failed callback are discarded; disabling, failing or uninstalling a plugin stops its active voices. Already-buffered audio may finish playing. Bounded WAV/OGG package samples are described above; arbitrary filesystem audio and positional audio are not supported.
 * With `sound`, `sound_engine(active, speed, boost)` controls one plugin-owned synthesized car hum. `active` and `boost` are booleans; `speed` is finite and between 0 and 110. Updates are coalesced until the host processes them; the latest value wins. At most four plugin hums run at once. Starting one without an audio device or when the hum limit is reached stops the plugin with an error. Turning it off, disabling, failing or uninstalling removes the owner's hum; already-buffered audio may finish playing. This is the built-in synthesized sound, not packaged or positional audio.
 * With `hud`, `hud_set(text)` sets one plugin-owned, ID-labelled message of up to 32 printable ASCII characters; an empty string clears it. Messages appear in the file room and are coalesced at most four times per second per plugin. Up to four running plugins can display messages, stacked in ID order. Stopping, failing or uninstalling removes the message. This is display text only, not a shared scoring API.
 * With `impulse` and `world`, `player_impulse(x,y,z)` queues a push velocity in world axes. Values must be finite, horizontal magnitude at most 12 and vertical between 0 and 8. Only one push may be pending; a plugin may apply one every two seconds, with excess requests stopping it. Pushes decay over time and the combined displacement from all plugins is capped at 12 units/second horizontally and 8 vertically before normal world collision and gravity. Pushes are discarded and residual motion cleared when world interaction is unavailable, including UI focus, driving, VR and loss of window focus; disabling or failing a plugin clears its motion. This does not reproduce the native explosion's exact physics.
-* With `control`, `control_offer(x,y,z)` advertises a finite position within ±10,000; `control_offer(nil)` withdraws it. While the focused city world is available, the nearest offer within four units is shown with its plugin ID and G activates it. Only one owner can hold control. The host sends `on_input("control",1)` on activation and `on_input("control",0)` on release; the script must not propose movement until activated. While active, `control_pose(x,y,z,yaw,pitch)` queues at most one absolute player/camera pose per host tick, with finite coordinates and yaw within ±10,000 and pitch within ±1.4 radians. Input callbacks and `on_tick` share that queue, so normally propose the pose only from `on_tick`. The host limits movement to 25 units/second and yaw/pitch changes to 4 radians/second, enforces city bounds, and resolves collision in small steps; invalid proposals stop the plugin. Collision adjustments that cannot fit within the movement or world bounds block further motion instead of stopping the plugin. Camera motion can lag a vehicle or stop on collision. Escape or G releases control; leaving the city, overlays, focus loss, native driving, riding or VR also releases it. Other plugins do not receive movement/click input while control is held. Disable, failure and uninstall release it. This is not an OS security boundary or the native car physics.
+* With `control`, `control_offer(x,y,z)` advertises a finite position within ±10,000; `control_offer(nil)` withdraws it. While the focused city world is available, the nearest offer within four units is shown with its plugin ID and G activates it. Only one owner can hold control. The host sends `on_input("control",1)` on activation and `on_input("control",0)` on release; the script must not propose movement until activated. While active, `control_pose(x,y,z,yaw,pitch)` queues at most one absolute player/camera pose per host tick, with finite coordinates and yaw within ±10,000 and pitch within ±1.4 radians. Input callbacks and `on_tick` share that queue, so normally propose the pose only from `on_tick`. The host limits movement to **1000 units/second** (previously 25) and yaw/pitch changes to 4 radians/second, enforces city bounds, and resolves collision in steps no larger than 0.25 units; invalid proposals stop the plugin. Host ticks are capped at 0.1 seconds, allowing up to 100 units of requested travel per tick, with about 400 collision substeps at the ceiling. Collision adjustments that cannot fit within the movement or world bounds block further motion instead of stopping the plugin. Camera motion can lag a vehicle or stop on collision. Escape or G releases control; leaving the city, overlays, focus loss, native driving, riding or VR also releases it. Other plugins do not receive movement/click input while control is held. Disable, failure and uninstall release it. This is not an OS security boundary or the native car physics.
+
+  This ceiling applies to the scripted player/camera pose, not a vehicle's own speed setting.
+  Controller-enabled offers also accept a fresh Xbox Start press; Start, Back/View or B releases
+  their lease. These exit buttons are host-reserved, other pad inputs are isolated from native
+  shortcuts while owned, and held-state snapshots are cleared/refreshed on ownership changes
+  as described in the [controller contract](#controller-input).
+  Existing scripts, including generated third-party scripts that pace motion below 25 units/second,
+  do not speed up automatically: change their own speed/chase-camera pacing to use the new allowance.
+  The bundled car example and native vehicle tuning are unchanged. Motion still stays inside the city's
+  radial extent and eye-height range 0.35-450, as well as the absolute coordinate bounds above.
+  Collision uses the city's existing player-shaped resolver (0.8-unit radius, 1.7-unit eye height),
+  not swept vehicle-body physics; higher speeds mean more collision work, not a frame-rate guarantee.
 
 PNG textures are limited to 1024×1024, must pass checksum and decoder checks, and must be opaque to render. GLB support is deliberately narrow: up to 32 meshes and 32 nodes are flattened into one static triangle model, with at most 64 total primitive instances sharing one material, embedded binary data, a simple base-colour material and at most one embedded PNG. Reused meshes count separately for every node. Geometry is capped at 65,536 vertices and 196,608 indices across all instances. Nonuniform node transforms and shear are supported with inverse-transpose normals, but reflected, singular or ill-conditioned transforms, external URIs, animations, skins, extensions and many other glTF features are rejected. Flattened nodes cannot be animated independently. The bundled Duck model is supported; the bundled CarConcept model is not. Decoded package assets are capped at 16 MiB. Up to four gameplay plugins may run; GPU model resources are limited to 16 MiB and 32 model/texture combinations per plugin, and 64 MiB and 128 combinations globally. Resource creation may fail on a constrained device.
 

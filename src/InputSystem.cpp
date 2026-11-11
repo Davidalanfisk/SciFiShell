@@ -3,6 +3,7 @@
 namespace sf {
 
 void InputSystem::setRelativeMouse(bool enabled) {
+    if (relative_ != enabled) resetLook_ = true;
     relative_ = enabled;
     SDL_SetRelativeMouseMode(enabled ? SDL_TRUE : SDL_FALSE);
 }
@@ -14,6 +15,8 @@ void InputSystem::setTextInput(bool enabled) {
 
 FrameInput InputSystem::poll() {
     FrameInput in;
+    in.mouseReset = resetLook_;
+    resetLook_ = false;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
@@ -21,12 +24,14 @@ FrameInput InputSystem::poll() {
             case SDL_WINDOWEVENT:
                 if (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) in.resized = true;
                 if (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                    in.mouseReset = true;
                     seekLeftHeld_ = seekRightHeld_ = false;
                     in.mediaSeekLeft = in.mediaSeekRight = false;
                     in.mediaSeekLeftReleased = in.mediaSeekRightReleased = false;
                 }
                 // A hosted program taking focus drops SDL's mouse capture; re-establish it as soon as focus returns.
                 if (e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED || e.window.event == SDL_WINDOWEVENT_ENTER) {
+                    in.mouseReset = true;
                     if (relative_) {
                         SDL_SetRelativeMouseMode(SDL_FALSE);
                         SDL_SetRelativeMouseMode(SDL_TRUE);
@@ -148,7 +153,7 @@ FrameInput InputSystem::poll() {
     in.moveZ = (k[SDL_SCANCODE_SPACE] ? 1.0f : 0.0f) - (k[SDL_SCANCODE_LCTRL] ? 1.0f : 0.0f);
     in.shift = k[SDL_SCANCODE_LSHIFT] != 0;
     SDL_GetMouseState(&in.mouseX, &in.mouseY);
-    if (!relative_) in.lookX = in.lookY = 0;
+    if (!relative_ || in.mouseReset) in.lookX = in.lookY = 0;
     return in;
 }
 

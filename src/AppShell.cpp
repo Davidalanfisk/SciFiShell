@@ -1565,9 +1565,61 @@ bool AppShell::scriptExec(const std::string& line) {
                   " simulated_focus=" + std::to_string(syntheticGameplayFocus_) +
                   " city=" + std::to_string(gameplayWorldAvailable()) +
                   " pos=" + std::to_string(camera_.position.x) + "," +
-                  std::to_string(camera_.position.y) + "," + std::to_string(camera_.position.z));
+                  std::to_string(camera_.position.y) + "," + std::to_string(camera_.position.z) +
+                  " yaw=" + std::to_string(camera_.yaw) + " pitch=" + std::to_string(camera_.pitch) +
+                  " start=" + std::to_string(start_->isOpen()) +
+                  " keyboard=" + std::to_string(osk_->isOpen()) +
+                  " switcher=" + std::to_string(switcher_->isOpen()));
     } else if (cmd == "testfocus") {
         syntheticGameplayFocus_ = num(0) != 0;
+    } else if (cmd == "testboost") {
+        syntheticGameplayBoost_ = num(0) != 0;
+    } else if (cmd == "testmouse") {
+        const float x = num(0), y = num(0);
+        if (!std::isfinite(x) || !std::isfinite(y) || std::abs(x) > 10000 || std::abs(y) > 10000)
+            scriptLog("test mouse invalid");
+        else {
+            SDL_Event event{};
+            event.type = SDL_MOUSEMOTION;
+            event.motion.windowID = SDL_GetWindowID(window_);
+            event.motion.xrel = static_cast<int>(x);
+            event.motion.yrel = static_cast<int>(y);
+            if (SDL_PushEvent(&event) != 1) scriptLog(std::string("test mouse failed: ") + SDL_GetError());
+        }
+    } else if (cmd == "testpad") {
+        std::string name;
+        is >> name;
+        const float value = num(0);
+        bool* button = nullptr;
+        float* axis = nullptr;
+        if (name == "connected") button = &syntheticGameplayPad_.connected;
+        else if (name == "start") button = &syntheticGameplayPad_.startHeld;
+        else if (name == "back") button = &syntheticGameplayPad_.backHeld;
+        else if (name == "a") button = &syntheticGameplayPad_.aHeld;
+        else if (name == "b") button = &syntheticGameplayPad_.bHeld;
+        else if (name == "x") button = &syntheticGameplayPad_.xHeld;
+        else if (name == "y") button = &syntheticGameplayPad_.yHeld;
+        else if (name == "lb") button = &syntheticGameplayPad_.lbHeld;
+        else if (name == "rb") button = &syntheticGameplayPad_.rbHeld;
+        else if (name == "up") button = &syntheticGameplayPad_.upHeld;
+        else if (name == "down") button = &syntheticGameplayPad_.downHeld;
+        else if (name == "left") button = &syntheticGameplayPad_.leftHeld;
+        else if (name == "right") button = &syntheticGameplayPad_.rightHeld;
+        else if (name == "ls") button = &syntheticGameplayPad_.leftStickHeld;
+        else if (name == "rs") button = &syntheticGameplayPad_.rightStickHeld;
+        else if (name == "lx") axis = &syntheticGameplayPad_.lx;
+        else if (name == "ly") axis = &syntheticGameplayPad_.ly;
+        else if (name == "rx") axis = &syntheticGameplayPad_.rx;
+        else if (name == "ry") axis = &syntheticGameplayPad_.ry;
+        else if (name == "lt") axis = &syntheticGameplayPad_.lt;
+        else if (name == "rt") axis = &syntheticGameplayPad_.rt;
+        if ((!button && !axis) || !std::isfinite(value) || std::abs(value) > 1)
+            scriptLog("test pad invalid");
+        else {
+            syntheticGameplayPadEnabled_ = true;
+            if (button) *button = value != 0;
+            if (axis) *axis = value;
+        }
     } else if (cmd == "testclick") {
         std::string action;
         is >> action;
@@ -2504,12 +2556,31 @@ void AppShell::tick(double dt) {
     if (!app_ && !apps_.empty()) app_ = apps_[0].get();
 #endif
     FrameInput in = input_.poll();
+    const auto gameplayOwnerAtFrameStart = gameplayControl_.owner();
     if (in.keyCaptured) {
         settings_.arrangeKey = in.keyCaptured;
         settings_.save();
     }
     input_.arrangeKey = settings_.arrangeKey ? settings_.arrangeKey : SDLK_F8;
     PadState pad = pad_.poll();
+#ifdef SCIFI_TEST_SYNTHETIC_CITY
+    if (syntheticGameplayBoost_ >= 0) in.shift = syntheticGameplayBoost_ != 0;
+    if (syntheticGameplayPadEnabled_) {
+        pad = syntheticGameplayPad_;
+        const auto& previous = previousSyntheticGameplayPad_;
+        pad.aPressed = pad.aHeld && !previous.aHeld;
+        pad.bPressed = pad.bHeld && !previous.bHeld;
+        pad.xPressed = pad.xHeld && !previous.xHeld;
+        pad.yPressed = pad.yHeld && !previous.yHeld;
+        pad.upPressed = pad.upHeld && !previous.upHeld;
+        pad.downPressed = pad.downHeld && !previous.downHeld;
+        pad.leftPressed = pad.leftHeld && !previous.leftHeld;
+        pad.rightPressed = pad.rightHeld && !previous.rightHeld;
+        pad.lbPressed = pad.lbHeld && !previous.lbHeld;
+        pad.rbPressed = pad.rbHeld && !previous.rbHeld;
+        previousSyntheticGameplayPad_ = pad;
+    }
+#endif
     if(scriptPadA_) {pad.aPressed=true;scriptPadA_=false;}
     if(snackPadCaptured_) {
         if(!pad.aHeld)snackPadCaptured_=false;
@@ -2526,20 +2597,16 @@ void AppShell::tick(double dt) {
     if (in.arrange && !((focus_.p && winTyping(focus_)) && input_.arrangeKey < 256)) arrangeCycle();
     // Only the focused window can take typed text; otherwise the keyboard walks the camera.
     const bool winTypingNow = focus_.p && winTyping(focus_);
-    const PadState gameplayPad = pad;
-    if (gameplayControl_.owner() && gameplayWindowFocused() && gameplayWorldAvailable() &&
-        !focus_.p && !winFocus_ && !settingsPanel_->isOpen() && !start_->isOpen() &&
-        !appsPanel_->isOpen() && !viewer_->active() && !switcher_->isOpen() &&
-        !osk_->isOpen() && !harvi_->panelOpen() && !vrOn_) {
-        for (const auto& [id, entry] : gameplay_) {
-            if (entry->owner == gameplayControl_.owner() && entry->controller && entry->session.running()) {
-                pad.aPressed = pad.bPressed = pad.xPressed = pad.yPressed = false;
-                pad.upPressed = pad.downPressed = pad.leftPressed = pad.rightPressed = false;
-                pad.lbPressed = pad.rbPressed = false;
-                break;
-            }
+    PadState gameplayPad;
+    bool ownsGameplayController = false;
+    for (const auto& [id, entry] : gameplay_) {
+        if (entry->owner == gameplayControl_.owner() && entry->controller && entry->session.running()) {
+            ownsGameplayController = true;
+            break;
         }
     }
+    const auto controlPadAction = gameplayControlInput_.update(ownsGameplayController, pad, gameplayPad);
+    if (controlPadAction == GameplayControlInput::Action::Release) releaseGameplayControl();
     if (in.quit) running_ = false;
     {
         // What the on-screen keyboard typed arrives like real key presses.
@@ -2608,6 +2675,8 @@ void AppShell::tick(double dt) {
         in.escape = false;
         in.gameplayControl = false;
     }
+    if (gameplayOwnerAtFrameStart && gameplayOwnerAtFrameStart != gameplayControl_.owner())
+        in.lookX = in.lookY = 0;
     // While typing, WASD belong to the text field; hold Alt to walk with the keyboard anyway (pad / VR sticks always walk).
     const bool kbMove = !typing || (SDL_GetModState() & KMOD_ALT) != 0;
     float kbX = kbMove ? in.moveX : 0.0f, kbY = kbMove ? in.moveY : 0.0f, kbZ = kbMove ? in.moveZ : 0.0f;
@@ -2664,7 +2733,7 @@ void AppShell::tick(double dt) {
         } else {
             idleT_ += dt;
         }
-        const bool busy = !winOrder_.empty() || appsPanel_->isOpen() || viewer_->active() ||
+        const bool busy = gameplayControl_.owner() || !winOrder_.empty() || appsPanel_->isOpen() || viewer_->active() ||
                           deferred_ || riding_ || vrOn_;
         if (tourActive_ && (!cityMode_ || busy)) stopTour();
         if (tourAllowed && !tourActive_ && idleT_ > 10.0 && cityMode_ && city_ && city_->built() && !busy && script_.empty() && !mv_.on) startTour();
@@ -3074,7 +3143,10 @@ void AppShell::tick(double dt) {
                     switcher_->isOpen(), appsPanel_->isOpen(), osk_->isOpen()};
                 const bool available = motionContext.available() && gameplayWorldAvailable();
                 if (!available && gameplayControl_.owner()) releaseGameplayControl();
-                if (available && in.gameplayControl) acquireGameplayControl();
+                if (available && (in.gameplayControl || controlPadAction == GameplayControlInput::Action::Acquire)) {
+                    acquireGameplayControl(!in.gameplayControl);
+                    if (gameplayControl_.owner()) GameplayControlInput::reserve(gameplayPad);
+                }
                 if (!gameplayControl_.owner() && !(arcade_ && arcade_->engaged()))
                     updateCamera(dt, moveX, moveY, kbZ, lookX, lookY, freeSpeed, available);
             }
@@ -3170,10 +3242,13 @@ void AppShell::tick(double dt) {
             else if (back || (in.escape && room_->inRoom())) menu_->setStatus(room_->goUp());
             else if (in.escape) toggleCity(true);
             }
-            if (gameplayControl_.owner()) hudTarget_ = "SCRIPT CONTROL - ESC OR G TO EXIT";
+            if (gameplayControl_.owner())
+                hudTarget_ = ownsGameplayController ? "SCRIPT CONTROL - ESC / G / START / BACK / B EXIT"
+                                                   : "SCRIPT CONTROL - ESC OR G TO EXIT";
             else if (!typing && gameplayWorldInput && gameplayWindowFocused()) {
                 const auto nearby = nearbyGameplayControl();
-                if (!nearby.empty()) hudTarget_ = "G: ENTER " + nearby;
+                if (!nearby.empty())
+                    hudTarget_ = (gameplay_.at(nearby)->controller ? "G / START: ENTER " : "G: ENTER ") + nearby;
             }
 #ifdef SCIFI_HAS_CEF
             if (in.browser && browser_ && !winTypingNow) {

@@ -64,6 +64,52 @@ room cards, consent cancellation/grant, failure access, swap/restart,
 uninstall/gap reuse and drive/bus clearance without activating the installed app. This is not a visual,
 physical-controller/VR or frame-rate benchmark.
 
+### Scripted flight input and motion (v0.9.27)
+
+The released input/motion contract and optional TrackFly 2.2.1 package are documented in the
+[plugin reference](plugins.md#v0927-changelog). The installer does not install or enable TrackFly;
+its reviewed ZIP and source/assets remain a separate release download with author attribution.
+
+Scripted player/camera control uses shared `kGameplayControlSpeedLimit` (1000 units/second),
+`kGameplayControlAngularSpeedLimit` (4 radians/second per axis),
+`kGameplayControlDeltaTimeLimit` (0.1 seconds) and `kGameplayControlStepLimit` (0.25 units) in
+`GameplayLimits.h`. `GameplayControlLease` validates the proposed pose before collision work;
+`GameplayControlMotion` substeps it without a separate lower displacement budget. The city bridge
+preserves double coordinates on untouched axes instead of accumulating float conversion drift
+through hundreds of substeps. Collision corrections still pass lease/world validation.
+Run `PluginScriptTest` and `PluginPackageTest` for speed boundaries, small/large deltas,
+thin-wall obstruction and lifecycle coverage. Build a **separate test executable** with
+`-DSCIFI_TEST_SYNTHETIC_CITY=ON`, then run
+`powershell -NoProfile -File tests\RunGameplayControlIntegration.ps1 -MotionOnly -Executable <test-Release\SciFiShell.exe> -OutputDirectory <existing-artifact-directory>`
+for actual host motion at 100/500/1000 units/second, a city monument obstruction, excessive-speed
+failure cleanup and focus-loss/disable cleanup on a private desktop and isolated profile.
+The synthetic-city executable is not a normal review/release build; neither check measures FPS.
+
+`GameplayControlInput` reserves Xbox Start/Back/B during controller-enabled ownership and
+suppresses native pad shortcuts/axes until neutral after release. Acquisition still goes through
+the normal focused-world/proximity/consent lease path. `GameplayInput` routes Left Shift as the
+change-only `boost` event and releases it on unavailable context. Ownership transitions clear old
+inputs and refresh held-state snapshots for the new owner. Run `GameplayControllerInputTest`,
+`PluginPackageTest` and `PluginScriptTest` for focused regressions. With the separate synthetic-city
+executable, `RunGameplayControlIntegration.ps1 -FlightInputsOnly` tests Shift press/release,
+held-state resends, Start/Back/B, disconnect/focus cleanup and native shortcut isolation/restoration.
+Add `-TrackFlyZip <TrackFly2-2.2.1.zip>` for the exact external package smoke check.
+`-ControlOnly` selects the existing keyboard lease/callback cleanup, car audio and parks input cases,
+without running the separate fixed-position click-target scenarios.
+These synthetic controller/focus events do not validate physical Xbox hardware.
+
+`GameplayMouseInput` dispatches bounded relative angular impulses to the input-permitted
+control owner only, before its tick, without change-only suppression or dt multiplication.
+It disarms on context/lease transitions and discards the first recovery frame; SDL focus/capture
+changes also discard accumulated relative motion. `GameplayControllerInputTest` covers repeating
+deltas, context/reacquisition, invalid values, angular bounds and equal totals at 30/60/120/240 Hz.
+`RunGameplayControlIntegration.ps1 -MouseInputsOnly -TrackFlyZip <TrackFly2-2.2.1.zip>`
+exercises the actual SDL event path, exclusive pose rotation, focus/reacquisition and the package.
+The standalone full integration script's fixed-position click-target tail has a known failure
+reproduced on the pre-input-change host; the bounded selectors above do not claim that tail passes.
+Physical input/VR comfort, sustained application FPS and maximum-speed play are not certified
+by simulated integration tests.
+
 ### Arcade plugin (v0.9.26)
 
 `ArcadeModule` is a separately compiled native DLL/module using the existing trusted

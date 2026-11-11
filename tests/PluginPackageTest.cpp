@@ -744,7 +744,8 @@ int main() {
         sf::GameplayControlLease lease;
         using Pose = sf::GameplayControlLease::Pose;
         const Pose origin{0, 1.7, 0, 0, 0}, nearby{3, 1.7, 0, 0, 0}, far{5, 1.7, 0, 0, 0};
-        const Pose good{2, 1.7, 0, 0.3, 0.3}, fast{3, 1.7, 0, 0, 0};
+        const Pose good{2, 1.7, 0, 0.3, 0.3},
+                   fast{sf::kGameplayControlSpeedLimit * 0.1 + 0.001, 1.7, 0, 0, 0};
         const Pose invalid{0, 1.7, 0, std::numeric_limits<double>::quiet_NaN(), 0};
         check(!lease.acquire(1, true, true, false, origin, nearby) &&
               !lease.acquire(1, false, true, true, origin, nearby) &&

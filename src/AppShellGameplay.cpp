@@ -225,8 +225,14 @@ void AppShell::releaseGameplayControl() {
     if (!owner) return;
     for (auto& [id, entry] : gameplay_) {
         if (entry->owner != owner || !entry->session.running()) continue;
+        entry->mouseInput.reset();
         std::string error;
-        if (!entry->session.setControlActive(false, error)) {
+        const auto dispatch = [&](const char* name, double value) {
+            return entry->session.input(name, value, error);
+        };
+        if (!entry->inputState.update(entry->input, false, 0, 0, 0, false, false, dispatch) ||
+            !entry->controllerInput.update(entry->controller, false, {}, dispatch) ||
+            !entry->session.setControlActive(false, error)) {
             plugins_.markFailed(id, error);
             if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
         }
@@ -234,7 +240,7 @@ void AppShell::releaseGameplayControl() {
     }
 }
 
-std::string AppShell::nearbyGameplayControl() const {
+std::string AppShell::nearbyGameplayControl(bool controllerOnly) const {
     if (gameplayControl_.owner() || !gameplayWorldAvailable()) return {};
     const GameplayControlLease::Pose current{camera_.position.x, camera_.position.y, camera_.position.z,
                                               camera_.yaw, camera_.pitch};
@@ -248,11 +254,12 @@ std::string AppShell::nearbyGameplayControl() const {
         const double distance = dx*dx + dy*dy + dz*dz;
         if (distance < best || (distance == best && nearestId.empty())) { best = distance; nearestId = id; }
     }
+    if (controllerOnly && !nearestId.empty() && !gameplay_.at(nearestId)->controller) return {};
     return nearestId;
 }
 
-void AppShell::acquireGameplayControl() {
-    const auto nearestId = nearbyGameplayControl();
+void AppShell::acquireGameplayControl(bool controllerOnly) {
+    const auto nearestId = nearbyGameplayControl(controllerOnly);
     if (nearestId.empty()) return;
     const auto nearest = gameplay_.at(nearestId);
     const GameplayControlLease::Pose current{camera_.position.x, camera_.position.y, camera_.position.z,
@@ -265,6 +272,10 @@ void AppShell::acquireGameplayControl() {
         gameplayControl_.release();
         plugins_.markFailed(nearestId, error);
         if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
+    } else {
+        nearest->inputState.reset();
+        nearest->mouseInput.reset();
+        nearest->controllerInput.reset();
     }
 }
 
@@ -332,13 +343,24 @@ void AppShell::tickGameplay(double dt, const FrameInput& input, const PadState& 
             if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
             continue;
         }
+        const bool mouseOk = entry->mouseInput.update(entry->input,
+            pluginInput && gameplayControl_.owner() == entry->owner &&
+                input_.relativeMouse() && !input.mouseReset,
+            input.lookX * 0.0025 * settings_.lookScale(),
+            input.lookY * 0.0025 * settings_.lookScale() * (settings_.invertY ? -1 : 1), dt,
+            [&](const char* name, double value) { return entry->session.input(name, value, error); });
+        if (!mouseOk) {
+            plugins_.markFailed(id, error);
+            if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
+            continue;
+        }
         bool ok = runGameplayFrame(entry->session, entry->inputState, entry->input, pluginInput,
                                    input.moveX, input.moveY, input.moveZ,
                                    input.click && gameplayClicks_.owner() == entry->owner, input.clickUp,
                                    dt, error, [&](const std::string& reason) {
             plugins_.markFailed(id, reason);
             if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
-        });
+        }, input.shift);
         if (!ok) continue;
         const auto pose = entry->session.takeControlPose();
         if (gameplayControl_.owner() == entry->owner && !entry->session.controlOffer().available)
@@ -357,12 +379,15 @@ void AppShell::tickGameplay(double dt, const FrameInput& input, const PadState& 
                     [&](GameplayControlLease::Pose& candidate) {
                         Vec3 p{static_cast<float>(candidate.x), static_cast<float>(candidate.y),
                                static_cast<float>(candidate.z)};
+                        const Vec3 before = p;
                         city_->resolve(p, 0.8f, 1.7f);
                         const float floor = city_->floorAt(p, 0.8f, 1.7f);
                         if (!std::isfinite(floor)) return false;
-                        candidate.x = p.x;
-                        candidate.y = std::max(p.y, floor + 1.7f);
-                        candidate.z = p.z;
+                        p.y = std::max(p.y, floor + 1.7f);
+                        // Don't accumulate float conversion error across hundreds of clear substeps.
+                        if (p.x != before.x) candidate.x = p.x;
+                        if (p.y != before.y) candidate.y = p.y;
+                        if (p.z != before.z) candidate.z = p.z;
                         return true;
                     }, resolved);
             } catch (const std::bad_alloc&) {

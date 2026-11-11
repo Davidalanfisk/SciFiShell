@@ -23,7 +23,8 @@ GameplayControlMotionResult resolveGameplayControlMotion(
         return GameplayControlMotionResult::InvalidProposal;
 
     const double dx = proposed.x - current.x, dy = proposed.y - current.y, dz = proposed.z - current.z;
-    const int steps = std::max(1, static_cast<int>(std::ceil(std::sqrt(dx*dx + dy*dy + dz*dz) / 0.25)));
+    const int steps = std::max(1, static_cast<int>(std::ceil(
+        std::sqrt(dx*dx + dy*dy + dz*dz) / kGameplayControlStepLimit)));
     result = current;
     result.yaw = proposed.yaw;
     result.pitch = proposed.pitch;
