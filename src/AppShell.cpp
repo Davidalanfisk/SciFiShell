@@ -221,6 +221,19 @@ bool AppShell::init() {
         });
     pluginPackages_->discover();
     if (!pluginPackages_->error().empty()) std::fprintf(stderr, "%s\n", pluginPackages_->error().c_str());
+    const std::pair<const char*, const char*> defaults[] = {
+        {"com.davidalanfisk.trackfly2", "TrackFly2-2.2.1.zip"},
+        {"com.scifishell.bug-hunter", "BugHunter-0.1.1.zip"},
+        {"com.example.network-hud-demo", "NetworkHudDemo-1.1.2.zip"}
+    };
+    char* executableDirectory = SDL_GetBasePath();
+    for (const auto& [id, file] : defaults) {
+        if (!executableDirectory || !pluginPackages_->seedDefault(
+                std::filesystem::u8path(executableDirectory) / "assets" / "plugins" / file, id))
+            std::fprintf(stderr, "Default plugin %s: %s\n", id,
+                         executableDirectory ? pluginPackages_->error().c_str() : "Application directory unavailable");
+    }
+    SDL_free(executableDirectory);
     plugins_.initialize();
     syncDowntown();
     if (settings_.showCity) {
@@ -2639,13 +2652,16 @@ void AppShell::tick(double dt) {
     const bool winTypingNow = focus_.p && winTyping(focus_);
     PadState gameplayPad;
     bool ownsGameplayController = false;
+    bool gameplayExitY = false;
     for (const auto& [id, entry] : gameplay_) {
         if (entry->owner == gameplayControl_.owner() && entry->controller && entry->session.running()) {
             ownsGameplayController = true;
+            gameplayExitY = entry->session.controlExitY();
             break;
         }
     }
-    const auto controlPadAction = gameplayControlInput_.update(ownsGameplayController, pad, gameplayPad);
+    const auto controlPadAction = gameplayControlInput_.update(ownsGameplayController, pad, gameplayPad, gameplayExitY);
+    if (gameplayControl_.owner()) in.pin = false;
     if (controlPadAction == GameplayControlInput::Action::Release) releaseGameplayControl();
     if (in.quit) running_ = false;
     {
@@ -3502,6 +3518,9 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
     }
     // All paths, including fullscreen media/windows and each VR eye, share the final HUD pass.
     if (!fullscreen) {
+        if (desktopPass && !vrOn_ && gameplayZoom() > 1)
+            renderer_.setView(realView, Mat4::perspective(
+                2 * std::atan(std::tan(kFovY * 0.5f) / gameplayZoom()), renderer_.aspect(), 0.05f, 2500.0f));
         static const bool dbgNoMirror = std::getenv("SCIFI_NOMIRROR") != nullptr, dbgNoPost = std::getenv("SCIFI_NOPOST") != nullptr;
         renderer_.setPostFx(settings_.postFx && !dbgNoPost);
         renderer_.setFogTune(settings_.fogDensity, settings_.fogHeight, settings_.fogBright, settings_.fogTint, settings_.fogStart, settings_.fogMist, settings_.fogClarity, settings_.fogGlow);
@@ -3528,6 +3547,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         }
         renderGameplay();
         if (cityMode_ && city_ && !dbgNoPost) renderer_.postWorld();  // effects are for the city; inside buildings and rooms text stays sharp
+        renderer_.setView(view, proj);  // scope magnifies the world, not host UI or plugin HUD coordinates
         if (state_ == State::FileRoom && viewer_->active()) {
             renderer_.clearDepth();
             viewer_->root().renderTree(renderer_);

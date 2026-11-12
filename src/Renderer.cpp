@@ -68,6 +68,7 @@ void Renderer::shutdown() {
     cube_ = {};
     panelPipeline_ = {};
     solidPipeline_ = {};
+    gameplayPipeline_ = {};
     webPipeline_ = {};
     floorPipeline_ = {};
     constants_.Release();
@@ -145,6 +146,7 @@ bool Renderer::init(SDL_Window* window, const std::string& shaderDir) {
 
     if (!createPipeline(panelPipeline_, "LCARS panel", "lcars_panel.vs.hlsl", "lcars_panel.ps.hlsl", true)) return false;
     if (!createPipeline(solidPipeline_, "Basic 3D", "basic_3d.vs.hlsl", "basic_3d.ps.hlsl", false)) return false;
+    if (!createPipeline(gameplayPipeline_, "Gameplay translucent", "basic_3d.vs.hlsl", "basic_3d.ps.hlsl", true)) return false;
     if (!createPipeline(webPipeline_, "Web layer", "basic_3d.vs.hlsl", "web_layer.ps.hlsl", true)) return false;
     if (!createPipeline(floorPipeline_, "Floor", "basic_3d.vs.hlsl", "basic_3d.ps.hlsl", true, true, true)) return false;
     buildMeshes();
@@ -721,7 +723,8 @@ bool Renderer::bindLabel(GpuLabel& label) {
         return true;
     };
     return bind(panelPipeline_, label.panelSRB) && bind(solidPipeline_, label.solidSRB) &&
-           bind(webPipeline_, label.webSRB) && bind(floorPipeline_, label.floorSRB);
+           bind(webPipeline_, label.webSRB) && bind(floorPipeline_, label.floorSRB) &&
+           bind(gameplayPipeline_, label.gameplaySRB);
 }
 
 void Renderer::draw(Pipeline& pipeline, IShaderResourceBinding* srb, const Mesh& mesh, const Mat4& world,
@@ -945,6 +948,11 @@ bool Renderer::createGameplayModel(uint64_t owner, const GameplayModel& model, c
         auto* variable = resource.binding->GetVariableByName(SHADER_TYPE_PIXEL, "g_Tex");
         if (!variable) { error = "Gameplay shader texture binding is unavailable"; return false; }
         variable->Set(view);
+        gameplayPipeline_.pso->CreateShaderResourceBinding(&resource.translucentBinding, true);
+        if (!resource.translucentBinding) { error = "Cannot create translucent gameplay binding"; return false; }
+        auto* translucentTexture = resource.translucentBinding->GetVariableByName(SHADER_TYPE_PIXEL, "g_Tex");
+        if (!translucentTexture) { error = "Translucent gameplay texture binding is unavailable"; return false; }
+        translucentTexture->Set(view);
         if (auto* reflection = resource.binding->GetVariableByName(SHADER_TYPE_PIXEL, "g_Refl"))
             reflection->Set(view);
         gameplayModels_.emplace(nextGameplayHandle_, std::move(resource));
@@ -958,16 +966,25 @@ bool Renderer::createGameplayModel(uint64_t owner, const GameplayModel& model, c
     }
 }
 
-bool Renderer::drawGameplayModel(uint64_t owner, uint64_t handle, const Mat4& world, Vec3 colour) {
+bool Renderer::drawGameplayModel(uint64_t owner, uint64_t handle, const Mat4& world, Vec3 colour,
+                                  bool material, float opacity, float emission) {
     const auto it = gameplayModels_.find(handle);
     if (!owner || it == gameplayModels_.end() || it->second.owner != owner) return false;
     const float color[4] = {colour.x * it->second.baseColour[0], colour.y * it->second.baseColour[1],
                             colour.z * it->second.baseColour[2], 0};
-    const float params[4] = {0, 0, 0, 11.0f};
+    const float params[4] = {opacity, emission, 0, material ? 13.0f : 11.0f};
     const Vec3 eye = view_.rigidInverse().transformPoint({0, 0, 0});
     const float eyeL[4] = {eye.x, eye.y, eye.z, 0};
-    draw(solidPipeline_, it->second.binding, it->second.mesh, world, color, params, eyeL);
+    draw(material ? gameplayPipeline_ : solidPipeline_,
+         material ? it->second.translucentBinding : it->second.binding, it->second.mesh, world, color, params, eyeL);
     return true;
+}
+
+void Renderer::drawGameplayBox(const GpuLabel& label, const Mat4& world, Vec3 colour, float opacity, float emission) {
+    const float color[4] = {colour.x, colour.y, colour.z, 1};
+    const float params[4] = {opacity, emission, 1, 13};
+    const float light[4] = {0, 0, 0, 0};
+    draw(gameplayPipeline_, label.gameplaySRB, cube_, world, color, params, light);
 }
 
 void Renderer::releaseGameplayModels(uint64_t owner) {

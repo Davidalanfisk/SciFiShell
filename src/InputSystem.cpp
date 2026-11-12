@@ -156,7 +156,8 @@ FrameInput InputSystem::poll() {
     in.moveX = (k[SDL_SCANCODE_D] ? 1.0f : 0.0f) - (k[SDL_SCANCODE_A] ? 1.0f : 0.0f);
     in.moveZ = (k[SDL_SCANCODE_SPACE] ? 1.0f : 0.0f) - (k[SDL_SCANCODE_LCTRL] ? 1.0f : 0.0f);
     in.shift = k[SDL_SCANCODE_LSHIFT] != 0;
-    SDL_GetMouseState(&in.mouseX, &in.mouseY);
+    const Uint32 buttons = SDL_GetMouseState(&in.mouseX, &in.mouseY);
+    in.rightHeld = (buttons & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0;
     if (!relative_ || in.mouseReset) in.lookX = in.lookY = 0;
     return in;
 }

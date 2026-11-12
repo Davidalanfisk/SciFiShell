@@ -49,6 +49,8 @@ public:
     PluginScriptRuntime::Impulse takeImpulse() { return runtime_.takeImpulse(); }
     PluginScriptRuntime::ControlOffer controlOffer() const { return runtime_.controlOffer(); }
     PluginScriptRuntime::ControlPose takeControlPose() { return runtime_.takeControlPose(); }
+    double controlZoom() const { return runtime_.controlZoom(); }
+    bool controlExitY() const { return runtime_.controlExitY(); }
     bool setControlActive(bool active, std::string& error);
     bool interactiveHit(const double* origin, const double* direction, double& distance) const {
         return runtime_.interactiveHit(origin, direction, distance);

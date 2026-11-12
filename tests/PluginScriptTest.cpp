@@ -69,6 +69,20 @@ int main() {
     check(!sf::runPluginScript(std::string("\x1bLua", 4), result, error), "bytecode rejected");
     check(sf::runPluginScript("return 'AFTER FAILURE'", result, error), "fresh runtime after failure");
     sf::PluginScriptRuntime runtime;
+    check(runtime.start("local b=scene_box(0,0,0,1,1,1,0,1,1) scene_material(b,.15,3) return {}",
+                        error, true) && runtime.boxes()[0].material &&
+          runtime.boxes()[0].opacity == .15 && runtime.boxes()[0].emission == 3 && runtime.stop(error),
+          "owned scene material retains translucent emissive settings");
+    check(!runtime.start("local b=scene_box(0,0,0,1,1,1,0,1,1) scene_material(b,0/0,1) return {}",
+                         error, true), "nonfinite material is rejected");
+    check(runtime.start("control_exit_button('y') return {on_input=function(k,v) "
+                        "if k=='control' and v==1 then control_zoom(8) end end}", error,
+                        false, nullptr, nullptr, nullptr, false, false, nullptr, false, true) &&
+          runtime.controlExitY() && runtime.setControlActive(true,error) && runtime.controlZoom()==8 &&
+          runtime.setControlActive(false,error) && runtime.controlZoom()==1 && runtime.stop(error),
+          "scope requires a lease and resets immediately on release");
+    check(!runtime.start("control_zoom(2) return {}",error,false,nullptr,nullptr,nullptr,
+                         false,false,nullptr,false,true), "unowned scope zoom is rejected");
     {
         std::string large = "return 'LARGE'";
         large.resize(sf::kPluginTextLimit, ' ');
@@ -557,6 +571,15 @@ int main() {
             return true;
         },
         [](void* context) noexcept { return static_cast<World*>(context)->available; }};
+    queries.raycast = [](void*, const double*, const double* direction, double, double* out) noexcept {
+        *out = 5;
+        return direction[2] < 0 ? 1 : 0;
+    };
+    check(runtime.start("assert(world_raycast(0,1,0,0,0,-1,20)==5) "
+                       "assert(world_raycast(0,1,0,1,0,0,20)==nil) return {}",error,false,&queries) &&
+         runtime.stop(error), "world rays distinguish collision distances from misses");
+    check(!runtime.start("for i=1,5 do world_raycast(0,1,0,0,0,-1,20) end return {}",
+                        error,false,&queries), "expensive world rays have a separate callback quota");
     check(!runtime.start("world_floor(0,0,0,1,1) return {}", error),
           "world queries are absent without a host grant");
     check(!runtime.start("world_available() return {}", error),
@@ -912,7 +935,7 @@ int main() {
         check(!runtime.start("net_get('https://api.example.com/') return {}", error) &&
               error.find("'network' permission") != std::string::npos,
               "network API absent without permission and the error names it");
-        check(netStart("local c=capabilities() assert(c.network and not c.hud and c.api==3) "
+        check(netStart("local c=capabilities() assert(c.network and not c.hud and c.api==4) "
                        "results={} local id=net_get('https://API.example.com:443/v1/weather?lat=1&lon=2') "
                        "assert(id==1) "
                        "return {on_network=function(i,ok,status,text) results[#results+1]=i..':'..tostring(ok)..':'..status..':'..text "

@@ -29,6 +29,7 @@ struct FrameInput {
     bool shift = false;             // left shift held (movement boost)
     bool click = false;             // left mouse button pressed this frame
     bool clickUp = false;           // left mouse button released this frame
+    bool rightHeld = false;         // right mouse button held (exclusive gameplay aim)
     bool browser = false;           // B pressed (open the web browser)
     bool focusAddress = false;      // Ctrl+L
     bool depthCycle = false;        // F3: web depth effects Off/Subtle/Cinematic

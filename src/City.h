@@ -73,6 +73,7 @@ public:
     struct MapPlace { std::string id, name, kind; float x = 0, z = 0, width = 0, depth = 0; };
     void mapPlaces(bool regions, std::vector<MapPlace>& out) const;
     bool gameplayTrackClearance(float x, float z, float radius, double* result) const;
+    int gameplayRaycast(Vec3 origin, Vec3 direction, float distance, double* result) const;
     void setParksEnabled(bool enabled);
     void setDrivingEnabled(bool enabled);
     bool prepareDrivingModule(const std::filesystem::path& path, std::string& error);
@@ -170,7 +171,7 @@ private:
         float labelTime = -10;
     };
 
-    struct Box { float x0, x1, y1, z0, z1; };
+    struct Box { float x0, x1, y1, z0, z1; float y0 = 0; };
     void monumentBoxes(std::vector<Box>& out) const;
     // Gentle stepped ramps where the roads meet raised slabs, so the city can be walked into and out of without jumping.
     // A low step round the foot of every slab so it can be climbed from anywhere, and a station at the end of each drive lane.
@@ -179,7 +180,7 @@ private:
     struct Station { float x, z, fx, fz, level; int plat; };  // x,z: lane end; f: unit direction towards the slab
     void stations(std::vector<Station>& out) const;
     void renderAccess(Renderer& r, const struct Theme& th, Vec3 eye);
-    void gatherBoxes(const Vec3& p, float rad, std::vector<Box>& out) const;
+    void gatherBoxes(const Vec3& p, float rad, std::vector<Box>& out, bool ray = false) const;
     // The bus network: every storage route is planned so it never runs under a platform or monument, and where it has to cross
     // another lane it rides over it on a ramped bridge. Heights are relative to the road surface.
     struct Piece { float x0, x1, z0, z1, yc, th, f; int plat; bool slope = false; Vec3 a{}, b{}; };

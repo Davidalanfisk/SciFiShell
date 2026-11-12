@@ -32,6 +32,11 @@ and just *fly around inside your own machine*.
 
 **Source builds do not update themselves.** If your taskbar pin points into a source checkout's `build\Release` folder, it will continue to run that build and will not prompt. To use releases instead, install the latest release, launch it from its Start menu shortcut, and pin that installed copy yourself. This does not update or overwrite the source checkout. Alternatively, update and rebuild your source checkout yourself. Existing pins are not automatically changed.
 
+**v0.9.29 includes TRACKFLY 2 2.2.1, Bug Hunter 0.1.1 and Network HUD Demo 1.1.2,
+installed but disabled.** Open **Settings > Plugins** to enable one and review its permissions.
+Existing packages and enabled choices are preserved on upgrade; removed defaults stay removed.
+See [bundled plugins, controls and reinstalling](docs/plugins.md#bundled-plugins-and-updates).
+
 ## Controls
 
 **Mouse & keyboard**
@@ -137,7 +142,7 @@ overlays or disconnection release control and clear input. Scripted control is u
 
 Try the optional [TrackFly 2.2.1 package](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.27/TrackFly2-2.2.1.zip)
 by Davidalanfisk in **Settings > Plugins > Install Package**, then review and confirm its
-permissions. It requires **v0.9.27 or newer**, is not enabled or installed automatically, and
+permissions. It requires **v0.9.27 or newer**, is installed disabled starting with v0.9.29, and
 does not replace the bundled car example. Approach its launch pad, press **G / Start**, steer with
 the **mouse** or left-stick yaw/right-stick pitch, and use **W/S** or **RT/LT** for thrust/braking.
 **Left Shift / mouse button / A / RB** boosts; **Space / Left Ctrl** or **Y/X** climbs/descends.
@@ -198,9 +203,9 @@ Ground-level fog drifts between the towers (tune it with the fog sliders in Sett
 
 **The car.** Press `F10` anywhere in the city to summon a neon hologram sports car, and `F10` again to leave it. `C` swaps first and third person; `Space` drifts and `Shift` boosts. A speedo appears on the HUD. The wheels steer and spin, and a quiet electric hum rises with speed. Parked, it is solid: you can stand on it. Ramps on every region let you drive up onto the platforms.
 
-**Make a plugin.** The Windows x64 build **v0.9.28** supports data-only themes, Lua message scripts and experimental gameplay plugins. Alongside controller input, audio, persistent storage and procedural meshes, it adds [approved-host HTTPS text, crisp graphical HUD panels and larger runtime limits](docs/plugins.md#v0928-changelog), plus [custom rooms with settings, hotkey browser links, a read-only mini-map and in-shell file editing](docs/plugins.md#plugin-rooms-settings-links-and-the-mini-map). HUD panels remain above app windows without taking their clicks; permission prompts temporarily suppress plugin HUDs. Package limits remain **1 GiB expanded**, **100 MiB per binary asset** and **10 MiB per text file**, with separate bounded runtime resources. Start with the [plugin developer guide](docs/plugins.md) for APIs, runnable examples, consent and compatibility details.
+**Make a plugin.** The Windows x64 build **v0.9.29** supports data-only themes, Lua message scripts and experimental gameplay plugins. [API 4](docs/plugins.md#api-4-bug-hunter-services) adds translucent/emissive materials, city collision rays, scoped mouse aim/wheel input, desktop zoom and selectable Xbox exit controls for [Bug Hunter](examples/plugins/bug-hunter). It retains [approved-host HTTPS text and crisp graphical HUD panels](docs/plugins.md#v0928-changelog), plus [custom rooms with settings, hotkey browser links, a read-only mini-map and in-shell file editing](docs/plugins.md#plugin-rooms-settings-links-and-the-mini-map). HUD panels remain above app windows without taking their clicks; permission prompts temporarily suppress plugin HUDs. Package limits remain **1 GiB expanded**, **100 MiB per binary asset** and **10 MiB per text file**, with separate bounded runtime resources. Start with the [plugin developer guide](docs/plugins.md) for APIs, runnable examples, consent and compatibility details.
 
-Try [Network HUD Demo 1.1.2](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.28/NetworkHudDemo-1.1.2.zip): understated weather icons, a bottom news marquee, N to open a story in the built-in browser, a real city mini-map and an original observatory room. Its room offers six preset weather cities and BBC/NPR/NASA source choices, not automatic location detection. Download it separately, install through **Settings > Plugins > Install Package**, then review and approve its hosts/permissions; the installer does not install or enable it. [Source and room generator](tests/fixtures/network-hud-demo) are editable, including via its room's **Browse Files / Apply Edits** controls.
+Try the included **Network HUD Demo 1.1.2**: understated weather icons, a bottom news marquee, N to open a story in the built-in browser, a real city mini-map and an original observatory room. Its room offers six preset weather cities and BBC/NPR/NASA source choices, not automatic location detection. Enable it through **Settings > Plugins** and review its hosts/permissions; no network requests occur while disabled. [Source and room generator](tests/fixtures/network-hud-demo) are editable, including via its room's **Browse Files / Apply Edits** controls. The following screenshots are from v0.9.28; no new Bug Hunter visual checks were performed for v0.9.29.
 
 ![Weather, news ticker and mini-map HUD](docs/plugin-hud-0.9.28.jpg)
 

@@ -1,6 +1,61 @@
 # Plugins
 
-This guide targets the **SciFi Shell v0.9.28 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+This guide targets the **SciFi Shell v0.9.29 Windows x64 installer**. Other released or unreleased builds may behave differently. The experimental gameplay API can change; there is no stability or compatibility guarantee.
+
+## Bundled plugins and updates
+
+v0.9.29 installs these packages **disabled** on first encounter in a profile:
+
+| Plugin | Version | Notes |
+|---|---|---|
+| TRACKFLY 2 | 2.2.1 | Exact author-approved package by Davidalanfisk; G/Start near the launch pad enters flight. |
+| [Bug Hunter](../examples/plugins/bug-hunter) | 0.1.1 | Original procedural cyan wireframe roaches, infinite-ammo laser rifle and saved score/kills. G/Start equips; Escape/Y exits. |
+| [Network HUD Demo](../tests/fixtures/network-hud-demo) | 1.1.2 | Weather/news/map HUD and observatory; six location presets, BBC/NPR/NASA sources; Windows network transport. |
+
+Use **Settings > Plugins** to enable and approve a package. Bundling does not grant consent,
+execute Lua, request network data, acquire controls or create gameplay HUD/audio while disabled.
+Existing same-ID packages, enabled preferences, consent, scores, settings and editable workspaces
+are preserved on upgrade; the bundled version never overwrites a user's installed version.
+
+One-time receipts in the profile's `SciFiShell/plugin-defaults/<plugin-id>` directory survive
+removal and host updates. Removed defaults stay removed, not silently restored every launch.
+To reinstall or update explicitly, import a ZIP from the application's `assets/plugins` directory
+or the release downloads. Existing same-ID packages must first be disabled/removed; back up
+edits first. Uninstall preserves plugin storage (including Bug Hunter score/kills), but removes
+the editable workspace and room settings. A changed package must be enabled/consented normally.
+See the bundled [controls/provenance notes](../assets/plugins/README.txt).
+
+## API 4: Bug Hunter services
+
+The [Bug Hunter prototype](../examples/plugins/bug-hunter) requires **v0.9.29**, not v0.9.28.
+Manifest `api_version` stays `"1"`; `capabilities().api` is `4`.
+Version 0.1.1 fixes the city bounds field name (`max_x`), reported working by the user.
+The host was compiled and the release payload inspected, but automated tests and app/visual
+smoke checks for this release were deliberately not run at the user's request; authored
+regressions are not a claim of passing tests or hardware/controller certification.
+
+* With `scene`, `scene_material(handle, opacity, emission)` opts an owned box/model/mesh into an unlit,
+  depth-tested translucent material. Opacity is 0–1, emission 0–4; nonfinite values are rejected.
+  Zero opacity hides drawing, not ray picking. These objects do not write depth and sort far-to-near within their
+  owner; intersecting objects/across-owner transparency is approximate. Normal existing objects are unchanged.
+  Meshes can author explicit edge geometry for wireframes; there is no automatic triangle-wireframe flag.
+* With `world`, `world_raycast(ox,oy,oz,dx,dy,dz,max_distance)` returns nearest collision distance or `nil`.
+  Direction is normalized and must be nonzero with components in ±1.001; positions are bounded to ±10,000,
+  range to 0–100 metres. Uses the city's collision hulls plus ground plane, not mesh triangles, file paths,
+  other plugins or every native toy/track decoration. Raised bus decks use thin hulls rather than filling the
+  space underneath. Pad slopes are conservative box approximations. Unavailable/over-budget queries fail
+  explicitly. Maximum four rays per callback, sharing the existing 64 world/view query budget; source traversal
+  is rejected above 4,096 city containers/towers or 32,768 generated collision hulls.
+* An active desktop `control` lease receives `on_input("aim",0/1)` for right-button held state and
+  `on_input("mouse_wheel",notches)` for wheel impulses clamped to ±8. These never go to unowned plugins or UI,
+  have no wheel replay after focus/capture reset, and release aim when ownership ends. Right-click does not
+  also pin a host window while the lease is owned.
+* `control_zoom(factor)` requires an active `control` lease; finite factors 1–8 narrow the desktop world's
+  projection by that tangent ratio. UI/HUD coordinates stay unchanged; VR projection is never altered.
+  Zoom resets to 1 on lease release, failure, disable, context loss or stop.
+* `control_exit_button("y")` opts a `control` plugin into Xbox Y instead of the default B exit.
+  `"b"` restores the default. Start/View, Escape/G and controller-disconnect exits remain host-owned.
+  The selected pad exit is consumed before script/native UI actions; existing plugins retain B behavior.
 
 ## v0.9.28 changelog
 
@@ -11,10 +66,10 @@ The manifest's `api_version` remains the string `"1"`; it is not the capability-
 
 ![Weather card, bottom news ticker and city mini-map](plugin-hud-0.9.28.jpg)
 
-The optional [Network HUD Demo 1.1.2](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.28/NetworkHudDemo-1.1.2.zip)
-is a separate download, not installed or enabled by the host installer. Its [editable source and original room generator](../tests/fixtures/network-hud-demo)
-are included in the repository and the release source ZIP. Install through Settings > Plugins and review the listed
-permissions/hosts before enabling. Weather locations are six preset public cities, not automatic geolocation or arbitrary locality input.
+The [Network HUD Demo 1.1.2](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.28/NetworkHudDemo-1.1.2.zip)
+was a separate download in v0.9.28; v0.9.29 includes it installed disabled. Its [editable source and original room generator](../tests/fixtures/network-hud-demo)
+are included in the repository and the release source ZIP. Review the listed permissions/hosts before enabling.
+Weather locations are six preset public cities, not automatic geolocation or arbitrary locality input.
 
 To rebuild the demo, run `python tests\fixtures\network-hud-demo\generate-room.py`, then ZIP only
 `plugin.json`, `scripts/main.lua` and `assets/room.glb` at those exact root-relative archive paths, using `/`
@@ -247,7 +302,7 @@ Download [TrackFly2-2.2.1.zip](https://github.com/Davidalanfisk/SciFiShell/relea
 from the release, separately from the installer. This is the exact reviewed package by
 **Davidalanfisk**, supplied by its author and published with their approval; its asset bytes
 and authorship are preserved. No additional asset licence or public-domain status is asserted.
-It is optional, not bundled/enabled by the installer, and does not replace existing examples.
+It was a separate optional download in v0.9.27; v0.9.29 bundles it installed disabled, without replacing existing user packages.
 The manifest's review-host wording refers to the controls now released in **v0.9.27**.
 
 Use **Settings > Plugins > Install Package**, select the ZIP without extracting it, then select

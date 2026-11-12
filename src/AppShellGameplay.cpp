@@ -96,6 +96,7 @@ bool AppShell::registerGameplay(const GameplayPackage& package, const std::files
         entry->pendingError.clear();
         entry->inputState.reset();
         entry->controllerInput.reset();
+        entry->aimHeld = false;
     }, false};
     plugin.prepare = [this, entry, id = package.id](std::string& error) {
         size_t active = 0;
@@ -139,6 +140,17 @@ bool AppShell::registerGameplay(const GameplayPackage& package, const std::files
             } catch (const std::bad_alloc&) {
                 return false;
             }
+        };
+        world.raycast = [](void* context, const double* origin, const double* direction,
+                           double distance, double* out) noexcept {
+            auto& app = *static_cast<AppShell*>(context);
+            if (!app.gameplayWorldAvailable()) return -1;
+            try {
+                return app.city_->gameplayRaycast(
+                    {static_cast<float>(origin[0]), static_cast<float>(origin[1]), static_cast<float>(origin[2])},
+                    {static_cast<float>(direction[0]), static_cast<float>(direction[1]), static_cast<float>(direction[2])},
+                    static_cast<float>(distance), out);
+            } catch (const std::bad_alloc&) { return -1; }
         };
         PluginScriptRuntime::ViewQuery view;
         view.context = this;
@@ -311,7 +323,9 @@ void AppShell::releaseGameplayControl() {
         const auto dispatch = [&](const char* name, double value) {
             return entry->session.input(name, value, error);
         };
-        if (!entry->inputState.update(entry->input, false, 0, 0, 0, false, false, dispatch) ||
+        const bool aimOk = !entry->aimHeld || dispatch("aim", 0);
+        entry->aimHeld = false;
+        if (!aimOk || !entry->inputState.update(entry->input, false, 0, 0, 0, false, false, dispatch) ||
             !entry->controllerInput.update(entry->controller, false, {}, dispatch) ||
             !entry->session.setControlActive(false, error)) {
             plugins_.markFailed(id, error);
@@ -319,6 +333,14 @@ void AppShell::releaseGameplayControl() {
         }
         break;
     }
+}
+
+float AppShell::gameplayZoom() const {
+    if (vrOn_ || !gameplayWorldAvailable()) return 1;
+    for (const auto& [id, entry] : gameplay_)
+        if (entry->owner == gameplayControl_.owner() && entry->session.running())
+            return static_cast<float>(entry->session.controlZoom());
+    return 1;
 }
 
 std::string AppShell::nearbyGameplayControl(bool controllerOnly) const {
@@ -357,6 +379,7 @@ void AppShell::acquireGameplayControl(bool controllerOnly) {
         nearest->inputState.reset();
         nearest->mouseInput.reset();
         nearest->controllerInput.reset();
+        nearest->aimHeld = false;
     }
 }
 
@@ -442,6 +465,21 @@ void AppShell::tickGameplay(double dt, const FrameInput& input, const PadState& 
             input.lookY * 0.0025 * settings_.lookScale() * (settings_.invertY ? -1 : 1), dt,
             [&](const char* name, double value) { return entry->session.input(name, value, error); });
         if (!mouseOk) {
+            plugins_.markFailed(id, error);
+            if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
+            continue;
+        }
+        const bool aim = pluginInput && gameplayControl_.owner() == entry->owner &&
+                         !input.mouseReset && input.rightHeld;
+        bool aimOk = true;
+        if (aim != entry->aimHeld) {
+            entry->aimHeld = aim;
+            aimOk = entry->session.input("aim", aim ? 1 : 0, error);
+        }
+        if (aimOk && pluginInput && gameplayControl_.owner() == entry->owner &&
+            !input.mouseReset && std::isfinite(input.wheel) && input.wheel != 0)
+            aimOk = entry->session.input("mouse_wheel", std::clamp<double>(input.wheel, -8, 8), error);
+        if (!aimOk) {
             plugins_.markFailed(id, error);
             if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
             continue;

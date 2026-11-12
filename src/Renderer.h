@@ -26,6 +26,7 @@ struct GpuLabel {
     Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> solidSRB;
     Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> webSRB;
     Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> floorSRB;
+    Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> gameplaySRB;
     float aspect = 1.0f;
 };
 
@@ -60,6 +61,7 @@ public:
     Diligent::RefCntAutoPtr<Diligent::ITexture> createDepthTexture(uint32_t w, uint32_t h);
 
     void setView(const Mat4& view, const Mat4& proj);
+    Vec3 viewEye() const { return view_.rigidInverse().transformPoint({0, 0, 0}); }
     float aspect() const;
     uint32_t desktopWidth() const { return swapChain_->GetDesc().Width; }
     uint32_t desktopHeight() const { return swapChain_->GetDesc().Height; }
@@ -85,7 +87,9 @@ public:
     // Internal gameplay resources are owned by the renderer and revoked together by owner.
     bool createGameplayModel(uint64_t owner, const GameplayModel& model, const GameplayTexture* texture,
                              uint64_t& handle, std::string& error);
-    bool drawGameplayModel(uint64_t owner, uint64_t handle, const Mat4& world, Vec3 colour);
+    bool drawGameplayModel(uint64_t owner, uint64_t handle, const Mat4& world, Vec3 colour,
+                           bool material = false, float opacity = 1, float emission = 0);
+    void drawGameplayBox(const GpuLabel& label, const Mat4& world, Vec3 colour, float opacity, float emission);
     // Call between render targets; invalidates context bindings while releasing GPU references.
     void releaseGameplayModels(uint64_t owner);
     // Theme colours used by the grid floor, card edge lights and the tool ring.
@@ -150,6 +154,7 @@ private:
         Mesh mesh;
         Diligent::RefCntAutoPtr<Diligent::ITexture> texture;
         Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> binding;
+        Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> translucentBinding;
     };
 
     bool createPipeline(Pipeline& out, const char* name, const char* vsFile, const char* psFile, bool blend, bool premul = false,
@@ -174,7 +179,7 @@ private:
     Diligent::RefCntAutoPtr<Diligent::ISwapChain> swapChain_;
     Diligent::RefCntAutoPtr<Diligent::IShaderSourceInputStreamFactory> shaderFactory_;
     Diligent::RefCntAutoPtr<Diligent::IBuffer> constants_;
-    Pipeline panelPipeline_, solidPipeline_, webPipeline_, floorPipeline_, postPipeline_, blitPipeline_;
+    Pipeline panelPipeline_, solidPipeline_, webPipeline_, floorPipeline_, gameplayPipeline_, postPipeline_, blitPipeline_;
     Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> postSRB_;
     Diligent::RefCntAutoPtr<Diligent::ITexture> postTex_;
     uint32_t postW_ = 0, postH_ = 0;

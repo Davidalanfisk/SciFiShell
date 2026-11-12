@@ -1071,6 +1071,46 @@ int main() {
         const auto gameSource = dir / "game.zip";
         const auto gameDir = dir / "games";
         { std::ofstream out(gameSource, std::ios::binary); out.write(executableZip.data(), executableZip.size()); }
+        {
+            const auto profile = dir / "default-profile";
+            int starts = 0, registrations = 0;
+            sf::PluginManager manager(profile / "plugins.ini");
+            sf::PluginPackageStore defaults(profile / "plugins", [](const sf::ThemePackage&) { return true; }, {},
+                [&](const sf::GameplayPackage& package, const fs::path&, const sf::GameplayDigest&) {
+                    ++registrations;
+                    return manager.add({package.id, package.name, package.description, package.version,
+                                        [&] { ++starts; }, [] {}, false});
+                });
+            defaults.discover();
+            check(defaults.seedDefault(gameSource, "com.example.game") && manager.initialize() &&
+                  registrations == 1 && starts == 0 && manager.plugins().size() == 1 &&
+                  !manager.plugins()[0].enabled && !manager.plugins()[0].running,
+                  "default gameplay installs and registers disabled without executing source");
+            check(defaults.seedDefault(dir / "missing-new-version.zip", "com.example.game") &&
+                  registrations == 1, "default receipt prevents automatic bundle updates");
+            check(defaults.uninstall("com.example.game") && manager.remove("com.example.game") &&
+                  defaults.seedDefault(gameSource, "com.example.game") &&
+                  !fs::exists(profile / "plugins" / "com.example.game.zip"),
+                  "uninstalled default stays removed after the next startup");
+            check(defaults.install(gameSource) && registrations == 2 && starts == 0,
+                  "removed bundled default remains manually reinstallable without enabling");
+            manager.shutdown();
+
+            const auto existing = dir / "existing-default-profile";
+            fs::create_directories(existing / "plugins");
+            fs::copy_file(gameSource, existing / "plugins" / "com.example.game.zip");
+            sf::PluginPackageStore preserve(existing / "plugins", [](const sf::ThemePackage&) { return true; });
+            sf::GameplayDigest before, after;
+            check(sf::gameplayDigestFile(existing / "plugins" / "com.example.game.zip", before, error) &&
+                  preserve.seedDefault(dir / "missing-source.zip", "com.example.game") &&
+                  sf::gameplayDigestFile(existing / "plugins" / "com.example.game.zip", after, error) &&
+                  before == after, "first bundle encounter preserves existing user package without reading source");
+            sf::PluginPackageStore mismatch(dir / "bad-default-profile" / "plugins",
+                [](const sf::ThemePackage&) { return true; });
+            check(!mismatch.seedDefault(gameSource, "com.example.different") &&
+                  !fs::exists(dir / "bad-default-profile" / "plugin-defaults" / "com.example.different"),
+                  "failed default validation does not create a removal receipt");
+        }
         std::set<std::string> registered;
         sf::PluginPackageStore gameStore(gameDir, [](const sf::ThemePackage&) { return true; }, {},
             [&](const sf::GameplayPackage& package, const fs::path& path, const sf::GameplayDigest& digest) {

@@ -1,0 +1,132 @@
+TRACKFLY 2.2.1 - SCIFI SHELL 0.9.27 COMPANION
+
+REQUIRED HOST
+Requires SciFi Shell 0.9.27. Download the matching host and optional TrackFly
+plugin from the SciFiShell v0.9.27 release. Future host versions may change
+the experimental gameplay API; compatibility is not guaranteed.
+Stock SciFiShell v0.9.26 is NOT compatible: it caps control motion at 25 units/s
+and does not provide the required Shift/controller activation support.
+The host must support 1000 units/s control poses, the "boost" input event,
+Start activation/release, B/Back release, held-input reset/resynchronization
+and genuine "mouse_yaw"/"mouse_pitch" relative angular impulse events.
+This optional plugin ZIP is separate from the SciFiShell installer.
+The ZIP is byte-identical to the approved 2.2.1 review package; its manifest
+and script retain their original review-host wording. That wording describes
+the API now supplied by 0.9.27, not a separate installation requirement.
+SHA256:
+4E7B0EA92F4D0B7C9AD71B70D9C8133D645B53649D2CCDC1DD453F0D4A789F02
+
+INSTALL
+1. Install and launch SciFi Shell 0.9.27. Back up your existing profile before
+   updating an installed host or replacing a previously installed plugin.
+2. Open Settings > Plugins > Install Package and select
+   TrackFly2-2.2.1.zip. Do not unzip it into the program directory.
+3. If TRACKFLY 2 is already installed in your profile, disable and remove
+   that copy through the host before
+   importing the new ZIP (installation does not overwrite existing packages).
+   The package keeps the original ID,
+   com.davidalanfisk.trackfly2, and existing course-signature score keys.
+   Do not delete the profile or its data. Back it up before replacing a
+   previously installed copy; host uninstall/reinstall may remove saved data.
+4. New packages start disabled. Select TRACKFLY 2, review its requested
+   permissions, then select it again within 30 seconds to consent and enable.
+   Include Input, Controller and Control (also Scene, World, View, Sound, HUD
+   and Storage). Changed ZIP contents require new consent.
+5. Enter the city, let TRACKFLY finish surveying/loading, and approach the
+   launch pad/control offer within four units. Press G or Xbox Start to fly.
+   Keep the city focused with no panel/keyboard overlay open.
+
+KEYBOARD AND MOUSE
+Mouse left / right    Steer yaw left / right while flying
+Mouse up / down       Pitch up / down while flying
+W / S                 Forward throttle / brake then reverse
+A / D                 Additional yaw left / right (retained; automatic bank)
+Space / Left Ctrl     Climb / descend
+Left Shift            Hold boost; release to stop boosting
+Left mouse            Hold boost (retained from the original)
+G                     Enter / exit flight
+Escape                Exit flight
+
+XBOX (FIRST CONNECTED XINPUT CONTROLLER ON WINDOWS)
+Start                 Enter nearby offered craft / exit flight
+B or View/Back        Exit flight
+Left stick X          Yaw left / right (automatic bank)
+Left stick Y          Forward throttle / brake then reverse
+Right stick X         Strafe left / right
+Right stick Y         Pitch up / down; release to hold current pitch
+Right trigger         Analog forward throttle
+Left trigger          Analog braking / reverse
+LB                    Hold full brake/stop; overrides throttle and boost
+A or RB               Hold boost
+Y / X                 Climb / descend
+D-pad up / down       Climb / descend
+D-pad left / right    Strafe left / right
+Stick clicks          Unassigned
+
+Boost can launch from rest. Shift, mouse, A and RB are independent: releasing
+one does not cancel another still held. Boost uses the original rechargeable
+energy system (about 3.6 seconds per full charge; about 7.1 seconds to recharge).
+Mouse steering follows the shell mouse sensitivity/invert-Y settings.
+Mouse deltas are consumed once per frame, not held. Releasing control restores
+ordinary shell mouse handling; acquisition/focus recovery discards stale mouse
+motion. Extreme mouse/pad/key combinations are capped at 3.8 radians/s per axis
+and excess motion is discarded, never queued into a later turn.
+Buttons/axes are change-based, not repeated key events. Disconnecting the controller,
+opening overlays, losing focus or leaving the city releases control and clears
+held movement/boost; acquisition requires a fresh G/Start press.
+
+SPEED AND SAFETY
+During flight the HUD always starts with actual speed, for example "300u/s",
+followed by compact start/gate/race-time guidance. Units are shell units/second,
+NOT km/h. Speed uses the last host-accepted camera-position change divided by
+real elapsed frame time, not desired throttle/velocity. It reads zero when
+movement is blocked and clears on acquisition; it refreshes about four times
+per second. The camera can lag the craft, so this is actual camera/player
+travel speed rather than a prediction of the craft's velocity.
+Forward cruise target: 300 units/s (formerly 19.5).
+Boost total-speed ceiling: 800 units/s (formerly 24.3).
+Reverse, independent altitude and strafe targets: 105 units/s each.
+Acceleration and braking are smoothed. Combined velocity is capped at 800,
+including lateral/vertical motion; camera/collision corrections are capped
+at 900 units/s, below the required host's 1000 units/s limit.
+The course, craft, textures, sounds, scoring ID and score keys are preserved.
+Only the plugin-generated fake ground-shadow meshes were removed; global
+SciFiShell shadow settings are not changed.
+At these speeds, feather the triggers/sticks for tight original-course hoops.
+Physics steps remain capped at 66 ms; below about 15 FPS flight slows rather
+than taking unsafe large steps. Swept craft checks and the host's own camera
+collision resolution prevent endpoint-only high-speed tunnelling.
+
+VALIDATION / LIMITS
+Automated Lua 5.4 sandbox-fixture checks cover startup/cleanup, measured
+299.963 cruise / 798.617 boost, Shift press/release, independent boost sources,
+all mapped flight axes/actions, aliases, brake/reverse, disconnect/context/
+ownership resets, thin-wall collision, recovery after blocked camera motion,
+combined pose bounds, callback query/instruction bounds and on-screen controls.
+Focused mouse checks cover both signs/axes, sensitivity, combined angular
+limits, 60/120/240 Hz independence, unowned input and release/reacquisition.
+HUD checks cover stopped, moving, boost, blocked camera, ownership reset and
+low frame rates. Race/lap messages retain the speed prefix within the
+32-character/four-updates-per-second HUD budget. Twelve Lua groups pass.
+Archive checks require exactly the original 14 paths and unchanged asset bytes.
+An independent C++ fixture also passed against SciFiShell's actual
+PluginScriptRuntime + GameplayStorage and repository-pinned Lua, including
+the real sandbox allocation/instruction limits and scene/control APIs.
+The host owner verified this exact ZIP in the actual SDL/renderer integration
+path: right/down mouse impulses consumed, live speed visible, ownership
+retained, boost/Xbox flight preserved, focus release and disable cleanup.
+The matching normal CEF review build also passed startup/shutdown smoke.
+This is not a physical-pad/FPS/max-speed certification.
+Real controller hardware/physical play feel is not certified by these tests.
+
+AUTHORSHIP / PROVENANCE
+Plugin author: Davidalanfisk (preserved from the supplied manifest).
+The author supplied the original TRACKFLY 2.1.0 ZIP, described it as created
+with Claude, requested these modifications, tested 2.2.1 and approved release.
+The course, craft GLB, five PNG textures and six WAV samples are preserved;
+all twelve asset files are byte-identical to the author's supplied archive.
+The original archive contained no license or separate asset-credit file.
+No additional asset license, public-domain status or third-party ownership
+claim is made here; asset licensing was not independently verified.
+Do not assume the host repository's license automatically covers these assets.
+The plugin ID remains com.davidalanfisk.trackfly2 and score keys are unchanged.

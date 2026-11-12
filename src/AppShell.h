@@ -209,6 +209,7 @@ private:
         std::string pendingError;
         GameplayInput inputState;
         GameplayMouseInput mouseInput;
+        bool aimHeld = false;
         GameplayControllerInput controllerInput;
     };
     std::map<std::string, std::shared_ptr<GameplayEntry>> gameplay_;
@@ -222,6 +223,7 @@ private:
     std::uint64_t nextGameplayNetworkToken_ = 0;
     GameplayControlLease gameplayControl_;
     GameplayControlInput gameplayControlInput_;
+    float gameplayZoom() const;
     GameplayClickRouter gameplayClicks_;
     std::unique_ptr<GameplayConsent> gameplayConsent_;
     uint64_t nextGameplayOwner_ = 1;

@@ -25,6 +25,8 @@ public:
         bool (*resolve)(void*, double*, double*, double*, double, double) noexcept = nullptr;
         bool (*available)(void*) noexcept = nullptr;
         bool (*trackClearance)(void*, double, double, double, double*) noexcept = nullptr;
+        // -1 unavailable/over-budget, 0 miss, 1 hit distance. Uses city collision hulls.
+        int (*raycast)(void*, const double*, const double*, double, double*) noexcept = nullptr;
     };
     struct ViewQuery {
         void* context = nullptr;
@@ -112,6 +114,8 @@ public:
         double red = 0, green = 0, blue = 0;
         double rotateX = 0, rotateY = 0, rotateZ = 0;
         bool interactive = false;
+        double opacity = 1, emission = 0;
+        bool material = false;
     };
     struct Model {
         Box transform;
@@ -164,6 +168,8 @@ public:
     Impulse takeImpulse();
     ControlOffer controlOffer() const;
     ControlPose takeControlPose();
+    double controlZoom() const;
+    bool controlExitY() const;
     bool setControlActive(bool active, std::string& error);
     bool interactiveHit(const double* origin, const double* direction, double& distance) const;
     bool capturesClicks() const;

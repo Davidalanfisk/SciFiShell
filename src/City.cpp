@@ -1,6 +1,7 @@
 #include "City.h"
 #include "GameplayCellGrid.h"
 #include "GameplayTrackClearance.h"
+#include "GameplayRay.h"
 
 #include <algorithm>
 #include <queue>
@@ -2275,7 +2276,7 @@ void City::monumentBoxes(std::vector<Box>& out) const {
     }
 }
 
-void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const {
+void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes, bool ray) const {
     monumentBoxes(boxes);
     for (const auto& b : downtown_) {
         const auto plot = downtownPlot(b.slot);
@@ -2286,7 +2287,7 @@ void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const 
     }
     for (const auto& b : settingsBuildings_) {
         const auto plot = downtownPlot(b.slot,true);
-        if (std::fabs(p.x-plot.x) > 8+rad || std::fabs(p.z-plot.z) > 8+rad) continue;
+        if (std::fabs(p.x-plot.x) > 13.6f+rad || std::fabs(p.z-plot.z) > 13.6f+rad) continue;
         boxes.push_back({plot.x-13.6f,plot.x+13.6f,24,plot.z-13.6f,plot.z+13.6f});
     }
     if (car_.show && car_.solid && car_.spawn > 0.9f) {  // a parked car is a solid, climbable object
@@ -2301,7 +2302,7 @@ void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const 
     stepRects(steps);
     for (const StepRect& sr : steps) {
         const float reach = kStepN * kStepTread;
-        if (std::fabs(p.x - sr.cx) > sr.sx * 0.5f + reach + 4.0f || std::fabs(p.z - sr.cz) > sr.sz * 0.5f + reach + 4.0f) continue;
+        if (std::fabs(p.x - sr.cx) > sr.sx * 0.5f + reach + 4.0f + rad || std::fabs(p.z - sr.cz) > sr.sz * 0.5f + reach + 4.0f + rad) continue;
         for (int k = 0; k < kStepN; ++k) {
             const float hx = sr.sx * 0.5f + (kStepN - k) * kStepTread, hz = sr.sz * 0.5f + (kStepN - k) * kStepTread;
             boxes.push_back({sr.cx - hx, sr.cx + hx, kStepRise * (k + 1), sr.cz - hz, sr.cz + hz});
@@ -2310,7 +2311,7 @@ void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const 
     std::vector<Station> sts;
     stations(sts);
     for (const Station& st : sts) {
-        if (std::fabs(p.x - st.x) > 40.0f || std::fabs(p.z - st.z) > 40.0f) continue;
+        if (std::fabs(p.x - st.x) > 40.0f + rad || std::fabs(p.z - st.z) > 40.0f + rad) continue;
         const float nx = st.fz, nz = -st.fx;
         for (int sd = -1; sd <= 1; sd += 2) {  // the two gate pylons
             const float cx = st.x - st.fx * 1.6f + nx * sd * kStGate, cz = st.z - st.fz * 1.6f + nz * sd * kStGate;
@@ -2329,14 +2330,15 @@ void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const 
                 const Vec3 a = b.pts[k], c = b.pts[k + 1];
                 if (std::max(a.y, c.y) < 1.0f) continue;
                 const float x0 = std::min(a.x, c.x) - hw, x1 = std::max(a.x, c.x) + hw, z0 = std::min(a.z, c.z) - hw, z1 = std::max(a.z, c.z) + hw;
-                if (p.x < x0 - 4 || p.x > x1 + 4 || p.z < z0 - 4 || p.z > z1 + 4) continue;
+                if (p.x < x0 - 4 - rad || p.x > x1 + 4 + rad || p.z < z0 - 4 - rad || p.z > z1 + 4 + rad) continue;
                 const int steps = std::fabs(a.y - c.y) > 0.05f ? std::max(2, (int)std::ceil(std::fabs(a.y - c.y) / 0.45f)) : 1;
                 for (int s = 0; s < steps; ++s) {
                     const float u0 = float(s) / steps, u1 = float(s + 1) / steps, um = (u0 + u1) * 0.5f;
                     const float top = (steps == 1 ? a.y : a.y + (c.y - a.y) * um) + 0.09f;
-                    if (p.y - 1.7f + 0.6f < top) continue;
+                    if (!ray && p.y - 1.7f + 0.6f < top) continue;
                     const float ax = a.x + (c.x - a.x) * u0, az = a.z + (c.z - a.z) * u0, bx = a.x + (c.x - a.x) * u1, bz = a.z + (c.z - a.z) * u1;
-                    boxes.push_back({std::min(ax, bx) - hw, std::max(ax, bx) + hw, top, std::min(az, bz) - hw, std::max(az, bz) + hw});
+                    boxes.push_back({std::min(ax, bx) - hw, std::max(ax, bx) + hw, top, std::min(az, bz) - hw, std::max(az, bz) + hw,
+                                     ray ? top - 0.18f : 0});
                 }
             }
         }
@@ -2344,11 +2346,13 @@ void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const 
     for (const auto& pl : platforms_) {
         if (pl.grow < 0.3f) continue;
         float dx = p.x - pl.cx, dz = p.z - pl.cz;
-        if (std::fabs(dx) > pl.side * 0.5f + 100.0f || std::fabs(dz) > pl.side * 0.5f + 100.0f) continue;
+        if (std::fabs(dx) > pl.side * 0.5f + 100.0f + rad || std::fabs(dz) > pl.side * 0.5f + 100.0f + rad) continue;
         boxes.push_back({pl.cx - pl.side * 0.5f, pl.cx + pl.side * 0.5f, kSlabH, pl.cz - pl.side * 0.5f, pl.cz + pl.side * 0.5f});
         const float base = kSlabH + kPlateH;
         for (const auto& b : pl.blocks) {
-            if (std::fabs(p.x - b.cx) > b.side * 0.5f + 20.0f || std::fabs(p.z - b.cz) > b.side * 0.5f + 20.0f) continue;
+            if (std::fabs(p.x - b.cx) > b.side * 0.5f + 20.0f + rad || std::fabs(p.z - b.cz) > b.side * 0.5f + 20.0f + rad) continue;
+            if (ray)
+                boxes.push_back({b.cx-b.side*.5f, b.cx+b.side*.5f, base, b.cz-b.side*.5f, b.cz+b.side*.5f});
             for (const auto& t : b.towers) {
                 if (t.grow < 0.3f) continue;
                 const float hw = std::max(1.5f, t.curW) * 0.5f, hd = std::max(1.5f, t.curD) * 0.5f;
@@ -2359,6 +2363,47 @@ void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const 
             }
         }
     }
+}
+
+int City::gameplayRaycast(Vec3 origin, Vec3 direction, float maxDistance, double* result) const {
+    if (!built_ || !std::isfinite(maxDistance) || maxDistance < 0 || maxDistance > 100) return -1;
+    // Bound source traversal before gathering collision hulls, not just the resulting draw list.
+    size_t work = downtown_.size() + settingsBuildings_.size() + platforms_.size();
+    for (const auto& platform : platforms_) {
+        work += platform.blocks.size();
+        if (work > 4096) return -1;
+        for (const auto& block : platform.blocks) {
+            work += block.towers.size();
+            if (work > 4096) return -1;
+        }
+    }
+    if (work > 4096) return -1;
+    const float rayLength = length(direction);
+    if (!std::isfinite(rayLength) || rayLength < 0.000001f) return -1;
+    direction = direction * (1.0f / rayLength);
+    std::vector<Box> boxes;
+    const float radius = maxDistance * 0.5f;
+    gatherBoxes(origin + direction * radius, radius, boxes, true);
+    if (boxes.size() > 32768) return -1;
+    bool hit = false;
+    double best = maxDistance;
+    if (direction.y < -0.000001f && origin.y >= 0) {
+        const double ground = -static_cast<double>(origin.y) / direction.y;
+        if (ground <= best) { best = ground; hit = true; }
+    }
+    const double o[] = {origin.x, origin.y, origin.z}, d[] = {direction.x, direction.y, direction.z};
+    struct Hull {
+        double x, y, z, width, height, depth;
+        double rotateX = 0, rotateY = 0, rotateZ = 0;
+    };
+    for (const auto& box : boxes) {
+        const Hull hull{(box.x0 + box.x1) * 0.5, (box.y0 + box.y1) * 0.5, (box.z0 + box.z1) * 0.5,
+                        box.x1 - box.x0, box.y1 - box.y0, box.z1 - box.z0};
+        double distance = 0;
+        if (gameplayRayHit(hull, o, d, best, distance)) { best = distance; hit = true; }
+    }
+    if (hit) *result = best;
+    return hit ? 1 : 0;
 }
 
 // The surface under an eye at p: the highest box top the feet can step onto, or the ground.

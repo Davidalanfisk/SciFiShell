@@ -3,6 +3,7 @@
 #include <cmath>
 #include <iterator>
 #include <new>
+#include <algorithm>
 
 namespace sf {
 namespace {
@@ -87,12 +88,40 @@ bool GameplaySceneRenderer::draw(const GameplaySession& session, const GpuLabel&
         const auto instances = session.models();
         const auto boxes = session.boxes();
         for (const auto& box : boxes)
-            renderer_.drawCube(cubeLabel, transform(box), colour(box), false, false, -1.0f);
+            if (!box.material) renderer_.drawCube(cubeLabel, transform(box), colour(box), false, false, -1.0f);
         for (const auto& instance : instances) {
+            if (instance.transform.material) continue;
             const auto it = models_.find({instance.model, instance.texture});
             if (it == models_.end() ||
                 !renderer_.drawGameplayModel(owner_, it->second, transform(instance.transform), colour(instance.transform))) {
                 error = "Gameplay model draw failed";
+                return false;
+            }
+        }
+        struct Transparent { PluginScriptRuntime::Box box; uint64_t model; };
+        std::vector<Transparent> translucent;
+        translucent.reserve(boxes.size() + instances.size());
+        for (const auto& box : boxes) if (box.material && box.opacity > 0) translucent.push_back({box, 0});
+        for (const auto& instance : instances) if (instance.transform.material && instance.transform.opacity > 0) {
+            const auto it = models_.find({instance.model, instance.texture});
+            if (it == models_.end()) { error = "Gameplay model draw failed"; return false; }
+            translucent.push_back({instance.transform, it->second});
+        }
+        // Sort by the current render eye (including reflection/VR passes), not the player's previous-frame pose.
+        const Vec3 eye = renderer_.viewEye();
+        const auto distance = [&](const Transparent& value) {
+            const auto& b = value.box;
+            return (b.x-eye.x)*(b.x-eye.x) + (b.y-eye.y)*(b.y-eye.y) + (b.z-eye.z)*(b.z-eye.z);
+        };
+        std::stable_sort(translucent.begin(), translucent.end(),
+            [&](const Transparent& a, const Transparent& b) { return distance(a) > distance(b); });
+        for (const auto& item : translucent) {
+            const auto& b = item.box;
+            if (!item.model)
+                renderer_.drawGameplayBox(cubeLabel, transform(b), colour(b), static_cast<float>(b.opacity), static_cast<float>(b.emission));
+            else if (!renderer_.drawGameplayModel(owner_, item.model, transform(b), colour(b), true,
+                                                  static_cast<float>(b.opacity), static_cast<float>(b.emission))) {
+                error = "Translucent gameplay model draw failed";
                 return false;
             }
         }

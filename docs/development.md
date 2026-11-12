@@ -53,12 +53,29 @@ cmake --build build --config Release
 build\Release\SciFiShell.exe
 ```
 
-For a release, ensure CEF 156 is present at `third_party\cef` or pass `-DSCIFI_CEF_ROOT=<extracted-CEF-directory>` when configuring; otherwise the browser is omitted. Use a Windows x64 generator and the `Release` configuration. Run `ctest --test-dir build -C Release --output-on-failure` before packaging; the explicit `GameplayArchiveLargeTest --expanded-limit` target also checks the 1 GiB archive and 100 MiB asset boundaries. The [v0.9.28 changelog](plugins.md#v0928-changelog) covers network/HUD APIs, rooms and editing; the earlier changelogs retain historical contracts. `installer\build-installer.ps1 -Version 0.9.28` writes the supplied version into the staged `version.txt`, requires CEF and excludes test binaries/fixtures from the installer. Pass `-BuildDirectory C:\builds\scifishell` to package an out-of-tree build's `Release` directory.
+For a release, ensure CEF 156 is present at `third_party\cef` or pass `-DSCIFI_CEF_ROOT=<extracted-CEF-directory>` when configuring; otherwise the browser is omitted. Use a Windows x64 generator and the `Release` configuration. Normally run `ctest --test-dir build -C Release --output-on-failure` before packaging; the explicit `GameplayArchiveLargeTest --expanded-limit` target also checks the 1 GiB archive and 100 MiB asset boundaries. **v0.9.29 is a user-directed exception: compilation and static artifact inspection only, no automated or visual/app tests.** Earlier v0.9.28 results do not validate API 4. The [API 4 reference](plugins.md#api-4-bug-hunter-services) covers Bug Hunter additions; the [v0.9.28 changelog](plugins.md#v0928-changelog) covers networking/HUDs, rooms and editing. `installer\build-installer.ps1 -Version 0.9.29` writes the supplied version into the staged `version.txt`, requires CEF and excludes test binaries/fixtures from the installer. Pass `-BuildDirectory C:\builds\scifishell` to package an out-of-tree build's `Release` directory.
+
+### Bundled disabled packages and API 4 (v0.9.29)
+
+`assets/plugins` contains the exact TrackFly2 2.2.1 and NetworkHudDemo 1.1.2 release
+ZIPs, plus BugHunter 0.1.1. CMake copies these assets beside the executable and
+the installer/update payload includes them unchanged. After package discovery,
+before `PluginManager::initialize`, `seedDefault` registers absent packages with
+the existing **disabled** gameplay default; it never creates consent or modifies
+enabled state. Per-ID profile receipts prevent resurrecting uninstalled defaults.
+Existing packages are never overwritten, even when a newer bundle is shipped.
+See [lifecycle and provenance](plugins.md#bundled-plugins-and-updates).
+
+API 4 adds owned translucent/emissive scene materials, bounded city collision
+rays, lease-only aim/wheel inputs, desktop control zoom and an optional Xbox Y
+exit. Manifest API stays `"1"`; use `capabilities().api >= 4` for these services.
+Bug Hunter's explicit edge geometry is original procedural mesh data, not a
+generic wireframe-rendering API. Host collision is simplified, not triangle-accurate.
 
 ### Plugin services, HUD and file previews (v0.9.28)
 
 See the [plugin reference](plugins.md#v0928-changelog) for exact Lua signatures, manifest fields,
-consent and per-request/resource bounds. Capability discovery is API 3; manifest `api_version` remains `"1"`.
+consent and per-request/resource bounds. These services debuted in capability API 3 (now 4); manifest `api_version` remains `"1"`.
 The optional Network HUD Demo 1.1.2 stays a separately installed/approved package, not an installer payload.
 The host provides reusable services; weather/news content and the original observatory stay editable Lua/GLB.
 
@@ -95,7 +112,7 @@ physical-controller/VR or frame-rate benchmark.
 ### Scripted flight input and motion (v0.9.27)
 
 The released input/motion contract and optional TrackFly 2.2.1 package are documented in the
-[plugin reference](plugins.md#v0927-changelog). The installer does not install or enable TrackFly;
+[plugin reference](plugins.md#v0927-changelog). Since v0.9.29 the installer includes TrackFly disabled;
 its reviewed ZIP and source/assets remain a separate release download with author attribution.
 
 Scripted player/camera control uses shared `kGameplayControlSpeedLimit` (1000 units/second),

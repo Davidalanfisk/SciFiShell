@@ -48,6 +48,19 @@ int main() {
     pad.connected = true;
     if (input.update(true, true, pad, [](const char*, float) { return false; }))
         return fail("callback failure propagation");
+    {
+        sf::GameplayControlInput routing;
+        sf::PadState shell, plugin;
+        shell.connected = true;
+        routing.update(true,shell,plugin,true);
+        shell = {}; shell.connected = true; shell.bHeld = true;
+        if (routing.update(true,shell,plugin,true) != sf::GameplayControlInput::Action::None || !plugin.bHeld)
+            return fail("Y-exit opt-in preserves B as a plugin action");
+        shell = {}; shell.connected = true; shell.yHeld = shell.yPressed = true;
+        if (routing.update(true,shell,plugin,true) != sf::GameplayControlInput::Action::Release ||
+            plugin.yHeld || shell.yPressed)
+            return fail("Y-exit opt-in releases without opening the shell menu");
+    }
     input.reset();
     pad.lx = pad.ly = pad.rx = pad.ry = pad.lt = pad.rt = 1;
     pad.aHeld = pad.bHeld = pad.xHeld = pad.yHeld = pad.startHeld = pad.backHeld = true;

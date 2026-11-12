@@ -538,8 +538,11 @@ struct PluginScriptRuntime::Impl {
     ControlOffer controlOffer{};
     ControlPose controlPose{};
     bool controlGranted = false, controlActive = false;
+    double controlZoom = 1;
+    bool controlExitY = false;
     bool clickCapture = false, handlingClickPress = false;
     int worldCalls = 0;
+    int rayCalls = 0;
     std::array<const char*, 16> granted{};
     size_t grantedCount = 0;
     std::vector<std::string> networkHosts;
@@ -1023,6 +1026,23 @@ struct PluginScriptRuntime::Impl {
     static int resizeBox(lua_State* state) { return updateBox(state, BoxProperty::Size); }
     static int colourBox(lua_State* state) { return updateBox(state, BoxProperty::Colour); }
 
+    static int materialBox(lua_State* state) {
+        auto& self = Impl::self(state);
+        const auto id = luaL_checkinteger(state, 1);
+        const double opacity = luaL_checknumber(state, 2), emission = luaL_checknumber(state, 3);
+        if (!std::isfinite(opacity) || !std::isfinite(emission) ||
+            opacity < 0 || opacity > 1 || emission < 0 || emission > 4)
+            return luaL_error(state, "scene material out of range");
+        auto update = [&](Box& box) {
+            if (!box.id || box.id != id) return false;
+            box.opacity = opacity; box.emission = emission; box.material = true;
+            return true;
+        };
+        for (auto& box : self.scene) if (update(box)) return 0;
+        for (auto& item : self.models) if (update(item.transform)) return 0;
+        return luaL_error(state, "unknown scene object");
+    }
+
     static int setInteractive(lua_State* state) {
         auto& self = Impl::self(state);
         const lua_Integer id = luaL_checkinteger(state, 1);
@@ -1126,6 +1146,29 @@ struct PluginScriptRuntime::Impl {
         return 1;
     }
 
+    static int raycastWorld(lua_State* state) {
+        auto& self = Impl::self(state);
+        if (++self.rayCalls > 4) return luaL_error(state, "world raycast limit exceeded");
+        double values[7];
+        for (int i = 0; i < 7; ++i) {
+            values[i] = luaL_checknumber(state, i + 1);
+            if (!std::isfinite(values[i]) || std::abs(values[i]) > (i < 3 ? 10000 : i < 6 ? 1.001 : 100))
+                return luaL_error(state, "world ray out of range");
+        }
+        const double length = std::sqrt(values[3]*values[3] + values[4]*values[4] + values[5]*values[5]);
+        if (length < 0.000001 || values[6] < 0) return luaL_error(state, "invalid world ray");
+        for (int i = 3; i < 6; ++i) values[i] /= length;
+        if (++self.worldCalls > 64) return luaL_error(state, "world query limit exceeded");
+        double distance = 0;
+        const int result = self.world.raycast(self.world.context, values, values + 3, values[6], &distance);
+        if (result < 0) return luaL_error(state, "world raycast unavailable or collision budget exceeded");
+        if (!result) { lua_pushnil(state); return 1; }
+        if (!std::isfinite(distance) || distance < 0 || distance > values[6])
+            return luaL_error(state, "world raycast returned invalid distance");
+        lua_pushnumber(state, distance);
+        return 1;
+    }
+
     static int initializeWorld(lua_State* state) {
         lua_pushcfunction(state, worldAvailable);
         lua_setglobal(state, "world_available");
@@ -1133,6 +1176,9 @@ struct PluginScriptRuntime::Impl {
         lua_setglobal(state, "world_floor");
         lua_pushcfunction(state, resolveQuery);
         lua_setglobal(state, "world_resolve");
+        if (self(state).world.raycast) {
+            lua_pushcfunction(state, raycastWorld); lua_setglobal(state, "world_raycast");
+        }
         if (self(state).world.trackClearance) {
             lua_pushcfunction(state, trackClearance);
             lua_setglobal(state, "world_track_clearance");
@@ -1850,7 +1896,7 @@ struct PluginScriptRuntime::Impl {
             lua_pushboolean(state, 1);
             lua_setfield(state, -2, self.granted[i]);
         }
-        lua_pushinteger(state, 3);
+        lua_pushinteger(state, 4);
         lua_setfield(state, -2, "api");
         return 1;
     }
@@ -1909,6 +1955,28 @@ struct PluginScriptRuntime::Impl {
         lua_setglobal(state, "control_offer");
         lua_pushcfunction(state, proposeControlPose);
         lua_setglobal(state, "control_pose");
+        lua_pushcfunction(state, zoomControl); lua_setglobal(state, "control_zoom");
+        lua_pushcfunction(state, exitControlButton); lua_setglobal(state, "control_exit_button");
+        return 0;
+    }
+
+    static int zoomControl(lua_State* state) {
+        auto& self = Impl::self(state);
+        const double zoom = luaL_checknumber(state, 1);
+        if (!self.controlActive) return luaL_error(state, "control is not active");
+        if (!std::isfinite(zoom) || zoom < 1 || zoom > 8)
+            return luaL_error(state, "control zoom must be between 1 and 8");
+        self.controlZoom = zoom;
+        return 0;
+    }
+
+    static int exitControlButton(lua_State* state) {
+        auto& self = Impl::self(state);
+        size_t length = 0;
+        const char* button = luaL_checklstring(state, 1, &length);
+        if (length != 1 || (button[0] != 'b' && button[0] != 'y'))
+            return luaL_error(state, "control exit button must be b or y");
+        self.controlExitY = button[0] == 'y';
         return 0;
     }
 
@@ -2032,6 +2100,7 @@ struct PluginScriptRuntime::Impl {
         lua_setglobal(state, "scene_resize");
         lua_pushcfunction(state, colourBox);
         lua_setglobal(state, "scene_colour");
+        lua_pushcfunction(state, materialBox); lua_setglobal(state, "scene_material");
         lua_pushcfunction(state, hitObject);
         lua_setglobal(state, "scene_hit");
         return 0;
@@ -2076,8 +2145,11 @@ struct PluginScriptRuntime::Impl {
         controlOffer = {};
         controlPose = {};
         controlGranted = controlActive = false;
+        controlZoom = 1;
+        controlExitY = false;
         clickCapture = handlingClickPress = false;
         worldCalls = 0;
+        rayCalls = 0;
         frame = 0;
         delta = 0;
         framePrepared = false;
@@ -2113,6 +2185,7 @@ struct PluginScriptRuntime::Impl {
 
     bool dispatch(const LifecycleCall& call, std::string& error) {
         worldCalls = 0;
+        rayCalls = 0;
         storageCalls = 0;
         mapCalls = 0;
         lua_sethook(state, instructionLimit, LUA_MASKCOUNT, kInstructionLimit);
@@ -2132,6 +2205,7 @@ struct PluginScriptRuntime::Impl {
 
     bool dispatchEvent(const MessageEvent& event, std::string& error) {
         worldCalls = 0;
+        rayCalls = 0;
         storageCalls = 0;
         mapCalls = 0;
         lua_sethook(state, instructionLimit, LUA_MASKCOUNT, kInstructionLimit);
@@ -2398,7 +2472,8 @@ void PluginScriptRuntime::prepareFrame(std::uint64_t frame) {
 
 bool PluginScriptRuntime::input(const std::string& control, double value, std::string& error) {
     if (!impl_->state) { error = "Script runtime is not running"; return false; }
-    if (control.empty() || control.size() > 32 || !std::isfinite(value) || value < -1 || value > 1) {
+    const double limit = control == "mouse_wheel" ? 8 : 1;
+    if (control.empty() || control.size() > 32 || !std::isfinite(value) || value < -limit || value > limit) {
         error = "Invalid input event";
         return false;
     }
@@ -2596,6 +2671,9 @@ PluginScriptRuntime::ControlPose PluginScriptRuntime::takeControlPose() {
     return result;
 }
 
+double PluginScriptRuntime::controlZoom() const { return impl_->controlActive ? impl_->controlZoom : 1; }
+bool PluginScriptRuntime::controlExitY() const { return impl_->controlExitY; }
+
 bool PluginScriptRuntime::setControlActive(bool active, std::string& error) {
     if (!impl_->state || !impl_->controlGranted) {
         error = "Script control capability is unavailable";
@@ -2604,6 +2682,7 @@ bool PluginScriptRuntime::setControlActive(bool active, std::string& error) {
     if (impl_->controlActive == active) { error.clear(); return true; }
     impl_->controlActive = active;
     impl_->controlPose = {};
+    impl_->controlZoom = 1;
     return impl_->dispatch({"on_input", "control", active ? 1.0 : 0.0, 2}, error);
 }
 

@@ -27,6 +27,9 @@ public:
                        RegisterGameplay registerGameplay = {});
     void discover();
     bool install(const std::filesystem::path& source);
+    // Called after discover, before PluginManager::initialize. A per-id receipt remembers removal;
+    // an existing user package is never replaced, and install only registers (does not enable).
+    bool seedDefault(const std::filesystem::path& source, const std::string& id);
     bool uninstall(const std::string& id);
     // Replaces an installed gameplay ZIP with a validated package of the same id. `unregister` must remove the
     // old registration; on failure the previous ZIP is restored and registered again.

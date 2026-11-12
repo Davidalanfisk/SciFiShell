@@ -438,6 +438,12 @@ float3 buildingColor(PSInput In)
 void main(in PSInput In, out float4 Color : SV_TARGET)
 {
     float tm = g_Accent.w;
+    if (g_Params.w > 12.5 && g_Params.w < 13.5)
+    {
+        float3 tex = lerp(g_Tex.Sample(g_Tex_sampler, In.UV).rgb, float3(1,1,1), g_Params.z);
+        Color = float4(tex * g_Color.rgb * (1.0 + g_Params.y), g_Params.x);
+        return;
+    }
     if (g_Params.w > 11.5 && g_Params.w < 12.5)
     {
         // Solid hologram body: lit flat colour with a soft rim; only the summon dissolve punches holes (emerge < 1).

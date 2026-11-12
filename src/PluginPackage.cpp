@@ -405,6 +405,44 @@ void PluginPackageStore::discover() {
     error_ = errors;
 }
 
+bool PluginPackageStore::seedDefault(const std::filesystem::path& source, const std::string& id) {
+    if (dir_.empty() || !validId(id)) { error_ = "Invalid default plugin location or id"; return false; }
+    const auto receipts = dir_.parent_path() / "plugin-defaults";
+    const auto receipt = receipts / id;
+    std::error_code ec;
+    const auto state = std::filesystem::symlink_status(receipt, ec);
+    if (ec && ec != std::errc::no_such_file_or_directory) {
+        error_ = "Cannot inspect default plugin receipt: " + ec.message(); return false;
+    }
+    ec.clear();
+    if (std::filesystem::exists(state)) {
+        if (!std::filesystem::is_directory(state)) {
+            error_ = "Default plugin receipt is not a directory"; return false;
+        }
+        error_.clear();
+        return true;
+    }
+    bool installed = false;
+    for (const char* extension : {".zip", ".sfplugin"}) {
+        const bool present = std::filesystem::exists(dir_ / (id + extension), ec);
+        if (ec) { error_ = "Cannot inspect existing default plugin: " + ec.message(); return false; }
+        installed = installed || present;
+    }
+    if (!installed) {
+        GameplayPackage package;
+        GameplayDigest digest;
+        if (!loadGameplayZip(source, package, digest)) return false;
+        if (package.id != id) { error_ = "Default plugin id does not match its catalog entry"; return false; }
+        if (!install(source)) return false;
+    }
+    // Never update plugins.ini or consent here: package registration defaults to disabled.
+    // Leave receipts on uninstall and across host updates; reinstall is an explicit package import.
+    std::filesystem::create_directories(receipt, ec);
+    if (ec) { error_ = "Cannot remember default plugin installation: " + ec.message(); return false; }
+    error_.clear();
+    return true;
+}
+
 bool PluginPackageStore::install(const std::filesystem::path& source) {
     if (dir_.empty()) { error_ = "Plugin package directory is unavailable"; return false; }
     const bool zip = source.extension() == ".zip";
