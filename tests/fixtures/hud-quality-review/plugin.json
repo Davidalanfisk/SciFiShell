@@ -1,0 +1,1 @@
+{"id":"com.example.hud-quality-review","name":"HUD QUALITY REVIEW","version":"1.0.0","author":"SciFiShell","description":"Deterministic HUD text and window-overlap review","entry":"scripts/main.lua","type":"gameplay","platforms":["any"],"permissions":["scene","hud"],"api_version":"1"}

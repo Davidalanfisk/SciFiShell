@@ -37,6 +37,7 @@ struct CachedGlyph {
     int w = 0, h = 0, xoff = 0, yoff = 0;
 };
 std::map<GlyphKey, CachedGlyph> g_cache;
+size_t g_cacheBytes = 0;
 
 bool readFile(const std::string& path, std::vector<unsigned char>& out) {
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -118,7 +119,11 @@ const CachedGlyph& glyphBitmap(FontFace face, const Resolved& r, float px) {
         cg.cov.assign(bmp, bmp + static_cast<size_t>(cg.w) * cg.h);
         stbtt_FreeBitmap(bmp, nullptr);
     }
-    if (g_cache.size() > 20000) g_cache.clear();
+    if (g_cache.size() > 20000 || g_cacheBytes + cg.cov.size() > 16 * 1024 * 1024) {
+        g_cache.clear();
+        g_cacheBytes = 0;
+    }
+    g_cacheBytes += cg.cov.size();
     return g_cache.emplace(key, std::move(cg)).first->second;
 }
 

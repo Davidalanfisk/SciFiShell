@@ -103,6 +103,10 @@ Every folder is a building and every sub-folder a door. Doors show a large thumb
 and rooms fill the far wall first, then the side walls, and the exit wall last. Inside a room, sub-folders stay as
 tall doors while files hang on the walls as framed pictures. Rooms are lit by dim spot lights rather than ceiling panels.
 
+v0.9.28 recognizes Lua source (`.lua`, including uppercase variants) in file tiles and the built-in editor,
+with syntax highlighting and source-only editing. Nearby GLB files also get static 3D geometry thumbnails for the
+[supported, bounded model subset](docs/development.md); unsupported models show a clear preview error.
+
 The city also watches for drives being connected or removed: new drives fade in as regions, removed drives fade away,
 and all regions fade in when the city first loads. Fullscreen apps use a normal 2D mouse pointer, and the media
 player's **Add Folders** uses the built-in file browser instead of the Windows picker.
@@ -194,7 +198,15 @@ Ground-level fog drifts between the towers (tune it with the fog sliders in Sett
 
 **The car.** Press `F10` anywhere in the city to summon a neon hologram sports car, and `F10` again to leave it. `C` swaps first and third person; `Space` drifts and `Shift` boosts. A speedo appears on the HUD. The wheels steer and spin, and a quiet electric hum rises with speed. Parked, it is solid: you can stand on it. Ramps on every region let you drive up onto the platforms.
 
-**Make a plugin.** The Windows x64 build **v0.9.27** supports data-only themes, Lua message scripts, and experimental Lua gameplay plugins, including persistent storage, controller input, audio samples, local messages and procedural meshes. Every installed package gets a Downtown building, and gameplay packages may supply a bounded custom exterior through `downtown_model`. Plugin manifests and Lua source files accept up to **10 MiB each**, with bounded Lua compilation and runtime memory. Start with the [plugin developer guide](docs/plugins.md): it walks through installation, a first gameplay plugin, packaging, permissions, limits and the API, including the [v0.9.27 changelog](docs/plugins.md#v0927-changelog). Try the downloadable [clock](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.19/scifishell-clock-example.zip), [scripted car and track](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-car-track.zip), or [scripted parks and toys](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-parks-toys.zip) in **Settings > Plugins**. The gameplay examples are simplified, not replacements for the separately enabled native Car and Track and Parks and Toys. Scripts and asset decoders run in the shell process, not an OS sandbox; only install and enable packages you trust.
+**Make a plugin.** The Windows x64 build **v0.9.28** supports data-only themes, Lua message scripts and experimental gameplay plugins. Alongside controller input, audio, persistent storage and procedural meshes, it adds [approved-host HTTPS text, crisp graphical HUD panels and larger runtime limits](docs/plugins.md#v0928-changelog), plus [custom rooms with settings, hotkey browser links, a read-only mini-map and in-shell file editing](docs/plugins.md#plugin-rooms-settings-links-and-the-mini-map). HUD panels remain above app windows without taking their clicks; permission prompts temporarily suppress plugin HUDs. Package limits remain **1 GiB expanded**, **100 MiB per binary asset** and **10 MiB per text file**, with separate bounded runtime resources. Start with the [plugin developer guide](docs/plugins.md) for APIs, runnable examples, consent and compatibility details.
+
+Try [Network HUD Demo 1.1.2](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.28/NetworkHudDemo-1.1.2.zip): understated weather icons, a bottom news marquee, N to open a story in the built-in browser, a real city mini-map and an original observatory room. Its room offers six preset weather cities and BBC/NPR/NASA source choices, not automatic location detection. Download it separately, install through **Settings > Plugins > Install Package**, then review and approve its hosts/permissions; the installer does not install or enable it. [Source and room generator](tests/fixtures/network-hud-demo) are editable, including via its room's **Browse Files / Apply Edits** controls.
+
+![Weather, news ticker and mini-map HUD](docs/plugin-hud-0.9.28.jpg)
+
+![The plugin's observatory room and floor compass](docs/plugin-room-0.9.28.jpg)
+
+The earlier [clock](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.19/scifishell-clock-example.zip), [scripted car and track](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-car-track.zip) and [scripted parks and toys](https://github.com/Davidalanfisk/SciFiShell/releases/download/v0.9.20/scripted-parks-toys.zip) remain available. These examples do not replace the separately enabled native features. Scripts and asset decoders run in the shell process, not an OS sandbox; only install and enable packages you trust.
 
 ![Plugins settings](docs/screenshot-plugins-2026.jpg)
 

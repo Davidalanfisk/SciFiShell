@@ -1,9 +1,11 @@
 #include "PluginScript.h"
 #include "PluginLimits.h"
+#include "PluginNetPolicy.h"
 #include "GameplayRay.h"
 #include "GameplayStorage.h"
 
 #include <cstdlib>
+#include <cstdio>
 #include <ctime>
 #include <cmath>
 #include <array>
@@ -20,10 +22,12 @@ extern "C" {
 
 namespace sf {
 namespace {
-constexpr size_t kMemoryLimit = 1024 * 1024;
+// Message scripts are tiny transforms; gameplay plugins hold parsed network text and HUD state.
+constexpr size_t kMessageMemoryLimit = 1024 * 1024;
+constexpr size_t kGameplayMemoryLimit = 16 * 1024 * 1024;
 constexpr size_t kCompileMemoryLimit = 128 * 1024 * 1024;
 constexpr int kInstructionLimit = 100000;
-struct Memory { size_t used = 0; size_t limit = kMemoryLimit; };
+struct Memory { size_t used = 0; size_t limit = kMessageMemoryLimit; };
 
 void* limitedAlloc(void* ud, void* ptr, size_t oldSize, size_t newSize) {
     auto& memory = *static_cast<Memory*>(ud);
@@ -39,19 +43,21 @@ void* limitedAlloc(void* ud, void* ptr, size_t oldSize, size_t newSize) {
     return next;
 }
 
-int loadSource(lua_State* state, Memory& memory, const std::string& source) {
+int loadSource(lua_State* state, Memory& memory, const std::string& source, size_t runtimeLimit) {
     memory.limit = kCompileMemoryLimit;
     const int status = luaL_loadbufferx(state, source.data(), source.size(), "plugin", "t");
     if (status == LUA_OK) {
         // Discard compiler scratch before fixing the loaded-code baseline. Execution
-        // gets only 1 MiB of additional allocations, never the compilation budget.
+        // gets only the runtime budget of additional allocations, never the compilation budget.
         lua_gc(state, LUA_GCCOLLECT);
-        memory.limit = memory.used + std::min(kMemoryLimit, kCompileMemoryLimit - memory.used);
+        memory.limit = memory.used + std::min(runtimeLimit, kCompileMemoryLimit - memory.used);
     }
     return status;
 }
 
 void instructionLimit(lua_State* state, lua_Debug*) {
+    // Sticky: after the first trip every instruction fails, so pcall cannot swallow the budget and continue.
+    lua_sethook(state, instructionLimit, LUA_MASKCOUNT, 1);
     luaL_error(state, "instruction limit exceeded");
 }
 
@@ -70,7 +76,8 @@ char lifecycleKey;
 char eventCallbacksKey;
 
 int storeLifecycle(lua_State* state) {
-    for (const char* name : {"on_start", "on_tick", "on_input", "on_stop", "on_message"}) {
+    for (const char* name : {"on_start", "on_tick", "on_input", "on_stop", "on_message", "on_network",
+                             "on_setting", "on_action"}) {
         lua_pushstring(state, name);
         lua_rawget(state, 1);
         if (!lua_isnil(state, -1) && !lua_isfunction(state, -1))
@@ -89,6 +96,14 @@ struct LifecycleCall {
     int arguments;
     const PluginScriptRuntime::MessageEvent* message = nullptr;
     size_t senderSize = 0;
+    // arguments == 4: on_network(id, ok, status, text_or_error)
+    std::uint64_t networkId = 0;
+    bool networkOk = false;
+    int networkStatus = 0;
+    const std::string* networkText = nullptr;
+    // arguments == 5: on_setting(key, value); arguments == 6: on_action(name)
+    const std::string* first = nullptr;
+    const std::string* second = nullptr;
 };
 
 void pushMessagePayload(lua_State* state, const PluginScriptRuntime::MessageEvent& event) {
@@ -110,7 +125,18 @@ int dispatchLifecycle(lua_State* state) {
     lua_rawget(state, -2);
     if (lua_isnil(state, -1)) return 0;
     if (!lua_isfunction(state, -1)) return luaL_error(state, "%s must be a function", call.event);
-    if (call.arguments == 3) {
+    if (call.arguments == 5 || call.arguments == 6) {
+        lua_pushlstring(state, call.first->data(), call.first->size());
+        if (call.arguments == 5) lua_pushlstring(state, call.second->data(), call.second->size());
+        lua_call(state, call.arguments == 5 ? 2 : 1, 0);
+        return 0;
+    }
+    if (call.arguments == 4) {
+        lua_pushinteger(state, static_cast<lua_Integer>(call.networkId));
+        lua_pushboolean(state, call.networkOk);
+        lua_pushinteger(state, call.networkStatus);
+        lua_pushlstring(state, call.networkText->data(), call.networkText->size());
+    } else if (call.arguments == 3) {
         lua_pushlstring(state, call.control, call.senderSize);
         lua_pushlstring(state, call.message->topic.data(), call.message->topicSize);
         pushMessagePayload(state, *call.message);
@@ -133,9 +159,346 @@ int dispatchRegisteredEvent(lua_State* state) {
     return 0;
 }
 
+// ---- json_decode: strict RFC 8259 JSON into Lua tables. POD-only state because Lua errors longjmp. ----
+constexpr size_t kJsonInputLimit = 1536 * 1024;
+constexpr int kJsonDepthLimit = 32;
+constexpr int kJsonNodeLimit = 200000;
+
+struct JsonParser {
+    lua_State* state;
+    const char* begin;
+    const char* p;
+    const char* end;
+    int nodes = 0;
+    char error[128] = {};
+
+    bool fail(const char* message) {
+        if (!error[0])
+            std::snprintf(error, sizeof(error), "%s at byte %zu", message, static_cast<size_t>(p - begin) + 1);
+        return false;
+    }
+    void whitespace() {
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) ++p;
+    }
+    static int hex(char c) {
+        return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 :
+               c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+    }
+    bool hex4(unsigned& out) {
+        if (end - p < 4) return fail("truncated \\u escape");
+        out = 0;
+        for (int i = 0; i < 4; ++i) {
+            const int v = hex(p[i]);
+            if (v < 0) return fail("invalid \\u escape");
+            out = out * 16 + static_cast<unsigned>(v);
+        }
+        p += 4;
+        return true;
+    }
+    static size_t put(char* out, unsigned cp) {
+        if (cp < 0x80) { out[0] = static_cast<char>(cp); return 1; }
+        if (cp < 0x800) { out[0] = static_cast<char>(0xC0 | (cp >> 6)); out[1] = static_cast<char>(0x80 | (cp & 0x3F)); return 2; }
+        if (cp < 0x10000) {
+            out[0] = static_cast<char>(0xE0 | (cp >> 12)); out[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            out[2] = static_cast<char>(0x80 | (cp & 0x3F)); return 3;
+        }
+        out[0] = static_cast<char>(0xF0 | (cp >> 18)); out[1] = static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        out[2] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); out[3] = static_cast<char>(0x80 | (cp & 0x3F));
+        return 4;
+    }
+    bool string() {
+        ++p;  // opening quote
+        const char* start = p;
+        size_t raw = 0;
+        while (p < end && *p != '"') {
+            if (static_cast<unsigned char>(*p) < 0x20) return fail("control character in string");
+            if (*p == '\\') { if (++p == end) break; }
+            ++p;
+            ++raw;
+        }
+        if (p >= end) return fail("unterminated string");
+        const char* stop = p;
+        p = start;
+        // Decoded output never exceeds the raw length (an escape of 6 bytes yields at most 4).
+        char* out = static_cast<char*>(lua_newuserdatauv(state, static_cast<size_t>(stop - start) + 1, 0));
+        size_t n = 0;
+        while (p < stop) {
+            if (*p != '\\') { out[n++] = *p++; continue; }
+            ++p;
+            const char c = *p++;
+            switch (c) {
+                case '"': out[n++] = '"'; break;
+                case '\\': out[n++] = '\\'; break;
+                case '/': out[n++] = '/'; break;
+                case 'b': out[n++] = '\b'; break;
+                case 'f': out[n++] = '\f'; break;
+                case 'n': out[n++] = '\n'; break;
+                case 'r': out[n++] = '\r'; break;
+                case 't': out[n++] = '\t'; break;
+                case 'u': {
+                    unsigned cp = 0;
+                    if (!hex4(cp)) return false;
+                    if (cp >= 0xD800 && cp <= 0xDBFF) {
+                        unsigned low = 0;
+                        if (stop - p < 6 || p[0] != '\\' || p[1] != 'u') return fail("unpaired surrogate");
+                        p += 2;
+                        if (!hex4(low) || low < 0xDC00 || low > 0xDFFF) return fail("unpaired surrogate");
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                    } else if (cp >= 0xDC00 && cp <= 0xDFFF) return fail("unpaired surrogate");
+                    n += put(out + n, cp);
+                    break;
+                }
+                default: return fail("invalid escape");
+            }
+        }
+        (void)raw;
+        p = stop + 1;
+        lua_pushlstring(state, out, n);
+        lua_remove(state, -2);
+        return true;
+    }
+    bool number() {
+        const char* start = p;
+        bool integer = true;
+        if (*p == '-') ++p;
+        if (p >= end || !(*p >= '0' && *p <= '9')) return fail("invalid number");
+        if (*p == '0') ++p;
+        else while (p < end && *p >= '0' && *p <= '9') ++p;
+        if (p < end && *p == '.') {
+            integer = false;
+            ++p;
+            if (p >= end || !(*p >= '0' && *p <= '9')) return fail("invalid number");
+            while (p < end && *p >= '0' && *p <= '9') ++p;
+        }
+        if (p < end && (*p == 'e' || *p == 'E')) {
+            integer = false;
+            ++p;
+            if (p < end && (*p == '+' || *p == '-')) ++p;
+            if (p >= end || !(*p >= '0' && *p <= '9')) return fail("invalid number");
+            while (p < end && *p >= '0' && *p <= '9') ++p;
+        }
+        if (p - start > 64) return fail("number too long");
+        char buffer[72];
+        std::memcpy(buffer, start, static_cast<size_t>(p - start));
+        buffer[p - start] = '\0';
+        if (integer && p - start <= 18) {
+            lua_pushinteger(state, static_cast<lua_Integer>(std::strtoll(buffer, nullptr, 10)));
+            return true;
+        }
+        const double value = std::strtod(buffer, nullptr);
+        if (!std::isfinite(value)) return fail("number out of range");
+        lua_pushnumber(state, value);
+        return true;
+    }
+    bool literal(const char* word, size_t size) {
+        if (static_cast<size_t>(end - p) < size || std::memcmp(p, word, size) != 0) return fail("invalid literal");
+        p += size;
+        return true;
+    }
+    // Pushes exactly one value (nil for null) on success.
+    bool value(int depth) {
+        if (++nodes > kJsonNodeLimit) return fail("too many values");
+        whitespace();
+        if (p >= end) return fail("unexpected end of input");
+        switch (*p) {
+            case '{': case '[': {
+                if (depth >= kJsonDepthLimit) return fail("nesting deeper than 32");
+                if (!lua_checkstack(state, 4)) return fail("nesting too deep");
+                const bool object = *p++ == '{';
+                lua_createtable(state, 0, 0);
+                lua_Integer index = 0;
+                whitespace();
+                if (p < end && *p == (object ? '}' : ']')) { ++p; return true; }
+                while (true) {
+                    whitespace();
+                    if (object) {
+                        if (p >= end || *p != '"') return fail("expected object key");
+                        if (!string()) return false;
+                        whitespace();
+                        if (p >= end || *p != ':') return fail("expected ':'");
+                        ++p;
+                        if (!value(depth + 1)) return false;
+                        if (lua_isnil(state, -1)) lua_pop(state, 2);
+                        else lua_rawset(state, -3);
+                    } else {
+                        if (!value(depth + 1)) return false;
+                        ++index;
+                        if (lua_isnil(state, -1)) lua_pop(state, 1);
+                        else lua_rawseti(state, -2, index);
+                    }
+                    whitespace();
+                    if (p < end && *p == ',') { ++p; continue; }
+                    if (p < end && *p == (object ? '}' : ']')) { ++p; return true; }
+                    return fail(object ? "expected ',' or '}'" : "expected ',' or ']'");
+                }
+            }
+            case '"': return string();
+            case 't': if (!literal("true", 4)) return false; lua_pushboolean(state, 1); return true;
+            case 'f': if (!literal("false", 5)) return false; lua_pushboolean(state, 0); return true;
+            case 'n': if (!literal("null", 4)) return false; lua_pushnil(state); return true;
+            default: return number();
+        }
+    }
+};
+
+int jsonDecode(lua_State* state) {
+    luaL_checktype(state, 1, LUA_TSTRING);
+    size_t size = 0;
+    const char* text = lua_tolstring(state, 1, &size);
+    if (size > kJsonInputLimit) {
+        lua_pushnil(state);
+        lua_pushstring(state, "json_decode: input exceeds 1.5 MiB");
+        return 2;
+    }
+    const int base = lua_gettop(state);
+    JsonParser parser{state, text, text, text + size};
+    if (size >= 3 && std::memcmp(text, "\xEF\xBB\xBF", 3) == 0) parser.p += 3;
+    bool ok = parser.value(0);
+    if (ok) {
+        parser.whitespace();
+        if (parser.p != parser.end) ok = parser.fail("trailing characters");
+    }
+    if (!ok) {
+        lua_settop(state, base);
+        lua_pushnil(state);
+        lua_pushfstring(state, "json_decode: %s", parser.error);
+        return 2;
+    }
+    return 1;
+}
+
+int pushFeedItems(lua_State* state) {
+    const auto& items = *static_cast<const std::vector<pluginnet::FeedItem>*>(lua_touserdata(state, 1));
+    lua_createtable(state, static_cast<int>(items.size()), 0);
+    for (size_t i = 0; i < items.size(); ++i) {
+        lua_createtable(state, 0, 4);
+        const auto field = [&](const char* name, const std::string& value) {
+            lua_pushlstring(state, value.data(), value.size());
+            lua_setfield(state, -2, name);
+        };
+        field("title", items[i].title);
+        field("link", items[i].link);
+        field("summary", items[i].summary);
+        field("published", items[i].published);
+        lua_rawseti(state, -2, static_cast<lua_Integer>(i + 1));
+    }
+    return 1;
+}
+
+int feedItems(lua_State* state) {
+    luaL_checktype(state, 1, LUA_TSTRING);
+    size_t size = 0;
+    const char* text = lua_tolstring(state, 1, &size);
+    const lua_Integer max = luaL_optinteger(state, 2, static_cast<lua_Integer>(pluginnet::kMaxFeedItems));
+    if (max < 1 || max > static_cast<lua_Integer>(pluginnet::kMaxFeedItems))
+        return luaL_error(state, "feed_items limit must be between 1 and 50");
+    char error[128] = {};
+    int status = LUA_OK;
+    bool parsed = false;
+    {
+        std::vector<pluginnet::FeedItem> items;
+        try {
+            std::string message;
+            parsed = pluginnet::parseFeed(std::string_view(text, size), static_cast<size_t>(max), items, message);
+            if (!parsed) std::snprintf(error, sizeof(error), "feed_items: %s", message.c_str());
+        } catch (const std::bad_alloc&) {
+            std::snprintf(error, sizeof(error), "feed_items: out of memory");
+        }
+        if (parsed) {
+            lua_pushcfunction(state, pushFeedItems);
+            lua_pushlightuserdata(state, &items);
+            status = lua_pcall(state, 1, 1, 0);
+        }
+    }
+    if (!parsed) {
+        lua_pushnil(state);
+        lua_pushstring(state, error);
+        return 2;
+    }
+    if (status != LUA_OK) return lua_error(state);
+    return 1;
+}
+
+// Gated globals and the manifest permission that provides them, for actionable error messages.
+const char* permissionFor(std::string_view name) {
+    struct Entry { const char* prefix; const char* permission; };
+    static constexpr Entry entries[] = {
+        {"world_", "world"}, {"view_", "view"}, {"city_cell", "layout"}, {"sound_", "sound"},
+        {"asset_sound", "sound"}, {"hud_", "hud"}, {"player_impulse", "impulse"}, {"control_", "control"},
+        {"storage_", "storage"}, {"message_emit", "messaging"}, {"send_event", "messaging"},
+        {"on_event", "messaging"}, {"scene_interactive", "scene' and 'input"}, {"input_capture_clicks", "scene' and 'input"},
+        {"asset_", "scene"}, {"scene_", "scene"}, {"mesh_", "scene"}, {"net_", "network"},
+        {"map_", "map"}, {"text_width", "hud"}, {"open_link", "link_hosts"}, {"setting", "settings"}};
+    for (const auto& entry : entries)
+        if (name.rfind(entry.prefix, 0) == 0) return entry.permission;
+    return nullptr;
+}
+
+template <class Granted>
+void annotateMissingPermission(std::string& error, Granted granted) {
+    static constexpr std::string_view marker = "(global '";
+    const auto at = error.find(marker);
+    if (at == std::string::npos || error.find("nil value") == std::string::npos) return;
+    const auto start = at + marker.size();
+    const auto stop = error.find('\'', start);
+    if (stop == std::string::npos) return;
+    const std::string name = error.substr(start, stop - start);
+    const char* permission = permissionFor(name);
+    if (permission && !granted(std::string_view(permission))) {
+        const std::string_view p(permission);
+        if (p == "link_hosts" || p == "settings")
+            error += " - " + name + " requires a non-empty '" + permission + "' list in plugin.json";
+        else
+            error += " - " + name + " requires the '" + permission + "' permission in plugin.json";
+    }
+}
+
+// Lua patterns run inside C without instruction-hook checks, so only plain substring search is exposed.
+int plainFind(lua_State* state) {
+    size_t size = 0;
+    const char* needle = luaL_checklstring(state, 2, &size);
+    if (!lua_toboolean(state, 4)) {
+        for (size_t i = 0; i < size; ++i)
+            if (std::strchr("^$*+?.([%-", needle[i]))
+                return luaL_error(state, "string.find supports plain text only; pass true as the 4th argument "
+                                         "(Lua patterns are unavailable to plugins)");
+    }
+    lua_settop(state, 3);
+    lua_pushboolean(state, 1);
+    lua_pushvalue(state, lua_upvalueindex(1));
+    lua_insert(state, 1);
+    lua_call(state, 4, LUA_MULTRET);
+    return lua_gettop(state);
+}
+
+// Pure helpers whose cost is bounded by the memory limit or the instruction hook. Anything that can load
+// code, reach the OS, change metatables, run unbounded pattern matching or bypass the budget is left out.
+void openSafeLibraries(lua_State* state) {
+    luaL_requiref(state, LUA_GNAME, luaopen_base, 1);
+    lua_pop(state, 1);
+    static constexpr const char* baseRemoved[] = {"collectgarbage", "dofile", "getmetatable", "load", "loadfile",
+                                                  "print", "rawget", "rawset", "require", "setmetatable", "warn",
+                                                  "xpcall", "_G"};
+    for (const char* name : baseRemoved) { lua_pushnil(state); lua_setglobal(state, name); }
+    luaL_requiref(state, LUA_STRLIBNAME, luaopen_string, 1);
+    static constexpr const char* stringRemoved[] = {"dump", "gmatch", "gsub", "match", "pack", "packsize", "unpack"};
+    for (const char* name : stringRemoved) { lua_pushnil(state); lua_setfield(state, -2, name); }
+    lua_getfield(state, -1, "find");
+    lua_pushcclosure(state, plainFind, 1);
+    lua_setfield(state, -2, "find");
+    lua_pop(state, 1);
+    luaL_requiref(state, LUA_TABLIBNAME, luaopen_table, 1);
+    lua_pop(state, 1);
+    luaL_requiref(state, LUA_UTF8LIBNAME, luaopen_utf8, 1);
+    lua_pop(state, 1);
+}
+
 int initializeGameplay(lua_State* state) {
+    openSafeLibraries(state);
     luaL_requiref(state, LUA_MATHLIBNAME, luaopen_math, 1);
     lua_pop(state, 1);
+    lua_pushcfunction(state, jsonDecode); lua_setglobal(state, "json_decode");
+    lua_pushcfunction(state, feedItems); lua_setglobal(state, "feed_items");
     return 0;
 }
 }
@@ -177,6 +540,37 @@ struct PluginScriptRuntime::Impl {
     bool controlGranted = false, controlActive = false;
     bool clickCapture = false, handlingClickPress = false;
     int worldCalls = 0;
+    std::array<const char*, 16> granted{};
+    size_t grantedCount = 0;
+    std::vector<std::string> networkHosts;
+    std::vector<NetworkRequest> networkQueue;
+    std::vector<std::uint64_t> networkPending;
+    std::vector<std::uint64_t> networkCancels;  // submitted ids cancelled by the script; host cancels the transfer
+    std::uint64_t nextNetworkId = 1;
+    double networkTokens = pluginnet::kRequestBurst;
+    std::chrono::steady_clock::time_point networkTime = std::chrono::steady_clock::now();
+    std::array<HudPanel, 4> panels{};
+    std::uint64_t panelsRevision = 0;
+    MapQuery map{};
+    int mapCalls = 0;
+    std::vector<std::pair<std::string, std::string>> settingValues;
+    std::vector<std::string> actions;
+    std::vector<std::string> linkHosts;
+    void* serviceContext = nullptr;
+    float (*measureText)(void*, const char*, size_t, float) noexcept = nullptr;
+    bool (*hudView)(void*, int*, int*) noexcept = nullptr;
+    bool inAction = false;
+    std::string link;  // reserved at start so open_link never allocates
+
+    void grant(const char* permission) {
+        if (grantedCount < granted.size()) granted[grantedCount++] = permission;
+    }
+    bool hasPermission(std::string_view permission) const {
+        if (permission == "scene' and 'input") return hasPermission("scene") && hasPermission("input");
+        for (size_t i = 0; i < grantedCount; ++i)
+            if (permission == granted[i]) return true;
+        return false;
+    }
 
     static Impl& self(lua_State* state) {
         return **static_cast<Impl**>(lua_getextraspace(state));
@@ -924,7 +1318,7 @@ struct PluginScriptRuntime::Impl {
         luaL_checktype(state, 1, LUA_TSTRING);
         size_t length = 0;
         const char* text = luaL_checklstring(state, 1, &length);
-        if (length > 32) return luaL_error(state, "HUD text exceeds 32 characters");
+        if (length > 64) return luaL_error(state, "HUD text exceeds 64 characters");
         for (size_t i = 0; i < length; ++i)
             if (static_cast<unsigned char>(text[i]) < 32 || static_cast<unsigned char>(text[i]) > 126)
                 return luaL_error(state, "HUD text must be printable ASCII");
@@ -937,10 +1331,528 @@ struct PluginScriptRuntime::Impl {
         return 0;
     }
 
-    static int initializeHud(lua_State* state) {
-        lua_pushcfunction(state, setHudText);
-        lua_setglobal(state, "hud_set");
+    // ---- HUD panels ----
+    static constexpr size_t kPanelCommandLimit = 512;
+    static constexpr size_t kPanelTextLimit = 16 * 1024;
+    static constexpr int kPanelPixelLimit = 1024 * 1024;
+    static constexpr long kPanelCanvasSide = 4096;  // allows a full-width ticker strip; total stays 1 MP
+    static constexpr double kPanelCoordinateLimit = 4096;
+
+    static int anchorIndex(lua_State* state, int index) {
+        static constexpr const char* names[] = {"top_left", "top", "top_right", "left", "center", "right",
+                                                "bottom_left", "bottom", "bottom_right"};
+        luaL_checktype(state, index, LUA_TSTRING);
+        const char* name = lua_tostring(state, index);
+        for (int i = 0; i < 9; ++i)
+            if (std::strcmp(name, names[i]) == 0) return i;
+        return luaL_error(state, "HUD anchor must be top_left, top, top_right, left, center, right, "
+                                 "bottom_left, bottom or bottom_right");
+    }
+
+    static void readPlacement(lua_State* state, int first, HudPanel& panel) {
+        panel.anchor = anchorIndex(state, first);
+        const double x = luaL_checknumber(state, first + 1), y = luaL_checknumber(state, first + 2);
+        const double w = luaL_checknumber(state, first + 3), h = luaL_checknumber(state, first + 4);
+        if (!std::isfinite(x) || !std::isfinite(y) || x < -1 || x > 1 || y < -1 || y > 1)
+            luaL_error(state, "HUD panel offset must be between -1 and 1");
+        if (!std::isfinite(w) || !std::isfinite(h) || w < 0.02 || w > 1 || h < 0.02 || h > 1)
+            luaL_error(state, "HUD panel size must be between 0.02 and 1 of the view");
+        panel.x = x; panel.y = y; panel.width = w; panel.height = h;
+    }
+
+    static HudPanel& panelArg(lua_State* state) {
+        auto& self = Impl::self(state);
+        const lua_Integer id = luaL_checkinteger(state, 1);
+        if (id < 1 || id > static_cast<lua_Integer>(self.panels.size()) || !self.panels[static_cast<size_t>(id - 1)].id)
+            luaL_error(state, "unknown HUD panel %d", static_cast<int>(id));
+        return self.panels[static_cast<size_t>(id - 1)];
+    }
+
+    static void touch(lua_State* state, HudPanel& panel) {
+        auto& self = Impl::self(state);
+        if (self.panelsRevision == UINT64_MAX) luaL_error(state, "HUD update limit reached");
+        ++panel.revision;
+        ++self.panelsRevision;
+    }
+
+    static std::array<std::uint8_t, 4> readColor(lua_State* state, int first, bool optional) {
+        std::array<std::uint8_t, 4> color{};
+        if (optional && lua_isnoneornil(state, first)) return color;
+        for (int i = 0; i < 4; ++i) {
+            const double v = i == 3 ? luaL_optnumber(state, first + i, 1.0) : luaL_checknumber(state, first + i);
+            if (!std::isfinite(v) || v < 0 || v > 1) luaL_error(state, "HUD colour components must be between 0 and 1");
+            color[static_cast<size_t>(i)] = static_cast<std::uint8_t>(std::lround(v * 255));
+        }
+        return color;
+    }
+
+    static float coordinate(lua_State* state, int index) {
+        const double v = luaL_checknumber(state, index);
+        if (!std::isfinite(v) || std::abs(v) > kPanelCoordinateLimit)
+            luaL_error(state, "HUD coordinates must be finite and within 4096 pixels");
+        return static_cast<float>(v);
+    }
+
+    static float positive(lua_State* state, int index, double lo, double hi, const char* what) {
+        const double v = luaL_checknumber(state, index);
+        if (!std::isfinite(v) || v < lo || v > hi) luaL_error(state, "%s must be between %f and %f", what, lo, hi);
+        return static_cast<float>(v);
+    }
+
+    static size_t textBytes(const HudPanel& panel) {
+        size_t total = 0;
+        for (const auto& command : panel.commands) total += command.text.size();
+        return total;
+    }
+
+    // Appends without making Lua calls while a C++ temporary is alive (Lua errors longjmp).
+    static int appendCommand(lua_State* state, HudPanel& panel, const HudCommand& pod, const char* text, size_t size) {
+        if (panel.commands.size() >= kPanelCommandLimit)
+            return luaL_error(state, "HUD panel exceeds 512 drawing commands; call hud_clear first");
+        if (size && textBytes(panel) + size > kPanelTextLimit)
+            return luaL_error(state, "HUD panel text exceeds 16 KiB; call hud_clear first");
+        bool failed = false;
+        try {
+            panel.commands.reserve(panel.commands.size() + 1);
+            HudCommand command = pod;
+            if (size) command.text.assign(text, size);
+            panel.commands.push_back(std::move(command));
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        if (failed) return luaL_error(state, "Cannot allocate HUD panel command");
+        touch(state, panel);
         return 0;
+    }
+
+    static int hudPanelCreate(lua_State* state) {
+        auto& self = Impl::self(state);
+        HudPanel placement;
+        readPlacement(state, 1, placement);
+        int cw = static_cast<int>(std::clamp<long>(std::lround(placement.width * 1280), 16, kPanelCanvasSide));
+        int ch = static_cast<int>(std::clamp<long>(std::lround(placement.height * 720), 16, kPanelCanvasSide));
+        if (!lua_isnoneornil(state, 6) || !lua_isnoneornil(state, 7)) {
+            const lua_Integer w = luaL_checkinteger(state, 6), h = luaL_checkinteger(state, 7);
+            if (w < 16 || w > kPanelCanvasSide || h < 16 || h > kPanelCanvasSide)
+                return luaL_error(state, "HUD panel canvas must be 16 to 4096 pixels on each side");
+            cw = static_cast<int>(w);
+            ch = static_cast<int>(h);
+        }
+        int pixels = cw * ch;
+        size_t slot = self.panels.size();
+        for (size_t i = 0; i < self.panels.size(); ++i) {
+            if (self.panels[i].id) pixels += self.panels[i].canvasWidth * self.panels[i].canvasHeight;
+            else if (slot == self.panels.size()) slot = i;
+        }
+        if (slot == self.panels.size()) return luaL_error(state, "HUD panel limit of 4 reached");
+        if (pixels > kPanelPixelLimit) return luaL_error(state, "HUD panels exceed 1 megapixel of canvas in total");
+        auto& panel = self.panels[slot];
+        panel.commands.clear();
+        panel.id = static_cast<int>(slot + 1);
+        panel.anchor = placement.anchor;
+        panel.x = placement.x; panel.y = placement.y; panel.width = placement.width; panel.height = placement.height;
+        panel.canvasWidth = cw;
+        panel.canvasHeight = ch;
+        panel.visible = true;
+        panel.background = {};
+        panel.scrollSpeed = 0;
+        panel.viewWidth = 0;
+        touch(state, panel);
+        lua_pushinteger(state, panel.id);
+        return 1;
+    }
+
+    static int hudPanelMove(lua_State* state) {
+        auto& panel = panelArg(state);
+        HudPanel placement;
+        readPlacement(state, 2, placement);
+        panel.anchor = placement.anchor;
+        panel.x = placement.x; panel.y = placement.y; panel.width = placement.width; panel.height = placement.height;
+        touch(state, panel);
+        return 0;
+    }
+
+    static int hudPanelVisible(lua_State* state) {
+        auto& panel = panelArg(state);
+        luaL_checktype(state, 2, LUA_TBOOLEAN);
+        const bool visible = lua_toboolean(state, 2);
+        if (panel.visible != visible) { panel.visible = visible; touch(state, panel); }
+        return 0;
+    }
+
+    static int hudPanelRemove(lua_State* state) {
+        auto& self = Impl::self(state);
+        auto& panel = panelArg(state);
+        panel.commands.clear();
+        panel.commands.shrink_to_fit();
+        panel = HudPanel{};
+        if (self.panelsRevision == UINT64_MAX) return luaL_error(state, "HUD update limit reached");
+        ++self.panelsRevision;
+        return 0;
+    }
+
+    static int hudClear(lua_State* state) {
+        auto& panel = panelArg(state);
+        const auto color = readColor(state, 2, true);
+        panel.commands.clear();
+        panel.background = color;
+        touch(state, panel);
+        return 0;
+    }
+
+    static int hudShape(lua_State* state, HudCommand::Kind kind) {
+        auto& panel = panelArg(state);
+        HudCommand command;
+        command.kind = kind;
+        int next = 2;
+        if (kind == HudCommand::Kind::Circle) {
+            command.x0 = coordinate(state, 2);
+            command.y0 = coordinate(state, 3);
+            command.size = positive(state, 4, 0.5, 2048, "HUD circle radius");
+            next = 5;
+        } else {
+            command.x0 = coordinate(state, 2); command.y0 = coordinate(state, 3);
+            command.x1 = coordinate(state, 4); command.y1 = coordinate(state, 5);
+            next = 6;
+            if (kind != HudCommand::Kind::Rect) command.size = positive(state, next++, 0.5, 64, "HUD line thickness");
+        }
+        command.color = readColor(state, next, false);
+        if (kind == HudCommand::Kind::Rect && !lua_isnoneornil(state, next + 4))
+            command.size = positive(state, next + 4, 0, 512, "HUD corner radius");
+        return appendCommand(state, panel, command, nullptr, 0);
+    }
+    static int hudRect(lua_State* state) { return hudShape(state, HudCommand::Kind::Rect); }
+    static int hudFrame(lua_State* state) { return hudShape(state, HudCommand::Kind::Frame); }
+    static int hudLine(lua_State* state) { return hudShape(state, HudCommand::Kind::Line); }
+    static int hudCircle(lua_State* state) { return hudShape(state, HudCommand::Kind::Circle); }
+
+    static bool printableUtf8(const char* s, size_t n) {
+        for (size_t i = 0; i < n;) {
+            const auto c = static_cast<unsigned char>(s[i]);
+            if (c < 0x80) {
+                if (c < 0x20 || c == 0x7F) return false;
+                ++i;
+                continue;
+            }
+            const size_t len = (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 0;
+            if (!len || i + len > n || (c == 0xC0 || c == 0xC1 || c > 0xF4)) return false;
+            for (size_t k = 1; k < len; ++k)
+                if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80) return false;
+            i += len;
+        }
+        return true;
+    }
+
+    static int hudDrawText(lua_State* state) {
+        auto& panel = panelArg(state);
+        HudCommand command;
+        command.kind = HudCommand::Kind::Text;
+        command.x0 = coordinate(state, 2);
+        command.y0 = coordinate(state, 3);
+        luaL_checktype(state, 4, LUA_TSTRING);
+        size_t size = 0;
+        const char* text = lua_tolstring(state, 4, &size);
+        if (size > 256) return luaL_error(state, "HUD text command exceeds 256 bytes");
+        if (!printableUtf8(text, size)) return luaL_error(state, "HUD text must be printable UTF-8 without control characters");
+        command.size = positive(state, 5, 8, 128, "HUD text size");
+        command.color = lua_isnoneornil(state, 6) ? std::array<std::uint8_t, 4>{255, 255, 255, 255} : readColor(state, 6, false);
+        if (!lua_isnoneornil(state, 10)) {
+            luaL_checktype(state, 10, LUA_TSTRING);
+            const char* align = lua_tostring(state, 10);
+            if (std::strcmp(align, "left") == 0) command.align = 0;
+            else if (std::strcmp(align, "center") == 0) command.align = 1;
+            else if (std::strcmp(align, "right") == 0) command.align = 2;
+            else return luaL_error(state, "HUD text align must be left, center or right");
+        }
+        if (!size) return 0;
+        return appendCommand(state, panel, command, text, size);
+    }
+
+    static int initializeHud(lua_State* state) {
+        lua_pushcfunction(state, setHudText); lua_setglobal(state, "hud_set");
+        lua_pushcfunction(state, hudPanelCreate); lua_setglobal(state, "hud_panel");
+        lua_pushcfunction(state, hudPanelMove); lua_setglobal(state, "hud_panel_move");
+        lua_pushcfunction(state, hudPanelVisible); lua_setglobal(state, "hud_panel_visible");
+        lua_pushcfunction(state, hudPanelRemove); lua_setglobal(state, "hud_panel_remove");
+        lua_pushcfunction(state, hudClear); lua_setglobal(state, "hud_clear");
+        lua_pushcfunction(state, hudRect); lua_setglobal(state, "hud_rect");
+        lua_pushcfunction(state, hudFrame); lua_setglobal(state, "hud_frame");
+        lua_pushcfunction(state, hudLine); lua_setglobal(state, "hud_line");
+        lua_pushcfunction(state, hudCircle); lua_setglobal(state, "hud_circle");
+        lua_pushcfunction(state, hudDrawText); lua_setglobal(state, "hud_text");
+        return 0;
+    }
+
+    // ---- network ----
+    static int netGet(lua_State* state) {
+        auto& self = Impl::self(state);
+        luaL_checktype(state, 1, LUA_TSTRING);
+        size_t size = 0;
+        const char* url = lua_tolstring(state, 1, &size);
+        char error[256] = {};
+        int outcome = 0;  // 0 queued, 1 invalid request, 2 limited, 3 out of memory
+        std::uint64_t id = 0;
+        try {
+            pluginnet::Url parsed;
+            std::string message;
+            if (!pluginnet::parseUrl(std::string_view(url, size), self.networkHosts, parsed, message)) {
+                outcome = 1;
+                std::snprintf(error, sizeof(error), "%s", message.c_str());
+            } else {
+                const auto now = std::chrono::steady_clock::now();
+                self.networkTokens = std::min(pluginnet::kRequestBurst, self.networkTokens +
+                    std::chrono::duration<double>(now - self.networkTime).count() / pluginnet::kRequestRefillSeconds);
+                self.networkTime = now;
+                if (self.networkPending.size() >= pluginnet::kMaxPendingPerPlugin) {
+                    outcome = 2;
+                    std::snprintf(error, sizeof(error), "network: 4 requests already pending");
+                } else if (self.networkTokens < 1) {
+                    outcome = 2;
+                    std::snprintf(error, sizeof(error), "network: rate limited (4 requests, then 1 per 5 seconds)");
+                } else {
+                    self.networkPending.reserve(self.networkPending.size() + 1);
+                    // net_cancel must not allocate: every pending id may later move to networkCancels.
+                    self.networkCancels.reserve(self.networkCancels.size() + self.networkPending.size() + 1);
+                    self.networkQueue.reserve(self.networkQueue.size() + 1);
+                    NetworkRequest request{self.nextNetworkId, "https://" + parsed.host + parsed.path};
+                    id = self.nextNetworkId++;
+                    self.networkQueue.push_back(std::move(request));
+                    self.networkPending.push_back(id);
+                    self.networkTokens -= 1;
+                }
+            }
+        } catch (const std::bad_alloc&) {
+            outcome = 3;
+        }
+        if (outcome == 1) return luaL_error(state, "%s", error);
+        if (outcome == 3) return luaL_error(state, "Cannot allocate network request");
+        if (outcome == 2) {
+            lua_pushnil(state);
+            lua_pushstring(state, error);
+            return 2;
+        }
+        lua_pushinteger(state, static_cast<lua_Integer>(id));
+        return 1;
+    }
+
+    static int netCancel(lua_State* state) {
+        auto& self = Impl::self(state);
+        const lua_Integer id = luaL_checkinteger(state, 1);
+        const auto it = std::find(self.networkPending.begin(), self.networkPending.end(), static_cast<std::uint64_t>(id));
+        const bool found = it != self.networkPending.end();
+        if (found) {
+            const auto queued = std::find_if(self.networkQueue.begin(), self.networkQueue.end(),
+                [&](const NetworkRequest& r) { return r.id == static_cast<std::uint64_t>(id); });
+            // Bounded: each pending id is cancelled at most once and pending holds at most kMaxPendingPerPlugin.
+            if (queued == self.networkQueue.end()) self.networkCancels.push_back(static_cast<std::uint64_t>(id));
+            else self.networkQueue.erase(queued);
+            self.networkPending.erase(it);
+        }
+        lua_pushboolean(state, found);
+        return 1;
+    }
+
+    static int netPending(lua_State* state) {
+        lua_pushinteger(state, static_cast<lua_Integer>(Impl::self(state).networkPending.size()));
+        return 1;
+    }
+
+    static int initializeNetwork(lua_State* state) {
+        lua_pushcfunction(state, netGet); lua_setglobal(state, "net_get");
+        lua_pushcfunction(state, netCancel); lua_setglobal(state, "net_cancel");
+        lua_pushcfunction(state, netPending); lua_setglobal(state, "net_pending");
+        return 0;
+    }
+
+    // ---- HUD measurement and marquee ----
+    static int textWidth(lua_State* state) {
+        auto& self = Impl::self(state);
+        luaL_checktype(state, 1, LUA_TSTRING);
+        size_t size = 0;
+        const char* text = lua_tolstring(state, 1, &size);
+        if (size > 256) return luaL_error(state, "text_width text exceeds 256 bytes");
+        if (!printableUtf8(text, size)) return luaL_error(state, "HUD text must be printable UTF-8 without control characters");
+        const float px = positive(state, 2, 8, 128, "HUD text size");
+        const float width = size && self.measureText ? self.measureText(self.serviceContext, text, size, px) : 0.0f;
+        if (!std::isfinite(width) || width < 0) return luaL_error(state, "text measurement unavailable");
+        lua_pushnumber(state, width);
+        return 1;
+    }
+
+    static int hudViewSize(lua_State* state) {
+        auto& self = Impl::self(state);
+        int width = 0, height = 0;
+        if (!self.hudView || !self.hudView(self.serviceContext, &width, &height) || width <= 0 || height <= 0) {
+            lua_pushnil(state);
+            lua_pushstring(state, "HUD view size unavailable");
+            return 2;
+        }
+        lua_pushinteger(state, width);
+        lua_pushinteger(state, height);
+        return 2;
+    }
+
+    static int hudScroll(lua_State* state) {
+        auto& panel = panelArg(state);
+        const float speed = positive(state, 2, 0, 2000, "HUD scroll speed");
+        int view = 0;
+        if (speed > 0) {
+            const lua_Integer w = luaL_checkinteger(state, 3);
+            if (w < 16 || w > panel.canvasWidth)
+                return luaL_error(state, "HUD scroll view width must be 16 to the panel canvas width");
+            view = static_cast<int>(w);
+        }
+        if (panel.scrollSpeed != speed || panel.viewWidth != view) {
+            panel.scrollSpeed = speed;
+            panel.viewWidth = view;
+            touch(state, panel);
+        }
+        return 0;
+    }
+
+    static int initializeHudServices(lua_State* state) {
+        lua_pushcfunction(state, textWidth); lua_setglobal(state, "text_width");
+        lua_pushcfunction(state, hudViewSize); lua_setglobal(state, "hud_view");
+        lua_pushcfunction(state, hudScroll); lua_setglobal(state, "hud_scroll");
+        return 0;
+    }
+
+    // ---- host-owned settings ----
+    static int settingValue(lua_State* state) {
+        auto& self = Impl::self(state);
+        luaL_checktype(state, 1, LUA_TSTRING);
+        size_t size = 0;
+        const char* key = lua_tolstring(state, 1, &size);
+        for (const auto& [name, value] : self.settingValues) {
+            if (name.size() == size && std::memcmp(name.data(), key, size) == 0) {
+                lua_pushlstring(state, value.data(), value.size());
+                return 1;
+            }
+        }
+        return luaL_error(state, "setting '%s' is not declared in plugin.json settings", key);
+    }
+
+    static int initializeSettings(lua_State* state) {
+        lua_pushcfunction(state, settingValue); lua_setglobal(state, "setting");
+        return 0;
+    }
+
+    // ---- built-in browser links ----
+    // Kept out of line so the Lua error (longjmp) never unwinds a frame with C++ EH state; the inlined form
+    // crashed under MSVC Release when the error was caught by a Lua pcall.
+#if defined(_MSC_VER)
+    __declspec(noinline)
+#else
+    __attribute__((noinline))
+#endif
+    static int prepareLink(Impl& self, const char* url, size_t size, char* error, size_t errorSize) noexcept {
+        if (!self.inAction) {
+            std::snprintf(error, errorSize, "open_link is only allowed inside on_action (a fresh hotkey press)");
+            return 1;
+        }
+        if (!self.link.empty()) {
+            std::snprintf(error, errorSize, "open_link may be called once per action");
+            return 1;
+        }
+        try {
+            pluginnet::Url parsed;
+            std::string message;
+            if (size > pluginnet::kMaxUrlLength ||
+                !pluginnet::parseUrl(std::string_view(url, size), self.linkHosts, parsed, message)) {
+                std::snprintf(error, errorSize, "open_link: %s", message.empty() ? "URL too long" : message.c_str());
+                return 1;
+            }
+            self.link = "https://" + parsed.host + parsed.path;
+            return 0;
+        } catch (...) {
+            std::snprintf(error, errorSize, "Cannot allocate link");
+            return 1;
+        }
+    }
+
+    static int openLink(lua_State* state) {
+        auto& self = Impl::self(state);
+        luaL_checktype(state, 1, LUA_TSTRING);
+        size_t size = 0;
+        const char* url = lua_tolstring(state, 1, &size);
+        char error[256] = {};
+        if (prepareLink(self, url, size, error, sizeof(error)) != 0) return luaL_error(state, "%s", error);
+        return 0;
+    }
+
+    static int initializeLinks(lua_State* state) {
+        lua_pushcfunction(state, openLink); lua_setglobal(state, "open_link");
+        return 0;
+    }
+
+    // ---- read-only city map ----
+    static void mapBudget(lua_State* state) {
+        auto& self = Impl::self(state);
+        if (++self.mapCalls > 16) luaL_error(state, "map query limit exceeded (16 per callback)");
+    }
+
+    static int mapView(lua_State* state) {
+        auto& self = Impl::self(state);
+        mapBudget(state);
+        MapView view;
+        char reason[48] = {};
+        if (!self.map.view(self.map.context, &view, reason, sizeof(reason))) {
+            reason[sizeof(reason) - 1] = '\0';
+            lua_pushnil(state);
+            lua_pushstring(state, reason[0] ? reason : "map unavailable");
+            return 2;
+        }
+        lua_createtable(state, 0, 7);
+        const std::pair<const char*, double> fields[] = {{"x", view.x}, {"z", view.z}, {"heading", view.heading},
+            {"min_x", view.minX}, {"min_z", view.minZ}, {"max_x", view.maxX}, {"max_z", view.maxZ}};
+        for (const auto& [name, value] : fields) { lua_pushnumber(state, value); lua_setfield(state, -2, name); }
+        return 1;
+    }
+
+    static int mapPlaces(lua_State* state, bool regions) {
+        auto& self = Impl::self(state);
+        mapBudget(state);
+        std::array<MapPlace, 128> places{};
+        const size_t limit = regions ? 64 : places.size();
+        const size_t count = std::min(self.map.places(self.map.context, regions, places.data(), limit), limit);
+        lua_createtable(state, static_cast<int>(count), 0);
+        for (size_t i = 0; i < count; ++i) {
+            auto& place = places[i];
+            place.id.back() = place.name.back() = place.kind.back() = '\0';
+            lua_createtable(state, 0, regions ? 7 : 5);
+            lua_pushstring(state, place.id.data()); lua_setfield(state, -2, "id");
+            lua_pushstring(state, place.name.data()); lua_setfield(state, -2, "name");
+            lua_pushstring(state, place.kind.data()); lua_setfield(state, -2, "kind");
+            lua_pushnumber(state, place.x); lua_setfield(state, -2, "x");
+            lua_pushnumber(state, place.z); lua_setfield(state, -2, "z");
+            if (regions) {
+                lua_pushnumber(state, place.width); lua_setfield(state, -2, "width");
+                lua_pushnumber(state, place.depth); lua_setfield(state, -2, "depth");
+            }
+            lua_rawseti(state, -2, static_cast<lua_Integer>(i + 1));
+        }
+        return 1;
+    }
+    static int mapRegions(lua_State* state) { return mapPlaces(state, true); }
+    static int mapPois(lua_State* state) { return mapPlaces(state, false); }
+
+    static int initializeMap(lua_State* state) {
+        lua_pushcfunction(state, mapView); lua_setglobal(state, "map_view");
+        lua_pushcfunction(state, mapRegions); lua_setglobal(state, "map_regions");
+        lua_pushcfunction(state, mapPois); lua_setglobal(state, "map_pois");
+        return 0;
+    }
+
+    static int capabilities(lua_State* state) {
+        const auto& self = Impl::self(state);
+        lua_createtable(state, 0, static_cast<int>(self.grantedCount) + 1);
+        for (size_t i = 0; i < self.grantedCount; ++i) {
+            lua_pushboolean(state, 1);
+            lua_setfield(state, -2, self.granted[i]);
+        }
+        lua_pushinteger(state, 3);
+        lua_setfield(state, -2, "api");
+        return 1;
     }
 
     static int playerImpulse(lua_State* state) {
@@ -1169,12 +2081,40 @@ struct PluginScriptRuntime::Impl {
         frame = 0;
         delta = 0;
         framePrepared = false;
+        granted = {};
+        grantedCount = 0;
+        networkHosts.clear();
+        networkQueue.clear();
+        networkPending.clear();
+        networkCancels.clear();
+        nextNetworkId = 1;
+        networkTokens = pluginnet::kRequestBurst;
+        networkTime = std::chrono::steady_clock::now();
+        panels = {};
+        ++panelsRevision;
+        map = {};
+        mapCalls = 0;
+        settingValues.clear();
+        actions.clear();
+        linkHosts.clear();
+        serviceContext = nullptr;
+        measureText = nullptr;
+        hudView = nullptr;
+        inAction = false;
+        link.clear();
+    }
+
+    void annotate(std::string& error) const {
+        try {
+            annotateMissingPermission(error, [this](std::string_view p) { return hasPermission(p); });
+        } catch (const std::bad_alloc&) {}
     }
     ~Impl() { close(); }
 
     bool dispatch(const LifecycleCall& call, std::string& error) {
         worldCalls = 0;
         storageCalls = 0;
+        mapCalls = 0;
         lua_sethook(state, instructionLimit, LUA_MASKCOUNT, kInstructionLimit);
         lua_pushcfunction(state, dispatchLifecycle);
         lua_pushlightuserdata(state, const_cast<LifecycleCall*>(&call));
@@ -1182,6 +2122,7 @@ struct PluginScriptRuntime::Impl {
         if (status != LUA_OK) {
             const char* message = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : nullptr;
             error = message ? message : "Script callback failed";
+            annotate(error);
             close();
             return false;
         }
@@ -1192,12 +2133,14 @@ struct PluginScriptRuntime::Impl {
     bool dispatchEvent(const MessageEvent& event, std::string& error) {
         worldCalls = 0;
         storageCalls = 0;
+        mapCalls = 0;
         lua_sethook(state, instructionLimit, LUA_MASKCOUNT, kInstructionLimit);
         lua_pushcfunction(state, dispatchRegisteredEvent);
         lua_pushlightuserdata(state, const_cast<MessageEvent*>(&event));
         if (lua_pcall(state, 1, 0, 0) != LUA_OK) {
             const char* message = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : nullptr;
             error = message ? message : "Event callback failed";
+            annotate(error);
             close();
             return false;
         }
@@ -1213,8 +2156,25 @@ bool PluginScriptRuntime::start(const std::string& source, std::string& error, b
                                 const WorldQueries* world, const AssetCounts* assets, const ViewQuery* view,
                                 bool soundGranted, bool hudGranted, const LayoutQuery* layout, bool impulseGranted,
                                 bool controlGranted, bool inputGranted, GameplayStorage* storage, bool messagingGranted,
-                                std::uint64_t initialFrame) {
+                                std::uint64_t initialFrame, const std::vector<std::string>* networkHosts,
+                                const HostServices* services) {
     if (impl_->state) { error = "Script runtime is already running"; return false; }
+    if (services) {
+        if (services->map && (!services->map->view || !services->map->places)) { error = "Invalid map service"; return false; }
+        if ((services->measureText == nullptr) != (services->hudView == nullptr)) { error = "Invalid HUD service"; return false; }
+        if (services->linkHosts && !services->linkHosts->empty()) {
+            std::string hostError;
+            if (!pluginnet::validHostList(*services->linkHosts, hostError)) { error = "Invalid link host list: " + hostError; return false; }
+        }
+        if ((services->settings && services->settings->size() > 8) || (services->actions && services->actions->size() > 8)) {
+            error = "Invalid plugin settings or actions";
+            return false;
+        }
+    }
+    if (networkHosts) {
+        std::string hostError;
+        if (!pluginnet::validHostList(*networkHosts, hostError)) { error = "Invalid network host list: " + hostError; return false; }
+    }
     if (source.empty() || source.size() > kPluginTextLimit) { error = "Script is empty or exceeds 10 MiB"; return false; }
     if (world && (!world->floor || !world->resolve || !world->available)) { error = "Invalid world query service"; return false; }
     if (view && !view->pose) { error = "Invalid view service"; return false; }
@@ -1253,6 +2213,51 @@ bool PluginScriptRuntime::start(const std::string& source, std::string& error, b
     impl_->randomEngine.seed(static_cast<std::uint64_t>(impl_->startedAt.time_since_epoch().count()));
     impl_->frame = initialFrame;
     impl_->controlGranted = controlGranted;
+    if (sceneGranted) impl_->grant("scene");
+    if (world) impl_->grant("world");
+    if (inputGranted) impl_->grant("input");
+    if (view) impl_->grant("view");
+    if (soundGranted) impl_->grant("sound");
+    if (hudGranted) impl_->grant("hud");
+    if (layout) impl_->grant("layout");
+    if (impulseGranted) impl_->grant("impulse");
+    if (controlGranted) impl_->grant("control");
+    if (storage) impl_->grant("storage");
+    if (messagingGranted) impl_->grant("messaging");
+    if (networkHosts) {
+        impl_->grant("network");
+        try {
+            impl_->networkHosts = *networkHosts;
+        } catch (const std::bad_alloc&) {
+            error = "Cannot allocate network host list";
+            impl_->close();
+            return false;
+        }
+    }
+    const bool mapGranted = services && services->map;
+    const bool settingsGranted = services && services->settings && !services->settings->empty();
+    const bool linksGranted = services && services->linkHosts && !services->linkHosts->empty();
+    if (mapGranted) { impl_->grant("map"); impl_->map = *services->map; }
+    if (settingsGranted) impl_->grant("settings");
+    if (linksGranted) impl_->grant("link_hosts");
+    if (services && services->actions && !services->actions->empty()) impl_->grant("hotkeys");
+    if (services && hudGranted) {
+        impl_->serviceContext = services->context;
+        impl_->measureText = services->measureText;
+        impl_->hudView = services->hudView;
+    }
+    try {
+        if (settingsGranted) impl_->settingValues = *services->settings;
+        if (services && services->actions) impl_->actions = *services->actions;
+        if (linksGranted) {
+            impl_->linkHosts = *services->linkHosts;
+            impl_->link.reserve(pluginnet::kMaxUrlLength + 16);
+        }
+    } catch (const std::bad_alloc&) {
+        error = "Cannot allocate plugin host services";
+        impl_->close();
+        return false;
+    }
     if (assets) {
         try {
             impl_->assets = *assets;
@@ -1324,11 +2329,36 @@ bool PluginScriptRuntime::start(const std::string& source, std::string& error, b
         lua_pushcfunction(state, Impl::initializeMessaging);
         status = lua_pcall(state, 0, 0, 0);
     }
-    if (status == LUA_OK) status = loadSource(state, impl_->memory, source);
+    if (status == LUA_OK && networkHosts) {
+        lua_pushcfunction(state, Impl::initializeNetwork);
+        status = lua_pcall(state, 0, 0, 0);
+    }
+    if (status == LUA_OK && hudGranted && impl_->measureText) {
+        lua_pushcfunction(state, Impl::initializeHudServices);
+        status = lua_pcall(state, 0, 0, 0);
+    }
+    if (status == LUA_OK && settingsGranted) {
+        lua_pushcfunction(state, Impl::initializeSettings);
+        status = lua_pcall(state, 0, 0, 0);
+    }
+    if (status == LUA_OK && linksGranted) {
+        lua_pushcfunction(state, Impl::initializeLinks);
+        status = lua_pcall(state, 0, 0, 0);
+    }
+    if (status == LUA_OK && mapGranted) {
+        lua_pushcfunction(state, Impl::initializeMap);
+        status = lua_pcall(state, 0, 0, 0);
+    }
+    if (status == LUA_OK) {
+        lua_pushcfunction(state, Impl::capabilities);
+        lua_setglobal(state, "capabilities");
+    }
+    if (status == LUA_OK) status = loadSource(state, impl_->memory, source, kGameplayMemoryLimit);
     if (status == LUA_OK) status = lua_pcall(state, 0, 1, 0);
     if (status != LUA_OK) {
         const char* message = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : nullptr;
         error = message ? message : "Script failed";
+        impl_->annotate(error);
         impl_->close();
         return false;
     }
@@ -1396,6 +2426,51 @@ bool PluginScriptRuntime::message(std::string_view sender, const MessageEvent& e
     }
     if (!impl_->dispatch({"on_message", sender.data(), 0, 3, &event, sender.size()}, error)) return false;
     return impl_->dispatchEvent(event, error);
+}
+
+bool PluginScriptRuntime::setting(const std::string& key, const std::string& value, std::string& error) {
+    if (!impl_->state) { error = "Script runtime is not running"; return false; }
+    auto found = std::find_if(impl_->settingValues.begin(), impl_->settingValues.end(),
+                              [&](const auto& entry) { return entry.first == key; });
+    if (found == impl_->settingValues.end() || value.empty() || value.size() > 24) {
+        error = "Invalid plugin setting";
+        return false;
+    }
+    try {
+        found->second = value;
+    } catch (const std::bad_alloc&) {
+        error = "Cannot allocate plugin setting";
+        return false;
+    }
+    LifecycleCall call{"on_setting", nullptr, 0, 5};
+    call.first = &found->first;
+    call.second = &found->second;
+    return impl_->dispatch(call, error);
+}
+
+bool PluginScriptRuntime::action(const std::string& name, std::string& error) {
+    if (!impl_->state) { error = "Script runtime is not running"; return false; }
+    if (std::find(impl_->actions.begin(), impl_->actions.end(), name) == impl_->actions.end()) {
+        error = "Undeclared plugin action";
+        return false;
+    }
+    impl_->link.clear();
+    impl_->inAction = true;
+    LifecycleCall call{"on_action", nullptr, 0, 6};
+    call.first = &name;
+    const bool ok = impl_->dispatch(call, error);
+    impl_->inAction = false;
+    if (!ok) impl_->link.clear();
+    return ok;
+}
+
+std::string PluginScriptRuntime::takeLink() {
+    std::string out;
+    out.swap(impl_->link);
+    if (impl_->state && !impl_->linkHosts.empty()) {
+        try { impl_->link.reserve(pluginnet::kMaxUrlLength + 16); } catch (const std::bad_alloc&) {}
+    }
+    return out;
 }
 
 bool PluginScriptRuntime::interactiveHit(const double* origin, const double* direction, double& distance) const {
@@ -1470,6 +2545,43 @@ PluginScriptRuntime::EngineSound PluginScriptRuntime::takeEngineSound() {
 
 PluginScriptRuntime::HudText PluginScriptRuntime::hudText() const { return impl_->hud; }
 
+std::uint64_t PluginScriptRuntime::hudPanelsRevision() const { return impl_->panelsRevision; }
+
+std::vector<PluginScriptRuntime::HudPanel> PluginScriptRuntime::hudPanels() const {
+    std::vector<HudPanel> result;
+    if (!impl_->state) return result;
+    for (const auto& panel : impl_->panels) if (panel.id) result.push_back(panel);
+    return result;
+}
+
+std::vector<PluginScriptRuntime::NetworkRequest> PluginScriptRuntime::takeNetworkRequests() {
+    std::vector<NetworkRequest> result;
+    result.swap(impl_->networkQueue);
+    return result;
+}
+
+std::vector<std::uint64_t> PluginScriptRuntime::takeNetworkCancels() {
+    std::vector<std::uint64_t> result(impl_->networkCancels);  // copy: keep the reserved capacity for net_cancel
+    impl_->networkCancels.clear();
+    return result;
+}
+
+bool PluginScriptRuntime::networkResult(std::uint64_t id, bool ok, int status, const std::string& text,
+                                        std::string& error) {
+    error.clear();
+    if (!impl_->state) return true;
+    auto& pending = impl_->networkPending;
+    const auto it = std::find(pending.begin(), pending.end(), id);
+    if (it == pending.end()) return true;
+    pending.erase(it);
+    LifecycleCall call{"on_network", nullptr, 0, 4};
+    call.networkId = id;
+    call.networkOk = ok;
+    call.networkStatus = status;
+    call.networkText = &text;
+    return impl_->dispatch(call, error);
+}
+
 PluginScriptRuntime::Impulse PluginScriptRuntime::takeImpulse() {
     const auto result = impl_->impulse;
     impl_->impulse = {};
@@ -1505,7 +2617,7 @@ bool runPluginScript(const std::string& source, std::string& result, std::string
     lua_sethook(state, instructionLimit, LUA_MASKCOUNT, kInstructionLimit);
     lua_pushcfunction(state, initialize);
     int status = lua_pcall(state, 0, 0, 0);
-    if (status == LUA_OK) status = loadSource(state, memory, source);
+    if (status == LUA_OK) status = loadSource(state, memory, source, kMessageMemoryLimit);
     if (status == LUA_OK) status = lua_pcall(state, 0, 1, 0);
     if (status != LUA_OK) {
         const char* message = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : nullptr;

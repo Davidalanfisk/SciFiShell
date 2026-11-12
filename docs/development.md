@@ -53,7 +53,35 @@ cmake --build build --config Release
 build\Release\SciFiShell.exe
 ```
 
-For a release, ensure CEF 156 is present at `third_party\cef` or pass `-DSCIFI_CEF_ROOT=<extracted-CEF-directory>` when configuring; otherwise the browser is omitted. Use a Windows x64 generator and the `Release` configuration. Run `ctest --test-dir build -C Release --output-on-failure` before packaging; the explicit `GameplayArchiveLargeTest --expanded-limit` target also checks the 1 GiB archive and 100 MiB asset boundaries. The [v0.9.23 plugin changelog](plugins.md#v0923-changelog) covers Downtown and the optional exterior model schema; the [v0.9.22 changelog](plugins.md#v0922-changelog) describes authoring limits and their separate runtime budgets. `build-installer.ps1` writes the supplied version into the staged `version.txt` and excludes test binaries/fixtures from the installer.
+For a release, ensure CEF 156 is present at `third_party\cef` or pass `-DSCIFI_CEF_ROOT=<extracted-CEF-directory>` when configuring; otherwise the browser is omitted. Use a Windows x64 generator and the `Release` configuration. Run `ctest --test-dir build -C Release --output-on-failure` before packaging; the explicit `GameplayArchiveLargeTest --expanded-limit` target also checks the 1 GiB archive and 100 MiB asset boundaries. The [v0.9.28 changelog](plugins.md#v0928-changelog) covers network/HUD APIs, rooms and editing; the earlier changelogs retain historical contracts. `installer\build-installer.ps1 -Version 0.9.28` writes the supplied version into the staged `version.txt`, requires CEF and excludes test binaries/fixtures from the installer. Pass `-BuildDirectory C:\builds\scifishell` to package an out-of-tree build's `Release` directory.
+
+### Plugin services, HUD and file previews (v0.9.28)
+
+See the [plugin reference](plugins.md#v0928-changelog) for exact Lua signatures, manifest fields,
+consent and per-request/resource bounds. Capability discovery is API 3; manifest `api_version` remains `"1"`.
+The optional Network HUD Demo 1.1.2 stays a separately installed/approved package, not an installer payload.
+The host provides reusable services; weather/news content and the original observatory stay editable Lua/GLB.
+
+`PluginNetwork` uses Windows WinHTTP with TLS hostname/certificate checks through a single-use CONNECT tunnel
+that resolves, validates and pins public destination addresses before connecting. DNS uses cancellable
+`GetAddrInfoExW`. Cancellation flows from Lua through the session to transport; stop/revoke discards completions.
+Other platforms explicitly report unavailable. `PluginNetworkTest`, `PluginScriptTest` and `PluginPackageTest`
+cover address ranges, request cancellation/lifecycle, Lua callback/memory bounds and permission/digest handling.
+
+`GameplayHudPanel` records logical drawing commands; the host selects bounded display-pixel rasters for desktop
+and VR. Placement/removal is immediate while pixel redraws coalesce. Plugin panels render after app windows but
+before the built-in pointer/readouts. Permission-confirmation notices suppress plugin HUDs. Panels never take input.
+`GameplayHudPanelTest` and `GameplayConsentLayoutTest` cover raster sizing, clipping and notice layout.
+
+`PluginWorkspace` performs contained extract/validate/repack with digest-bound apply confirmation and rollback;
+applying changed code revokes old consent. `PluginPackageTest` covers the workspace and settings persistence.
+`FilePreviewTest` covers Lua classification/highlighting/edit-save, read-only large files and the restricted
+geometry-thumbnail pipeline, cancellation/reset, invalid/unsupported GLBs, overdraw and cache identity.
+
+Screenshots in this release were captured from optimized normal CEF builds on a private desktop with isolated profiles.
+They show the HUD, unobstructed custom room/floor compass, settings and real model thumbnails. The N-to-browser
+navigation was observed in a separate synthetic-focus build because the inactive desktop has no real SDL keyboard
+focus; this does not certify physical keyboard/controller behavior. No physical VR/headset validation was performed.
 
 Downtown regression coverage includes `DowntownTest` (allocation, persistence/failures, dynamic region bounds
 and bundled-ID placement migration) and `PluginPackageTest` (manifest/asset and permission lifecycle validation). On Windows,
@@ -253,17 +281,35 @@ folder is missing the shell builds without a browser. The project now builds as 
 - Media viewer: click an image/video/audio card (or Enter) and it flies forward, expands with details, and starts playing.
   Click the bar controls (play, seek, fullscreen, close), or use Space pause, Left/Right seek 5 s, Up/Down volume,
   F fullscreen, Esc/Backspace/pad B to exit fullscreen then close.
-- Text editor: click a text/code card to open it in the viewer with syntax highlighting (C/C++, JS/TS, Python, JSON,
+- Text editor: click a text/code card to open it in the viewer with syntax highlighting (C/C++, JS/TS, Python, Lua, JSON,
   HTML/XML, CSS, SQL, Markdown, shell, and more). Mouse wheel / Up / Down / PgUp / PgDn / stick scroll. Press **E**,
   click the pencil or click the text to edit (arrows, Home/End, Ctrl+Home/End, Tab, Ctrl+V paste, click to place the
   caret); **Ctrl+S** or SAVE writes the file; **Esc** leaves edit mode. Closing with unsaved changes asks you to close
-  again to discard. Files over 2 MB or binary files open read only.
+  again to discard. Files over 10 MiB or binary files open read only. `.lua` is recognized case-insensitively
+  by File Room previews and the 2D file browser; opening/saving Lua edits source, never executes it.
+  Lua highlighting covers keywords, quoted strings, `--` comments and `--[[ ... ]]` comments (not every long-bracket variant).
 - The viewer panel is drawn over the room, so it no longer clips into nearby cards.
 - Text uses Space Grotesk / Inter / JetBrains Mono from `assets/fonts` (copied next to the exe).
 - File Room cards show thumbnails: images (JPG/PNG/etc. via stb_image), video first frames (Windows Media
-  Foundation; MKV/WebM may lack codecs), audio cards, and text previews. They load on a background thread.
+  Foundation; MKV/WebM may lack codecs), audio cards, text previews (first 4 KiB), and static GLB model previews.
+  They load on a background thread.
+- GLB thumbnails use actual triangle geometry, depth testing, simple lighting and embedded base-colour texture,
+  at 384x248 pixels, on the single thumbnail worker (no model GPU allocations). This is not an interactive viewer.
+  Only nearby file cards request a model; at most 24 model-card textures are resident per room (about 9 MiB).
+  Other GLBs retain their filename card until a new room is entered. Preview files are capped at 8 MiB;
+  decoding reuses the [restricted gameplay GLB subset](plugins.md#experimental-gameplay-scripts), not the unrestricted
+  bundled-model loader. The existing parser has an 8 MiB allocation budget, texture decoder 16 MiB, geometry
+  65,536 vertices / 196,608 indices, one material and one embedded PNG (up to 1024x1024). External URIs,
+  skins, animation and extensions remain unsupported. Some valid GLBs therefore show `MODEL PREVIEW UNAVAILABLE`
+  with a reason, as do invalid or over-budget files. Original files are never changed.
+  Raster work is capped at eight million bounding-box pixel samples; a 500 ms elapsed deadline is checked before/after
+  decoding and throughout rasterization, not a hard interruption of a decoder call or filesystem I/O.
+  Reset invalidates in-flight work, with cancellation checked between stages and during rasterization.
+  Work queues are capped at 64 requests and eight completed bitmaps; GLB work uses one bounded decoder at a time.
+  Opening a GLB from the 2D file browser retains its existing default-program behavior.
 - Thumbnails are cached as PNGs in `%LOCALAPPDATA%\SciFiShell\thumbs` (`~/.cache/scifishell/thumbs` elsewhere), keyed
-  by path, size and modified time; delete the folder to rebuild them.
+  by path, size, modified time and preview kind; delete the folder to rebuild them. Edits are picked up when
+  the room is refreshed/re-entered, not by continuously watching every model. Failed GLB previews are not cached.
 - Debug env vars: `SCIFI_START_PATH=<dir>`, `SCIFI_CAM_YAW=<degrees>`, `SCIFI_START_MENU=1` (old start menu).
 - The project was written without access to a build environment; Diligent's API evolves, so if a call no longer
   matches, pin `SCIFI_DILIGENT_TAG` to a release from the same period as the code.

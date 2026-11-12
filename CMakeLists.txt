@@ -15,7 +15,9 @@ FetchContent_Declare(scifi_lua
     GIT_REPOSITORY https://github.com/lua/lua.git
     GIT_TAG 6e22fedb74cf0c9b6656e9fce8b7331db847c605)
 FetchContent_MakeAvailable(scifi_lua)
-set(SCIFI_LUA_CORE lapi lauxlib lcode lctype ldebug ldo ldump lfunc lgc llex lmathlib lmem lobject lopcodes lparser lstate lstring ltable ltm lundump lvm lzio)
+set(SCIFI_LUA_CORE lapi lauxlib lcode lctype ldebug ldo ldump lfunc lgc llex lmathlib lmem lobject lopcodes lparser lstate lstring ltable ltm lundump lvm lzio
+    # Pure libraries; PluginScript.cpp removes loaders, metatable access and Lua patterns after opening them.
+    lbaselib lstrlib ltablib lutf8lib)
 set(SCIFI_LUA_SOURCES)
 foreach(source IN LISTS SCIFI_LUA_CORE)
     list(APPEND SCIFI_LUA_SOURCES "${scifi_lua_SOURCE_DIR}/${source}.c")
@@ -110,7 +112,11 @@ set(SOURCES
     src/Settings.cpp
     src/PluginManager.cpp
     src/PluginPackage.cpp
+    src/PluginWorkspace.cpp
     src/PluginScript.cpp
+    src/PluginNetPolicy.cpp
+    src/PluginNetwork.cpp
+    src/GameplayHudPanel.cpp
     src/GameplayArchive.cpp
     src/GameplayTexture.cpp
     src/GameplayModel.cpp
@@ -148,6 +154,7 @@ set(SOURCES
     src/CityData.cpp
     src/TextRender.cpp
     src/Thumbnails.cpp
+    src/ModelThumbnail.cpp
     src/MediaPlayer.cpp
     src/MediaLibrary.cpp
     src/MediaMeta.cpp
@@ -233,11 +240,46 @@ if(BUILD_TESTING)
     target_include_directories(GameplayConsentLayoutTest PRIVATE src third_party)
     target_compile_definitions(GameplayConsentLayoutTest PRIVATE "SCIFI_TEST_FONT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts\"")
     add_test(NAME GameplayConsentLayoutTest COMMAND GameplayConsentLayoutTest)
+    add_executable(GameplayHudPanelTest tests/GameplayHudPanelTest.cpp src/GameplayHudPanel.cpp src/UiKit.cpp
+                   src/Theme.cpp src/TextRender.cpp src/StbImpl.cpp)
+    target_include_directories(GameplayHudPanelTest PRIVATE src third_party)
+    target_compile_definitions(GameplayHudPanelTest PRIVATE "SCIFI_TEST_FONT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts\"")
+    add_test(NAME GameplayHudPanelTest COMMAND GameplayHudPanelTest)
+    add_executable(FilePreviewTest tests/FilePreviewTest.cpp tests/CgltfTestImpl.cpp
+        src/CodeEditor.cpp src/Thumbnails.cpp src/ModelThumbnail.cpp src/GameplayModel.cpp
+        src/GameplayTexture.cpp src/TextRender.cpp src/StbImpl.cpp src/Utils.cpp src/VideoFrame.cpp)
+    target_include_directories(FilePreviewTest PRIVATE src third_party)
+    target_compile_definitions(FilePreviewTest PRIVATE NOMINMAX SDL_MAIN_HANDLED
+        "SCIFI_TEST_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\"")
+    target_link_libraries(FilePreviewTest PRIVATE miniz)
+    if(MSVC)
+        target_compile_options(FilePreviewTest PRIVATE /Zc:char8_t-)
+    endif()
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(FilePreviewTest PRIVATE SDL2::SDL2)
+    else()
+        target_include_directories(FilePreviewTest PRIVATE ${SDL2_INCLUDE_DIRS})
+        target_link_libraries(FilePreviewTest PRIVATE ${SDL2_LIBRARIES})
+    endif()
+    if(WIN32)
+        target_link_libraries(FilePreviewTest PRIVATE ole32 mfplat mfreadwrite mfuuid)
+        if(TARGET SDL2::SDL2)
+            add_custom_command(TARGET FilePreviewTest POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:FilePreviewTest>)
+        endif()
+    endif()
+    add_test(NAME FilePreviewTest COMMAND FilePreviewTest)
+    if(WIN32)
+        add_executable(PluginNetworkTest tests/PluginNetworkTest.cpp src/PluginNetwork.cpp src/PluginNetPolicy.cpp)
+        target_include_directories(PluginNetworkTest PRIVATE src)
+        target_link_libraries(PluginNetworkTest PRIVATE winhttp ws2_32)
+        add_test(NAME PluginNetworkTest COMMAND PluginNetworkTest)
+    endif()
     add_executable(PluginManagerTest tests/PluginManagerTest.cpp src/PluginManager.cpp)
     target_include_directories(PluginManagerTest PRIVATE src)
     target_compile_definitions(PluginManagerTest PRIVATE NOMINMAX)
     add_test(NAME PluginManagerTest COMMAND PluginManagerTest)
-    add_executable(PluginPackageTest tests/PluginPackageTest.cpp tests/CgltfTestImpl.cpp src/PluginPackage.cpp src/PluginManager.cpp src/GameplayArchive.cpp src/GameplayTexture.cpp src/GameplayModel.cpp src/GameplayGpuValidation.cpp src/GameplayPackage.cpp src/GameplayConsent.cpp src/GameplaySession.cpp src/GameplayStorage.cpp src/PluginScript.cpp)
+    add_executable(PluginPackageTest tests/PluginPackageTest.cpp tests/CgltfTestImpl.cpp src/PluginPackage.cpp src/PluginWorkspace.cpp src/PluginManager.cpp src/GameplayArchive.cpp src/GameplayTexture.cpp src/GameplayModel.cpp src/GameplayGpuValidation.cpp src/GameplayPackage.cpp src/GameplayConsent.cpp src/GameplaySession.cpp src/GameplayStorage.cpp src/PluginScript.cpp src/PluginNetPolicy.cpp)
     target_include_directories(PluginPackageTest PRIVATE src third_party)
     target_compile_definitions(PluginPackageTest PRIVATE "SCIFI_TEST_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\"")
     target_link_libraries(PluginPackageTest PRIVATE miniz scifi_lua scifi_gameplay_audio scifi_gameplay_digest)
@@ -250,7 +292,7 @@ if(BUILD_TESTING)
     add_executable(GameplayRendererTest EXCLUDE_FROM_ALL tests/GameplayRendererTest.cpp src/Renderer.cpp
         src/GameplayGpuValidation.cpp src/GameplayModel.cpp src/GameplayTexture.cpp
         src/GameplaySceneRenderer.cpp src/GameplaySession.cpp src/GameplayPackage.cpp
-        src/GameplayArchive.cpp src/GameplayConsent.cpp src/GameplayStorage.cpp src/PluginPackage.cpp src/PluginScript.cpp
+        src/GameplayArchive.cpp src/GameplayConsent.cpp src/GameplayStorage.cpp         src/PluginPackage.cpp src/PluginWorkspace.cpp src/PluginScript.cpp src/PluginNetPolicy.cpp
         src/ModelLoader.cpp src/StbImpl.cpp src/Math.cpp)
     target_include_directories(GameplayRendererTest PRIVATE src third_party)
     target_compile_definitions(GameplayRendererTest PRIVATE SDL_MAIN_HANDLED NOMINMAX
@@ -271,11 +313,12 @@ if(BUILD_TESTING)
     else()
         target_link_libraries(GameplayRendererTest PRIVATE Diligent-GraphicsEngineVk-static)
     endif()
-    add_executable(PluginScriptTest tests/PluginScriptTest.cpp src/PluginScript.cpp src/GameplayStorage.cpp)
+    add_executable(PluginScriptTest tests/PluginScriptTest.cpp src/PluginScript.cpp src/PluginNetPolicy.cpp src/GameplayStorage.cpp)
     target_include_directories(PluginScriptTest PRIVATE src)
     target_link_libraries(PluginScriptTest PRIVATE scifi_lua)
+    target_compile_definitions(PluginScriptTest PRIVATE "SCIFI_TEST_ASSETS=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\"")
     add_test(NAME PluginScriptTest COMMAND PluginScriptTest)
-    add_executable(GameplayStorageTest tests/GameplayStorageTest.cpp src/PluginScript.cpp src/GameplayStorage.cpp)
+    add_executable(GameplayStorageTest tests/GameplayStorageTest.cpp src/PluginScript.cpp src/PluginNetPolicy.cpp src/GameplayStorage.cpp)
     target_include_directories(GameplayStorageTest PRIVATE src)
     target_link_libraries(GameplayStorageTest PRIVATE scifi_lua)
     add_test(NAME GameplayStorageTest COMMAND GameplayStorageTest)
@@ -351,7 +394,7 @@ target_link_libraries(SciFiShell PRIVATE
 
 if(WIN32)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineD3D12-static xinput d3d12 dxgi pdh
-                          mfplat mfreadwrite mfuuid d3d11 dwmapi windowsapp propsys ole32 oleaut32 iphlpapi powrprof ws2_32 psapi wininet comdlg32)
+                          mfplat mfreadwrite mfuuid d3d11 dwmapi windowsapp propsys ole32 oleaut32 iphlpapi powrprof ws2_32 psapi wininet winhttp comdlg32)
 elseif(APPLE)
     target_link_libraries(SciFiShell PRIVATE Diligent-GraphicsEngineMetal-static)
 else()

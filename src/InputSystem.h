@@ -40,6 +40,7 @@ struct FrameInput {
     int keyCaptured = 0;            // the key pressed while a remap was waiting for one
     bool carToggle = false, carCam = false;  // F10: summon / leave the car; C: first / third person
     bool gameplayControl = false;            // G: enter / exit a nearby script-controlled vehicle
+    std::vector<char> pluginKeys;            // unmodified, non-repeat letter presses (plugin hotkeys)
     bool harvi = false;                      // F1: summon / dismiss HARVI
     bool cityToggle = false;        // F9: show or hide the city
     bool arrange = false;           // F8: arrange the open windows (arc, then tiled, then arc ...)

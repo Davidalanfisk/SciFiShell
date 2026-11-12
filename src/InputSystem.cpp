@@ -22,7 +22,8 @@ FrameInput InputSystem::poll() {
         switch (e.type) {
             case SDL_QUIT: in.quit = true; break;
             case SDL_WINDOWEVENT:
-                if (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) in.resized = true;
+                if (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e.window.event == SDL_WINDOWEVENT_DISPLAY_CHANGED)
+                    in.resized = true;
                 if (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
                     in.mouseReset = true;
                     seekLeftHeld_ = seekRightHeld_ = false;
@@ -105,6 +106,9 @@ FrameInput InputSystem::poll() {
                     if (e.key.keysym.sym == SDLK_SPACE) in.mediaPlayPause = true;
                 }
                 if (e.key.keysym.sym == SDLK_b && !ctrl) in.browser = true;
+                if (!(e.key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI | KMOD_SHIFT)) &&
+                    e.key.keysym.sym >= SDLK_a && e.key.keysym.sym <= SDLK_z && in.pluginKeys.size() < 8)
+                    in.pluginKeys.push_back(static_cast<char>('a' + (e.key.keysym.sym - SDLK_a)));
                 if (ctrl && e.key.keysym.sym == SDLK_v) break;  // Ctrl+V is paste, not "toggle VR"
                 switch (e.key.keysym.sym) {
                     case SDLK_UP: in.up = true; break;

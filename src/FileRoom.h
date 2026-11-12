@@ -65,6 +65,24 @@ private:
     std::shared_ptr<GpuLabel> thumb_;
 };
 
+struct GameplayModel;
+
+// A host-owned console in a plugin room that steps through one manifest-declared setting.
+struct PluginRoomSetting {
+    std::string label;
+    std::function<std::string()> value;
+    std::function<void(int)> change;  // -1 previous choice, +1 next choice
+};
+
+// Everything a Downtown plugin room shows. All actions are host callbacks; plugins never run here.
+struct PluginRoomSpec {
+    std::vector<std::string> details;
+    std::function<void()> toggle, remove, arrange, browse, apply;
+    std::function<std::vector<std::string>()> filesInfo;  // where editable files live and how edits apply
+    std::vector<PluginRoomSetting> settings;
+    std::shared_ptr<const GameplayModel> model;  // optional decorative interior, no collision
+};
+
 class FileRoom {
 public:
     explicit FileRoom(Renderer& renderer);
@@ -72,9 +90,7 @@ public:
     void loadEmpty();  // grid floor only, no cards
     void loadArcade(const std::array<std::shared_ptr<GpuLabel>,SF_ARCADE_CABINETS>& screens,
                     std::function<void(int)> select,std::function<void()> toggle,std::function<void()> arrange);
-    void loadPlugin(const std::string& name, const std::vector<std::string>& details,
-                    std::function<void()> toggle, std::function<void()> remove,
-                    std::function<void()> arrange);
+    void loadPlugin(const std::string& name, PluginRoomSpec spec);
     void loadSettings(const SettingsCategory& category, std::function<void(size_t,int)> invoke,
                       std::function<std::vector<std::string>(size_t)> values,
                       std::function<std::string()> notice);
@@ -137,6 +153,7 @@ private:
     void updateLights();
     struct Emitter { Vec3 c, h; float k; };
     std::vector<Emitter> emitters_;  // bright shell boxes (strips, frames) that light their surroundings
+    uint64_t nextRoomModelOwner_ = UINT64_MAX / 2;  // distinct from gameplay (low) and Downtown (high) owners
     CardNode* addCard(std::unique_ptr<CardNode> card);
     void buildCorridor();
     bool soloRoom_ = false;  // a building with a single room: entered directly, and its door leaves the building

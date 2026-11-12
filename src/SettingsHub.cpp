@@ -133,11 +133,11 @@ void SettingsHub::rebuild() {
         rects_.push_back(br);
         ui::button(bm, ui::Rect{br.x0, br.y0, br.x1, br.y1}, "< BACK", sel_ == 0 ? ui::State::Selected : ui::State::Normal, false, 30);
         float noticeY = 143.0f;
-        for (const auto& line : wrapText(notice_, kSettingsNoticeFontSize, FontFace::UI,
-                                         static_cast<float>(W_ - kSettingsNoticeRightPadding - kSettingsNoticeLeft),
-                                         kSettingsNoticeLines)) {
-            drawText(bm, kSettingsNoticeLeft, noticeY, line, kSettingsNoticeFontSize, FontFace::UI, tk.text);
-            noticeY += 19.0f;
+        const auto notice =
+            layoutSettingsNotice(notice_, static_cast<float>(W_ - kSettingsNoticeRightPadding - kSettingsNoticeLeft));
+        for (const auto& line : notice.lines) {
+            drawText(bm, kSettingsNoticeLeft, noticeY, line, notice.fontSize, FontFace::UI, tk.text);
+            noticeY += notice.pitch;
         }
         const float cw = static_cast<float>(W_ - 2 * kPad - kGap) / 2;
         const int n = static_cast<int>(c.items.size());

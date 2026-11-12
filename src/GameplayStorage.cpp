@@ -17,7 +17,7 @@
 
 namespace sf {
 namespace {
-constexpr size_t kMaxEntries = 64, kMaxKey = 64, kMaxString = 1024, kMaxFile = 65536;
+constexpr size_t kMaxEntries = 256, kMaxKey = 64, kMaxString = 16384, kMaxFile = 262144;
 constexpr char kMagic[] = "SFSSTORE1";
 
 bool validKey(const std::string& key) {

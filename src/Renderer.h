@@ -61,6 +61,8 @@ public:
 
     void setView(const Mat4& view, const Mat4& proj);
     float aspect() const;
+    uint32_t desktopWidth() const { return swapChain_->GetDesc().Width; }
+    uint32_t desktopHeight() const { return swapChain_->GetDesc().Height; }
 
     // imageMode: the texture is an opaque thumbnail; color.r is a brightness multiplier.
     std::shared_ptr<GpuLabel> createLabel(const Bitmap& bitmap, bool srgbImage = false);

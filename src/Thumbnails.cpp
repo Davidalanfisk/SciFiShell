@@ -5,11 +5,13 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <iterator>#include <cstring>
+#include <iterator>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 
 #include "TextRender.h"
+#include "ModelThumbnail.h"
 #include "stb_image.h"
 #include "stb_image_write.h"
 
@@ -42,7 +44,9 @@ bool readPrefix(const std::string& path, size_t maxBytes, std::vector<unsigned c
     std::ifstream f(fs::u8path(path), std::ios::binary);
     if (!f) return false;
     f.seekg(0, std::ios::end);
-    auto size = static_cast<uintmax_t>(f.tellg());
+    const auto end = f.tellg();
+    if (end < 0) return false;
+    auto size = static_cast<uintmax_t>(end);
     if (fullSize) *fullSize = size;
     f.seekg(0);
     out.resize(static_cast<size_t>(std::min<uintmax_t>(size, maxBytes)));
@@ -301,9 +305,15 @@ bool readCache(const std::filesystem::path& file, Bitmap& out) {
     {
         std::ifstream f(file, std::ios::binary);
         if (!f) return false;
+        f.seekg(0, std::ios::end);
+        const auto size = f.tellg();
+        if (size <= 0 || size > 1024 * 1024) return false;
+        f.seekg(0);
         data.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
     }
     int w = 0, h = 0, comp = 0;
+    if (!stbi_info_from_memory(data.data(), static_cast<int>(data.size()), &w, &h, &comp) ||
+        !((w == kThumbW && h == kThumbH) || (w == kDoorArtW && h == kDoorArtH))) return false;
     unsigned char* px = stbi_load_from_memory(data.data(), static_cast<int>(data.size()), &w, &h, &comp, 4);
     if (!px) return false;
     out.w = w;
@@ -487,7 +497,8 @@ FileKind classifyFile(const std::string& path, bool isDir) {
     if (inList(e, {"jpg", "jpeg", "png", "bmp", "gif", "tga"})) return FileKind::Image;
     if (inList(e, {"mp4", "m4v", "mov", "wmv", "avi", "mkv", "webm", "mpg", "mpeg"})) return FileKind::Video;
     if (inList(e, {"mp3", "wav", "flac", "ogg", "m4a", "aac", "wma", "opus"})) return FileKind::Audio;
-    if (inList(e, {"txt", "md", "json", "xml", "html", "htm", "css", "js", "ts", "tsx", "jsx", "cpp", "c", "h", "hpp",
+    if (e == "glb") return FileKind::Model;
+    if (inList(e, {"lua", "txt", "md", "json", "xml", "html", "htm", "css", "js", "ts", "tsx", "jsx", "cpp", "c", "h", "hpp",
                    "py", "rs", "go", "java", "log", "ini", "cfg", "yml", "yaml", "toml", "csv", "cs", "php", "sh",
                    "bat", "ps1", "cmake", "hlsl", "glsl", "sql", "vue", "svg"}))
         return FileKind::Text;
@@ -506,6 +517,7 @@ ThumbnailLoader::~ThumbnailLoader() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         quit_ = true;
+        ++generation_;
         jobs_.clear();
     }
     cv_.notify_all();
@@ -516,15 +528,18 @@ int ThumbnailLoader::reset() {
     std::lock_guard<std::mutex> lock(mutex_);
     jobs_.clear();
     results_.clear();
+    cv_.notify_all();
     return ++generation_;
 }
 
-void ThumbnailLoader::request(int generation, int index, const std::string& path, const std::string& name, FileKind kind, bool plain) {
+bool ThumbnailLoader::request(int generation, int index, const std::string& path, const std::string& name, FileKind kind, bool plain) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (generation != generation_.load() || jobs_.size() >= 64) return false;
         jobs_.push_back({generation, index, path, name, kind, plain});
     }
     cv_.notify_one();
+    return true;
 }
 
 bool ThumbnailLoader::poll(ThumbResult& out) {
@@ -532,6 +547,7 @@ bool ThumbnailLoader::poll(ThumbResult& out) {
     while (!results_.empty()) {
         ThumbResult r = std::move(results_.front());
         results_.pop_front();
+        cv_.notify_one();
         if (r.generation != generation_.load()) continue;
         out = std::move(r);
         return true;
@@ -548,7 +564,7 @@ void ThumbnailLoader::run() {
         Job job;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock, [this] { return quit_ || !jobs_.empty(); });
+            cv_.wait(lock, [this] { return quit_ || (!jobs_.empty() && results_.size() < 8); });
             if (quit_) break;
             job = std::move(jobs_.front());
             jobs_.pop_front();
@@ -564,7 +580,7 @@ void ThumbnailLoader::run() {
                 res.index = job.index;
                 res.bitmap = std::move(cached);
                 std::lock_guard<std::mutex> lock(mutex_);
-                results_.push_back(std::move(res));
+                if (job.generation == generation_.load()) results_.push_back(std::move(res));
                 continue;
             }
         }
@@ -572,6 +588,27 @@ void ThumbnailLoader::run() {
         Bitmap frame;
         std::vector<std::string> lines;
         bool haveFrame = false, haveLines = false;
+        if (job.kind == FileKind::Model) {
+            std::vector<unsigned char> data;
+            uintmax_t fullSize = 0;
+            std::string error;
+            if (!readPrefix(job.path, kModelPreviewBytes, data, &fullSize)) error = "Cannot read model";
+            else if (fullSize > kModelPreviewBytes) error = "Model preview exceeds 8 MiB";
+            else {
+                try {
+                    haveFrame = renderModelThumbnail(std::string(data.begin(), data.end()), frame, error,
+                                                     [&] { return generation_.load() != job.generation; });
+                } catch (const std::bad_alloc&) {
+                    error = "Cannot allocate model preview";
+                }
+            }
+            if (job.generation != generation_.load()) continue;
+            if (!haveFrame) {
+                std::fprintf(stderr, "Model thumbnail unavailable for %s: %s\n", job.path.c_str(), error.c_str());
+                lines = {"MODEL PREVIEW UNAVAILABLE", error};
+                haveLines = true;
+            }
+        }
         try {
             if (job.kind == FileKind::Image) haveFrame = loadImageFile(job.path, frame);
             else if (job.kind == FileKind::Video) haveFrame = extractVideoFrame(job.path, frame);
@@ -586,9 +623,12 @@ void ThumbnailLoader::run() {
         res.generation = job.generation;
         res.index = job.index;
         res.bitmap = composeCard(haveFrame ? &frame : nullptr, job.kind, job.path, job.name, haveLines ? &lines : nullptr, job.plain);
-        writeCache(cacheFile, res.bitmap);
+        if (job.generation != generation_.load()) continue;
+        // A replaced/edited file must never publish pixels under its previous identity.
+        if (cacheFile != cacheFileFor(cacheDirectory, job.path, job.kind, job.plain)) continue;
+        if (job.kind != FileKind::Model || haveFrame) writeCache(cacheFile, res.bitmap);
         std::lock_guard<std::mutex> lock(mutex_);
-        results_.push_back(std::move(res));
+        if (job.generation == generation_.load()) results_.push_back(std::move(res));
     }
 #ifdef _WIN32
     CoUninitialize();

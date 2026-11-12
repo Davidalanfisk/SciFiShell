@@ -28,7 +28,7 @@ int main() {
     check(restored.get("flag", value, error) && value && std::get<bool>(*value), "restore boolean");
     check(second.get("text", value, error) && !value, "stores are isolated by plugin ID");
     check(!first.set("", true, error) && !first.set(std::string(65, 'a'), true, error) &&
-          !first.set("large", std::string(1025, 'x'), error) &&
+          !first.set("large", std::string(16385, 'x'), error) &&
           !first.set("nan", std::numeric_limits<double>::quiet_NaN(), error), "reject invalid keys and values");
     check(restored.erase("flag", error) && restored.erase("missing", error) && restored.load(error) &&
           restored.get("flag", value, error) && !value, "delete persists and missing delete is harmless");
@@ -48,24 +48,24 @@ int main() {
     check(!runtime.start("for i=1,9 do storage_set('x',i) end return {}", error, false, nullptr, nullptr, nullptr,
                          false, false, nullptr, false, false, false, &second) &&
           error.find("write limit") != std::string::npos, "write rate bounded");
-    for (int i = 0; i < 64; ++i) check(first.set("key" + std::to_string(i), false, error) == (i < 61),
+    for (int i = 0; i < 256; ++i) check(first.set("key" + std::to_string(i), false, error) == (i < 253),
                                          "entry limit includes existing keys");
     sf::GameplayStorage large(root, "com.example.large");
     check(large.load(error), "load missing large store");
-    for (int i = 0; i < 63; ++i)
-        check(large.set("n" + std::to_string(i), std::string(1024, 'x'), error), "write within byte limit");
-    check(!large.set("n63", std::string(1024, 'x'), error) &&
+    for (int i = 0; i < 15; ++i)
+        check(large.set("n" + std::to_string(i), std::string(16384, 'x'), error), "write within byte limit");
+    check(!large.set("n15", std::string(16384, 'x'), error) &&
           error.find("byte limit") != std::string::npos, "reject storage exceeding serialized byte limit");
     sf::GameplayStorage largeRestored(root, "com.example.large");
-    check(largeRestored.load(error) && largeRestored.get("n62", value, error) && value &&
-          std::get<std::string>(*value).size() == 1024 &&
-          largeRestored.get("n63", value, error) && !value,
+    check(largeRestored.load(error) && largeRestored.get("n14", value, error) && value &&
+          std::get<std::string>(*value).size() == 16384 &&
+          largeRestored.get("n15", value, error) && !value,
           "failed oversized write preserves persisted data");
     const auto path = root / "com.example.second.store";
     { std::ofstream out(path, std::ios::binary | std::ios::trunc); out << "bad"; }
     check(!secondRestored.load(error) && secondRestored.get("b", value, error) && value &&
           !std::get<bool>(*value), "corrupted storage rejected without replacing loaded values");
-    { std::ofstream out(path, std::ios::binary | std::ios::trunc); out << std::string(65537, 'x'); }
+    { std::ofstream out(path, std::ios::binary | std::ios::trunc); out << std::string(262145, 'x'); }
     check(!secondRestored.load(error), "oversized storage file rejected");
     std::error_code ec;
     std::filesystem::remove(root / "com.example.first.store", ec);

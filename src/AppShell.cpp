@@ -1,4 +1,5 @@
 #include "AppShell.h"
+#include "GameplayHudPanel.h"
 
 #include <SDL.h>
 #include <SDL_syswm.h>
@@ -139,7 +140,7 @@ bool AppShell::init() {
     sfx_.init();
     SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");  // hosted programs take focus; don't minimize the shell
     SDL_SetHint(SDL_HINT_ALLOW_ALT_TAB_WHILE_GRABBED, "0");   // with the keyboard grabbed, Alt+Tab goes to our task switcher
-    Uint32 flags = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_RESIZABLE;
+    Uint32 flags = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
 #ifdef __APPLE__
     flags |= SDL_WINDOW_METAL;
 #endif
@@ -148,6 +149,7 @@ bool AppShell::init() {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         return false;
     }
+    if (std::getenv("SCIFI_REVIEW_HUD")) SDL_SetWindowTitle(window_, "SciFi Shell - HUD quality review");
 #ifdef SCIFI_TEST_SYNTHETIC_CITY
     SDL_SetWindowTitle(window_, "SciFi Shell - synthetic city test only");
     std::fprintf(stderr, "Synthetic city integration test build; not for normal use\n");
@@ -325,7 +327,7 @@ bool AppShell::init() {
     files2d_->openFile = [this](const std::string& path) {
         namespace fs = std::filesystem;
         const FileKind k = classifyFile(path, false);
-        if (k == FileKind::Other) {
+        if (k == FileKind::Other || k == FileKind::Model) {
             ShellExecuteW(nullptr, L"open", fs::u8path(path).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             return;
         }
@@ -1403,7 +1405,7 @@ void AppShell::runTool(Tool tool) {
 // One command per line, # starts a comment. Durations [s] are optional (default 0 = instant).
 //   wait S | goto X Y Z [S] | walk M [S] | strafe M [S] | turn DEG [S] | look YAW PITCH [S] | fly on|off
 //   city | leave | enter PATH | room N | tool start|startpower|files|settings|theme
-//   shot FILE | where | log TEXT | quit
+//   viewport WIDTH HEIGHT | shot FILE | where | log TEXT | quit
 // Output (where / log / errors) is appended to control.log next to the control file.
 void AppShell::scriptLog(const std::string& s) {
     const char* la = std::getenv("LOCALAPPDATA");
@@ -1541,10 +1543,36 @@ bool AppShell::scriptExec(const std::string& line) {
         is >> id;
         const auto it = gameplay_.find(id);
         if (it == gameplay_.end()) scriptLog("gameplay unavailable " + id);
-        else scriptLog("gameplay " + id + " running=" + std::to_string(it->second->session.running()) +
+        else {
+            std::string raster;
+            for (const auto& label : it->second->panelLabels) {
+                if (!label) continue;
+                const auto& desc = label->texture->GetDesc();
+                raster += " " + std::to_string(desc.Width) + "x" + std::to_string(desc.Height);
+            }
+            scriptLog("gameplay " + id + " running=" + std::to_string(it->second->session.running()) +
                        " boxes=" + std::to_string(it->second->session.boxes().size()) +
                        " models=" + std::to_string(it->second->session.models().size()) +
-                       " hud_label=" + std::to_string(static_cast<bool>(it->second->hudLabel)));
+                       " hud_label=" + std::to_string(static_cast<bool>(it->second->hudLabel)) +
+                       " hud_panels=" + std::to_string(std::count_if(it->second->panelLabels.begin(), it->second->panelLabels.end(),
+                                                                     [](const auto& label) { return static_cast<bool>(label); })) +
+                       " hud_uploads=" + std::to_string(it->second->panelUploads) + " hud_rasters=" + raster);
+        }
+    } else if (cmd == "pluginkey") {
+        // Queues an ordinary letter key press so plugin hotkeys go through the same input gating as a real press.
+        std::string key;
+        is >> key;
+        if (key.size() != 1 || key[0] < 'a' || key[0] > 'z') scriptLog("plugin key invalid");
+        else {
+            SDL_Event event{};
+            event.type = SDL_KEYDOWN;
+            event.key.windowID = SDL_GetWindowID(window_);
+            event.key.state = SDL_PRESSED;
+            event.key.keysym.sym = SDLK_a + (key[0] - 'a');
+            event.key.keysym.scancode = static_cast<SDL_Scancode>(SDL_SCANCODE_A + (key[0] - 'a'));
+            if (SDL_PushEvent(&event) != 1) scriptLog(std::string("plugin key failed: ") + SDL_GetError());
+            else scriptLog("plugin key " + key);
+        }
 #ifdef SCIFI_TEST_SYNTHETIC_CITY
     } else if (cmd == "testkey") {
         std::string key;
@@ -1831,9 +1859,9 @@ bool AppShell::scriptExec(const std::string& line) {
             if (city_->pickDowntown(exterior, {0,0,1}, picked) && picked == id) enterDowntown(id);
             else scriptLog("downtown entrance pick failed");
         }
-    } else if (cmd == "downtowncard") {
+    } else if (cmd == "downtowncard" || cmd == "filecard") {
         const int index = static_cast<int>(num(0));
-        if (downtownInterior_.empty() || index < 0 ||
+        if ((cmd == "downtowncard" && downtownInterior_.empty()) || index < 0 ||
             index >= room_->cardCount()) scriptLog("downtown card unavailable");
         else {
             int cardIndex = 0;
@@ -1904,6 +1932,10 @@ bool AppShell::scriptExec(const std::string& line) {
         else if (v == "files2d") runTool(Tool::FileBrowser);
         else if (v == "editor") runTool(Tool::Editor);
         else if (v == "files2dpath") { std::string s; std::getline(is >> std::ws, s); files2d_->navigate(s); }
+        else if (v == "files2dopen") {
+            std::string s; std::getline(is >> std::ws, s);
+            if (files2d_->openFile) files2d_->openFile(s);
+        }
         else if (v == "image") { runTool(Tool::Image); std::string s; std::getline(is >> std::ws, s); if (!s.empty()) imageEd_->openPath(s); }
         else if (v == "imgact") { int id = 0; is >> id; imageEd_->command(id); }
         else if (v == "ftp") runTool(Tool::Ftp);
@@ -1946,6 +1978,14 @@ bool AppShell::scriptExec(const std::string& line) {
         }
         else if (v == "start" || v == "startpower") { if (!start_->isOpen()) toggleStart(); if (v == "startpower") start_->scriptPower(); }
         else scriptLog("unknown tool: " + v);
+    } else if (cmd == "viewport") {
+        const int w = static_cast<int>(num(0)), h = static_cast<int>(num(0));
+        if (w < 640 || w > 7680 || h < 480 || h > 4320) scriptLog("viewport requires 640..7680 by 480..4320");
+        else if (SDL_SetWindowFullscreen(window_, 0) != 0) scriptLog(std::string("viewport: ") + SDL_GetError());
+        else {
+            SDL_SetWindowSize(window_, w, h);
+            renderer_.resize();
+        }
     } else if (cmd == "shot") {
         std::string p;
         std::getline(is, p);
@@ -3339,6 +3379,11 @@ void AppShell::tick(double dt) {
         typing, focus_.p != nullptr, input_.capturing, driving_, riding_, vrOn_, harvi_->panelOpen(),
         settingsPanel_->isOpen(), start_->isOpen(), viewer_->active(), switcher_->isOpen(),
         appsPanel_->isOpen(), osk_->isOpen()};
+    if (!script_.empty() && !in.pluginKeys.empty())
+        scriptLog(std::string("plugin keys gate available=") + (gameplayInputContext.available() ? "1" : "0") +
+                  " world=" + (gameplayWorldAvailable() ? "1" : "0") + " focus=" + (gameplayWindowFocused() ? "1" : "0") +
+                  " pointer=" + (gameplayWorldInput ? "1" : "0") + " typing=" + (typing ? "1" : "0") +
+                  " window=" + (focus_.p ? "1" : "0") + " settings=" + (settingsPanel_->isOpen() ? "1" : "0"));
     tickGameplay(dt, in, gameplayPad, gameplayInputContext.available());
     if (!gameplayInputContext.available() || !gameplayWorldAvailable()) gameplayClicks_.begin(false, false, 0);
     gameplayClicks_.finish(in.clickUp);
@@ -3441,86 +3486,117 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
     }
     // Desktop fullscreen media: the world is not drawn, the viewer fills the screen in view space.
     const bool overlay = state_ == State::FileRoom && desktopPass && !vrOn_ && viewer_->overlay();
-    const Mat4 view = overlay ? Mat4::identity() : realView;
-    const Vec3 eye = overlay ? Vec3{0, 0, 0} : realEye;
+    const WinRef fw = state_ == State::FileRoom && desktopPass && !vrOn_ ? fullWin() : WinRef{};
+    const bool fullscreen = overlay || fw.p;
+    const Mat4 view = fullscreen ? Mat4::identity() : realView;
+    const Vec3 eye = fullscreen ? Vec3{0, 0, 0} : realEye;
     if (overlay) {
         renderer_.setView(view, proj);
         renderer_.clearDepth();
         viewer_->root().renderTree(renderer_);
-        if (viewer_->controlsShown() && arrow_) {
-            drawArrow2D();
-                    }
-                    return;
-                }
-    // Planar reflection: draw the room flipped under the floor first; the translucent floor then lets it show through.
-    if (state_ == State::FileRoom && desktopPass && !vrOn_) {
-        // A fullscreen window fills the view; the pointer is a virtual cursor over it.
-        const WinRef fw = fullWin();
-        if (fw.p) {
-            renderer_.setView(Mat4::identity(), proj);
-            renderer_.clearDepth();
-            winRender(fw);
-            if (arrow_ && !switcher_->isOpen()) drawArrow2D();
-            switcher_->render(Mat4::identity(), renderer_.aspect(), std::tan(kFovY * 0.5f), false);
-            return;
-        }
-    }    static const bool dbgNoMirror = std::getenv("SCIFI_NOMIRROR") != nullptr, dbgNoPost = std::getenv("SCIFI_NOPOST") != nullptr;
-    renderer_.setPostFx(settings_.postFx && !dbgNoPost);
-    renderer_.setFogTune(settings_.fogDensity, settings_.fogHeight, settings_.fogBright, settings_.fogTint, settings_.fogStart, settings_.fogMist, settings_.fogClarity, settings_.fogGlow);
-    renderer_.setLightTune(settings_.lightSpot, settings_.lightCap, settings_.lightBase, settings_.lightAmbient, settings_.lightFalloff);
-    if (city_) city_->setDrawScale(settings_.distScale());
-    if (state_ == State::FileRoom && !dbgNoMirror && true) {
-        renderer_.beginReflection();
-        renderer_.setMirror(true);
-        if (settings_.reflections) {  // when off the target is just cleared: a plain dark floor
-            activeRoot().renderTree(renderer_);
-            if (cityMode_ && city_) {
-                city_->render(renderer_, realEye);
-                if (riding_ && rideT_ > 0.3f) city_->renderPacket(renderer_, ridePos_, ridePath_, rideDist_);
-            }
-            renderGameplay();
-        }
-        renderer_.setMirror(false);
-        renderer_.endReflection();
+    } else if (fw.p) {
+        renderer_.setView(view, proj);
+        renderer_.clearDepth();
+        winRender(fw);
+        switcher_->render(view, renderer_.aspect(), std::tan(kFovY * 0.5f), false);
     }
-    activeRoot().renderTree(renderer_);
-    if (cityMode_ && city_) {
+    // All paths, including fullscreen media/windows and each VR eye, share the final HUD pass.
+    if (!fullscreen) {
+        static const bool dbgNoMirror = std::getenv("SCIFI_NOMIRROR") != nullptr, dbgNoPost = std::getenv("SCIFI_NOPOST") != nullptr;
+        renderer_.setPostFx(settings_.postFx && !dbgNoPost);
+        renderer_.setFogTune(settings_.fogDensity, settings_.fogHeight, settings_.fogBright, settings_.fogTint, settings_.fogStart, settings_.fogMist, settings_.fogClarity, settings_.fogGlow);
+        renderer_.setLightTune(settings_.lightSpot, settings_.lightCap, settings_.lightBase, settings_.lightAmbient, settings_.lightFalloff);
+        if (city_) city_->setDrawScale(settings_.distScale());
+        if (state_ == State::FileRoom && !dbgNoMirror && true) {
+            renderer_.beginReflection();
+            renderer_.setMirror(true);
+            if (settings_.reflections) {  // when off the target is just cleared: a plain dark floor
+                activeRoot().renderTree(renderer_);
+                if (cityMode_ && city_) {
+                    city_->render(renderer_, realEye);
+                    if (riding_ && rideT_ > 0.3f) city_->renderPacket(renderer_, ridePos_, ridePath_, rideDist_);
+                }
+                renderGameplay();
+            }
+            renderer_.setMirror(false);
+            renderer_.endReflection();
+        }
+        activeRoot().renderTree(renderer_);
+        if (cityMode_ && city_) {
             city_->render(renderer_, realEye);
             if (riding_ && rideT_ > 0.3f) city_->renderPacket(renderer_, ridePos_, ridePath_, rideDist_);
         }
-    renderGameplay();
-    if (cityMode_ && city_ && !dbgNoPost) renderer_.postWorld();  // effects are for the city; inside buildings and rooms text stays sharp
-    if (state_ == State::FileRoom && viewer_->active()) {
-        renderer_.clearDepth();
-        viewer_->root().renderTree(renderer_);
-    }
-    if (state_ == State::FileRoom)
-        for (const WinRef& w : winOrder_) {
-            if (winFull(w)) continue;
+        renderGameplay();
+        if (cityMode_ && city_ && !dbgNoPost) renderer_.postWorld();  // effects are for the city; inside buildings and rooms text stays sharp
+        if (state_ == State::FileRoom && viewer_->active()) {
             renderer_.clearDepth();
-            winRender(w);
-            renderHandle(w);
+            viewer_->root().renderTree(renderer_);
         }
-    if (state_ == State::FileRoom && osk_->isOpen()) {
-        renderer_.clearDepth();
-        osk_->render();
+        if (state_ == State::FileRoom)
+            for (const WinRef& w : winOrder_) {
+                if (winFull(w)) continue;
+                renderer_.clearDepth();
+                winRender(w);
+                renderHandle(w);
+            }
+        if (state_ == State::FileRoom && osk_->isOpen()) {
+            renderer_.clearDepth();
+            osk_->render();
+        }
+        if (harvi_->active()) harvi_->render(*crosshair_);
+        if (state_ == State::FileRoom && appsPanel_->isOpen()) {
+            renderer_.clearDepth();
+            appsPanel_->root().renderTree(renderer_);
+        }
+        if (switcher_->isOpen()) switcher_->render(view, renderer_.aspect(), std::tan(kFovY * 0.5f), vrOn_);
+        if (loaderA_ > 0.01f && loadLabel_) {
+            // White loading ring, modelled on the command ring: segments chase round it so it is clear the shell is working.
+            renderer_.clearDepth();
+            const float dist = 1.2f, dia = 0.34f;
+            const Vec3 at = vrOn_ ? Vec3{0, 0, -dist} : Vec3{0, 0, -dist};
+            const float t = static_cast<float>(time_);
+            renderer_.setTheme({1, 1, 1}, {1, 1, 1});
+            renderer_.drawRing(*loadLabel_, view.rigidInverse() * Mat4::translate(at) * Mat4::scale({dia, dia, 1.0f}), 12,
+                               std::floor(std::fmod(t * 9.0f, 12.0f)), t * 1.2f, loaderA_, 0.5f + 0.5f * std::sin(t * 6.0f));
+            renderer_.setTheme(currentTheme().accent, currentTheme().alt);
+        }
     }
-    if (harvi_->active()) harvi_->render(*crosshair_);
-    if (state_ == State::FileRoom && appsPanel_->isOpen()) {
-        renderer_.clearDepth();
-        appsPanel_->root().renderTree(renderer_);
-    }
-    if (switcher_->isOpen()) switcher_->render(view, renderer_.aspect(), std::tan(kFovY * 0.5f), vrOn_);
-    if (loaderA_ > 0.01f && loadLabel_) {
-        // White loading ring, modelled on the command ring: segments chase round it so it is clear the shell is working.
-        renderer_.clearDepth();
-        const float dist = 1.2f, dia = 0.34f;
-        const Vec3 at = vrOn_ ? Vec3{0, 0, -dist} : Vec3{0, 0, -dist};
-        const float t = static_cast<float>(time_);
-        renderer_.setTheme({1, 1, 1}, {1, 1, 1});
-        renderer_.drawRing(*loadLabel_, view.rigidInverse() * Mat4::translate(at) * Mat4::scale({dia, dia, 1.0f}), 12,
-                           std::floor(std::fmod(t * 9.0f, 12.0f)), t * 1.2f, loaderA_, 0.5f + 0.5f * std::sin(t * 6.0f));
-        renderer_.setTheme(currentTheme().accent, currentTheme().alt);
+    // Permission prompts cannot be covered by plugin-controlled pixels, even by another plugin.
+    const bool consent = settingsPanel_->isOpen() && !gameplayConfirm_.empty() &&
+                         settingsPanel_->notice() == gameplayConfirmNotice_ &&
+                         std::chrono::steady_clock::now() < gameplayDeadline_;
+    if (state_ == State::FileRoom && !consent) {
+        const float dist = 1.2f, halfH = std::tan(kFovY * 0.5f) * dist;
+        const float areaW = vrOn_ ? 0.7f : halfH * renderer_.aspect() * 2.0f, areaH = vrOn_ ? 0.5f : halfH * 2.0f;
+        const float tint[3] = {1, 1, 1};
+        for (const auto& [id, entry] : gameplay_) {
+            if (!entry->session.running() || !entry->hud || !entry->pendingError.empty()) continue;
+            for (size_t i = 0; i < entry->panels.size(); ++i) {
+                GameplayHudRect rect;
+                if (!entry->panelLabels[i] || !gameplayHudPanelRect(entry->panels[i], rect)) continue;
+                const float w = rect.width * areaW, h = rect.height * areaH;
+                const float left = (rect.left - 0.5f) * areaW;
+                const float cy = (0.5f - rect.top - rect.height * 0.5f) * areaH;
+                const auto& panel = entry->panels[i];
+                const int canvasW = std::max(panel.canvasWidth, 1);
+                const bool scroll = panel.scrollSpeed > 0 && panel.viewWidth > 0 && panel.viewWidth < canvasW;
+                // Marquee panels loop the canvas through a view_width-wide window without re-uploading pixels.
+                const float span = scroll ? static_cast<float>(panel.viewWidth) / canvasW : 1.0f;
+                const float start = scroll ? static_cast<float>(std::fmod((time_ - entry->panelScrollStart[i]) *
+                    panel.scrollSpeed, static_cast<double>(canvasW)) / canvasW) : 0.0f;
+                auto quad = [&](float u0, float du, float x0, float width) {
+                    if (width <= 1e-5f || du <= 1e-6f) return;
+                    const float uv[4] = {u0, 0, du, 1};
+                    renderer_.clearDepth();
+                    renderer_.drawWebRegion(*entry->panelLabels[i], view.rigidInverse() *
+                        Mat4::translate({x0 + width * 0.5f, cy, -dist}) * Mat4::scale({width, h, 1.0f}),
+                        uv, width / h, 0.0f, -1.0f, 1.0f, tint);
+                };
+                const float first = std::min(span, 1.0f - start);
+                quad(start, first, left, w * first / span);
+                if (first < span) quad(0, span - first, left + w * first / span, w * (span - first) / span);
+            }
+        }
     }
     if (hudTimeLabel_) {
         renderer_.clearDepth();
@@ -3553,7 +3629,7 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
             put(*hudTargetLabel_, gh, {0.0f, vrOn_ ? -0.22f : -halfH * 0.62f, -dist});
         }
     }
-    if (state_ == State::FileRoom) {
+    if (state_ == State::FileRoom && !consent) {
         int row = 0;
         const float dist = 1.2f, halfH = std::tan(kFovY * 0.5f) * dist;
         const float halfW = halfH * renderer_.aspect();
@@ -3577,7 +3653,10 @@ void AppShell::renderScene(const Mat4& realView, const Mat4& proj, const Vec3& r
         Vec3 at = vrOn_ ? Vec3{-0.28f, 0.2f, -dist} : Vec3{-halfH * renderer_.aspect() + w * 0.5f + 0.008f, halfH - h * 0.5f - 0.008f, -dist};
         renderer_.drawHudText(*fpsLabel_, view.rigidInverse() * Mat4::translate(at) * Mat4::scale({w, h, 1.0f}));
     }
-    if (vrOn_ && vrInput_.valid && !vrGaze_) {
+    renderer_.clearDepth();
+    if (fullscreen) {
+        if (arrow_ && !switcher_->isOpen() && (!overlay || viewer_->controlsShown())) drawArrow2D();
+    } else if (vrOn_ && vrInput_.valid && !vrGaze_) {
         renderer_.drawCube(*crosshair_, alignZ(vrInput_.pointerOrigin + vrInput_.pointerDir * 1.5f, vrInput_.pointerDir,
                                                 {0.006f, 0.006f, 3.0f}),
                            {1.0f, 0.7f, 0.2f});
@@ -3604,6 +3683,7 @@ int AppShell::run() {
         prepareGameplay();
 
         if (vrOn_) {
+            gameplayHudVrWidth_ = gameplayHudVrHeight_ = 0;
             // In VR the rig is the tracking-space origin: at the player's position and heading, and at the flown altitude
             // minus the head's own height, so the headset follows the same height the desktop view shows.
             const float rigY = std::max(0.0f, camera_.position.y - vrHeadY_);
@@ -3611,6 +3691,10 @@ int AppShell::run() {
             vr_.frame(
                 renderer_, rig,
                 [&](const EyeView& ev) {
+                    gameplayHudVrWidth_ = std::max(gameplayHudVrWidth_,
+                        static_cast<int>(ev.width * std::abs(ev.proj.m[0]) * 0.7f / 2.4f));
+                    gameplayHudVrHeight_ = std::max(gameplayHudVrHeight_,
+                        static_cast<int>(ev.height * std::abs(ev.proj.m[5]) * 0.5f / 2.4f));
                     Vec3 eyePos = ev.view.rigidInverse().transformPoint({0, 0, 0});
                     if (vrHeadY_ < 0.3f) vrHeadY_ = std::clamp(eyePos.y - rigY, 0.0f, 2.5f);
                     renderScene(ev.view, ev.proj, eyePos, false);

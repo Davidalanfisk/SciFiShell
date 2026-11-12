@@ -7,6 +7,10 @@
 
 #include "TextRender.h"
 #include "UiKit.h"
+#include "GameplayModel.h"
+
+#include <cmath>
+#include <cstdio>
 
 namespace sf {
 
@@ -50,6 +54,27 @@ struct Box {
     Vec3 c, s, color;
     float glow;  // -1 plain, 0 edge-lit
     bool always;
+};
+
+// A plugin's validated room_model, drawn at its authored room coordinates. GPU memory is released with the room.
+class RoomModelNode : public Node {
+public:
+    RoomModelNode(Renderer& r, uint64_t owner, uint64_t handle, Mat4 fit)
+        : r_(r), owner_(owner), handle_(handle), fit_(fit) {}
+    ~RoomModelNode() override { r_.releaseGameplayModels(owner_); }
+    void render(Renderer& r) override {
+        if (r.mirror() || failed_) return;
+        if (!r.drawGameplayModel(owner_, handle_, fit_, {1, 1, 1})) {
+            failed_ = true;
+            std::fprintf(stderr, "Plugin room model draw failed\n");
+        }
+    }
+
+private:
+    Renderer& r_;
+    uint64_t owner_, handle_;
+    Mat4 fit_;
+    bool failed_ = false;
 };
 
 // All the walls, doors and lights of a building interior in one node, culled by distance to the eye.
@@ -420,50 +445,154 @@ void FileRoom::loadEmpty() {
     resetScene();
 }
 
-void FileRoom::loadPlugin(const std::string& name, const std::vector<std::string>& details,
-                          std::function<void()> toggle, std::function<void()> remove,
-                          std::function<void()> arrange) {
+void FileRoom::loadPlugin(const std::string& name, PluginRoomSpec spec) {
     loadEmpty();
     pluginRoom_ = true;
     building_ = true;
     loaded_ = true;
     slots_.clear();
-    walk_ = {{-6.5f, 6.5f, -6.5f, 5.5f}};
+    constexpr float h = 10.0f, H = 6.0f;
+    walk_ = {{-h + 0.9f, h - 0.9f, -h + 0.9f, h - 0.9f}};
     rows_ = 0;
     levels_ = roomFloors_ = 1;
-    roomTop_ = 5;
+    roomTop_ = H;
     spawnPending_ = false;
-    extent_ = 10;
-    auto block = [&](Vec3 at, Vec3 size) {
-        auto wall = std::make_unique<BlockNode>(renderer_, Vec3{0.06f,0.10f,0.16f}, false);
-        wall->position = at; wall->scale = size; root_->add(std::move(wall));
-    };
-    block({0,2.5f,-7}, {14,5,0.2f});
-    block({-7,2.5f,0}, {0.2f,5,14});
-    block({7,2.5f,0}, {0.2f,5,14});
-    block({0,2.5f,7}, {14,5,0.2f});
-    block({0,5,0}, {14,0.2f,14});
-    auto card = [&](const std::string& title, float x, float z, std::function<void()> action) {
-        DirEntry entry;
-        auto c = std::make_unique<CardNode>(renderer_, entry, title);
-        c->position = {x,1.8f,z};
-        c->scale = {2.8f,2.8f,0.08f};
+    extent_ = 16;
+    const Vec3 wall{0.016f, 0.026f, 0.045f}, trim{0.05f, 0.08f, 0.13f}, cyan{0.55f, 1.6f, 1.9f},
+               gold{1.5f, 0.95f, 0.4f}, runner{0.035f, 0.07f, 0.11f};
+    auto shell = std::make_unique<ShellNode>(renderer_, &eye_);
+    auto& B = shell->boxes;
+    auto add = [&](Vec3 c, Vec3 s, Vec3 col, float glow = 0.0f) { B.push_back({c, s, col, glow, true}); };
+    add({0, H * 0.5f, -h - 0.2f}, {2 * h + 0.8f, H, 0.4f}, wall);
+    add({0, H * 0.5f, h + 0.2f}, {2 * h + 0.8f, H, 0.4f}, wall);
+    add({-h - 0.2f, H * 0.5f, 0}, {0.4f, H, 2 * h + 0.8f}, wall);
+    add({h + 0.2f, H * 0.5f, 0}, {0.4f, H, 2 * h + 0.8f}, wall);
+    add({0, H + 0.1f, 0}, {2 * h + 0.8f, 0.2f, 2 * h + 0.8f}, wall * 0.7f, -1.0f);
+    // Keep the solid floor at authored y=0, below custom floor inlays.
+    add({0, -0.02f, 0}, {2 * h + 0.2f, 0.04f, 2 * h + 0.2f}, Vec3{0.04f, 0.045f, 0.055f}, -3.0f);
+    if (!spec.model) {
+        add({0, 0.025f, 0}, {3.2f, 0.02f, 2 * h - 1.0f}, runner, -1.0f);
+        for (float x : {-1.7f, 1.7f}) add({x, 0.03f, 0}, {0.06f, 0.02f, 2 * h - 1.0f}, cyan, -1.0f);
+    }
+    // Keep full-height columns in the corners, outside the wall consoles' sight lines and pick rays.
+    for (float a : {-h + 1.2f, h - 1.2f}) {
+        for (float side : {-1.0f, 1.0f}) {
+            add({side * (h - 0.25f), H * 0.5f, a}, {0.5f, H, 0.7f}, trim);
+            add({side * (h - 0.5f), H - 0.6f, a}, {0.08f, 0.5f, 0.5f}, gold, -1.0f);
+            add({a, H * 0.5f, side * (h - 0.25f)}, {0.7f, H, 0.5f}, trim);
+            add({a, H - 0.6f, side * (h - 0.5f)}, {0.5f, 0.5f, 0.08f}, gold, -1.0f);
+        }
+    }
+    for (float side : {-1.0f, 1.0f}) {
+        add({side * (h - 0.05f), 0.12f, 0}, {0.06f, 0.06f, 2 * h}, cyan, -1.0f);
+        add({0, 0.12f, side * (h - 0.05f)}, {2 * h, 0.06f, 0.06f}, cyan, -1.0f);
+        add({side * (h - 0.6f), H - 0.05f, 0}, {0.12f, 0.06f, 2 * h - 1.2f}, cyan, -1.0f);
+        add({0, H - 0.05f, side * (h - 0.6f)}, {2 * h - 1.2f, 0.06f, 0.12f}, cyan, -1.0f);
+    }
+    // Custom interiors supply their own centrepiece and floor decoration.
+    for (float x = -6.0f; x <= 6.0f; x += 6.0f) add({x, H - 0.15f, 0}, {0.25f, 0.3f, 2 * h - 1.0f}, trim);
+    for (float z = -6.0f; z <= 6.0f; z += 6.0f) add({0, H - 0.15f, z}, {2 * h - 1.0f, 0.3f, 0.25f}, trim);
+    if (!spec.model) {
+        for (int i = 0; i < 12; ++i) {
+            const float a = float(i) * kPi / 6.0f;
+            add({std::sin(a) * 2.6f, H - 0.32f, -1.0f + std::cos(a) * 2.6f}, {0.9f, 0.05f, 0.25f}, gold, -1.0f);
+        }
+        add({0, 0.06f, -1.0f}, {4.2f, 0.08f, 4.2f}, trim);
+        add({0, 0.11f, -1.0f}, {3.6f, 0.02f, 3.6f}, cyan * 0.35f, -1.0f);
+    }
+    // Back wall: a framed alcove behind the plugin plaque.
+    add({0, 3.4f, -h + 0.08f}, {7.4f, 3.2f, 0.12f}, trim * 0.6f);
+    add({0, 5.1f, -h + 0.15f}, {7.6f, 0.08f, 0.1f}, gold, -1.0f);
+    add({0, 1.7f, -h + 0.15f}, {7.6f, 0.08f, 0.1f}, gold, -1.0f);
+    // Left-wall file bay and right-wall settings bank get their own lit frames.
+    for (float side : {-1.0f, 1.0f}) {
+        add({side * (h - 0.12f), 2.6f, 0.5f}, {0.1f, 3.4f, 8.6f}, trim * 0.6f);
+        add({side * (h - 0.18f), 4.4f, 0.5f}, {0.08f, 0.06f, 8.8f}, side < 0 ? cyan : gold, -1.0f);
+    }
+    for (const Box& b : B) {
+        const float m = std::max(b.color.x, std::max(b.color.y, b.color.z));
+        if (b.glow == -1.0f && m > 0.9f) emitters_.push_back({b.c, b.s * 0.5f, std::min(m, 2.0f) * 0.6f});
+    }
+    root_->add(std::move(shell));
+
+    if (spec.model) {
+        const GameplayModel& model = *spec.model;
+        Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+        for (size_t i = 0; i + 7 < model.vertices.size(); i += 8) {
+            lo.x = std::min(lo.x, model.vertices[i]); hi.x = std::max(hi.x, model.vertices[i]);
+            lo.y = std::min(lo.y, model.vertices[i + 1]); hi.y = std::max(hi.y, model.vertices[i + 1]);
+            lo.z = std::min(lo.z, model.vertices[i + 2]); hi.z = std::max(hi.z, model.vertices[i + 2]);
+        }
+        // Authored room coordinates (metres, origin at floor centre) are kept; oversize interiors shrink to fit.
+        const float reach = std::max({std::fabs(lo.x), std::fabs(hi.x), std::fabs(lo.z), std::fabs(hi.z), 0.001f});
+        const float base = std::min(lo.y, 0.0f), tall = std::max(hi.y - base, 0.001f);
+        const float scale = std::min({1.0f, (h - 0.3f) / reach, (H - 0.1f) / tall});
+        uint64_t handle = 0;
+        std::string error;
+        const uint64_t owner = nextRoomModelOwner_++;
+        if (std::isfinite(scale) && hi.x >= lo.x &&
+            renderer_.createGameplayModel(owner, model, nullptr, handle, error)) {
+            const Mat4 fit = Mat4::scale({scale, scale, scale}) * Mat4::translate({0, -base, 0});
+            root_->add(std::make_unique<RoomModelNode>(renderer_, owner, handle, fit));
+        } else {
+            std::fprintf(stderr, "Plugin room model unavailable: %s\n", error.c_str());
+        }
+    }
+
+    auto card = [&](const std::string& title, Vec3 at, Vec3 scale, float yaw, std::function<void()> action,
+                    bool console = false) {
+        auto c = std::make_unique<CardNode>(renderer_, DirEntry{}, title);
+        c->position = at; c->scale = scale; c->yaw = yaw;
+        c->console = console;
         c->onActivate = std::move(action);
         return addCard(std::move(c));
     };
-    auto* info = card(name, 0, -6.5f, [] {});
-    info->position.y = 3.4f;
-    info->scale = {6,2.4f,0.08f};
+    auto* info = card(name, {0, 3.4f, -h + 0.25f}, {6.6f, 2.6f, 0.08f}, 0, [] {});
     info->tall = true;
-    info->setInfo(details);
-    card("ON / OFF", -4, -4, std::move(toggle));
-    const bool removable = bool(remove);
-    card(removable ? "DELETE PLUGIN" : "BUILT-IN - CANNOT DELETE", 0, -4, std::move(remove));
-    card("REARRANGE", 4, -4, std::move(arrange));
-    card("EXIT TO DOWNTOWN", 0, 5, [this] { if (onExitBuilding) onExitBuilding(); });
-    cards_.back()->yaw = kPi;
-}
+    info->setInfo(spec.details);
+    const bool removable = bool(spec.remove);
+    card("ON / OFF", {-4.5f, 1.8f, -6.5f}, {2.6f, 2.6f, 0.08f}, 0, std::move(spec.toggle));
+    card(removable ? "DELETE PLUGIN" : "BUILT-IN - CANNOT DELETE", {0, 1.8f, -6.5f}, {2.6f, 2.6f, 0.08f}, 0,
+         std::move(spec.remove));
+    card("REARRANGE", {4.5f, 1.8f, -6.5f}, {2.6f, 2.6f, 0.08f}, 0, std::move(spec.arrange));
 
+    // File bay on the left wall: browse the editable copy in the built-in file browser, then apply it explicitly.
+    const float left = -h + 0.3f, right = h - 0.3f;
+    const bool editable = bool(spec.browse);
+    auto* browse = card(editable ? "BROWSE FILES" : "FILES UNAVAILABLE", {left, 2.5f, -1.6f}, {3.6f, 2.4f, 0.08f},
+                        kPi * 0.5f, std::move(spec.browse), true);
+    if (spec.filesInfo) browse->liveInfo = spec.filesInfo;
+    if (spec.apply)
+        card("APPLY EDITS", {left, 2.0f, 2.6f}, {2.2f, 2.2f, 0.08f}, kPi * 0.5f, std::move(spec.apply));
+
+    // Settings bank on the right wall: one console per manifest setting, stepping through its declared choices.
+    const size_t shown = std::min<size_t>(spec.settings.size(), 4);
+    for (size_t i = 0; i < shown; ++i) {
+        auto setting = spec.settings[i];
+        const float zc = shown == 1 ? 0.5f : -3.5f + float(i) * 8.0f / float(shown - 1);
+        auto change = setting.change;
+        auto* console = card(setting.label, {right, 2.4f, zc}, {3.4f, 2.2f, 0.08f}, -kPi * 0.5f,
+                             [change] { if (change) change(1); }, true);
+        console->scale = {shown > 2 ? 2.4f : 3.4f, shown > 2 ? 1.6f : 2.2f, 0.08f};
+        console->liveInfo = [value = setting.value] {
+            return std::vector<std::string>{value ? value() : std::string("UNAVAILABLE"),
+                                            "Select: next choice", "+/- or left/right steps"};
+        };
+        console->onNudge = [change](int direction) { if (change) change(direction); };
+        const float half = console->scale.x * 0.5f - 0.35f;
+        card("-", {right + 0.05f, 1.0f, zc + half}, {0.6f, 0.6f, 0.08f}, -kPi * 0.5f,
+             [change] { if (change) change(-1); });
+        card("+", {right + 0.05f, 1.0f, zc - half}, {0.6f, 0.6f, 0.08f}, -kPi * 0.5f,
+             [change] { if (change) change(1); });
+    }
+    if (spec.settings.empty()) {
+        auto* none = card("NO PLUGIN SETTINGS", {right, 2.4f, 0.5f}, {3.4f, 2.2f, 0.08f}, -kPi * 0.5f, [] {}, true);
+        none->setInfo({"This package declares no settings", "Manifest \"settings\" adds consoles here"});
+    }
+    auto* exit = card("EXIT TO DOWNTOWN", {0, 1.8f, h - 0.3f}, {2.6f, 2.6f, 0.08f}, kPi,
+                      [this] { if (onExitBuilding) onExitBuilding(); });
+    (void)exit;
+}
 void FileRoom::loadArcade(const std::array<std::shared_ptr<GpuLabel>,SF_ARCADE_CABINETS>& screens,
                           std::function<void(int)> select,std::function<void()> toggle,std::function<void()> arrange) {
     loadEmpty();
@@ -632,9 +761,8 @@ void FileRoom::load(std::string path) {
         addCard(std::move(card));
         if (i > 0) {
             FileKind kind = classifyFile(entries[i].path, entries[i].isDir);
-            if (kind != FileKind::Folder && kind != FileKind::Other) {
-                requested_[i] = 1;
-                loader_.request(generation_, static_cast<int>(i), entries[i].path, entries[i].name, kind);
+            if (kind != FileKind::Folder && kind != FileKind::Other && kind != FileKind::Model) {
+                requested_[i] = loader_.request(generation_, static_cast<int>(i), entries[i].path, entries[i].name, kind);
             }
         }
     }
@@ -1013,10 +1141,10 @@ void FileRoom::addRoomExtras(int r) {
     if (ri.files + ri.dirs > 0) door->setDoorStats(std::to_string(ri.files ? ri.files : ri.dirs) + plus, ri.files ? (ri.files == 1 && !ri.capped ? "file" : "files") : "folders");
     else door->setDoorStats("0", "empty");
     if (ri.hasPreview && !door->hasPreviewRequested) {
-        door->hasPreviewRequested = true;
         const int idx = static_cast<int>(std::find(cards_.begin(), cards_.end(), door) - cards_.begin());
-        requested_[idx] = 1;
-        loader_.request(generation_, idx, ri.preview.path, ri.preview.name, classifyFile(ri.preview.path, false), true);
+        door->hasPreviewRequested = loader_.request(generation_, idx, ri.preview.path, ri.preview.name,
+                                                   classifyFile(ri.preview.path, false), true);
+        requested_[idx] = door->hasPreviewRequested;
     }
 }
 
@@ -1460,6 +1588,25 @@ void FileRoom::updatePreview() {
 void FileRoom::pump() {
     updatePreview();
     updateLights();
+    // Model thumbnails are lazy even in the flat gallery. Cap GPU residency at 24 model cards per room.
+    int modelCount = 0;
+    for (size_t i = 0; i < cards_.size(); ++i)
+        if (requested_[i] && classifyFile(cards_[i]->entry.path, false) == FileKind::Model) ++modelCount;
+    int previewBudget = 8;
+    for (size_t i = 0; i < cards_.size() && cardsVisible_ && previewBudget > 0; ++i) {
+        auto* cd = cards_[i];
+        if (requested_[i] || cd->entry.isDir || cd->isParentLink) continue;
+        const auto kind = classifyFile(cd->entry.path, false);
+        const bool model = kind == FileKind::Model;
+        if (kind == FileKind::Folder || kind == FileKind::Other || (model ? modelCount >= 24 : building_)) continue;
+        const Vec3 d = cd->position - eye_;
+        if (d.x * d.x + d.y * d.y + d.z * d.z > 30 * 30) continue;
+        if (loader_.request(generation_, static_cast<int>(i), cd->entry.path, cd->entry.name, kind)) {
+            requested_[i] = 1;
+            if (model) ++modelCount;
+            --previewBudget;
+        }
+    }
     if (building_ && cardsVisible_) {
         int budget = 40;
         for (size_t i = 0; i < cards_.size(); ++i) {
@@ -1469,20 +1616,28 @@ void FileRoom::pump() {
             cd->visible = d2 < 120.0f * 120.0f;
             // Thumbnails are only requested for frames the player is near.
             if (inRoom_ && budget > 0 && !requested_[i] && d2 < 30.0f * 30.0f && cd->roomIndex == -1 && !cd->isParentLink) {
-                requested_[i] = 1;
                 FileKind kind = classifyFile(cd->entry.path, cd->entry.isDir);
-                if (kind != FileKind::Folder && kind != FileKind::Other) {
-                    loader_.request(generation_, static_cast<int>(i), cd->entry.path, cd->entry.name, kind);
-                    --budget;
+                if (kind != FileKind::Folder && kind != FileKind::Other && kind != FileKind::Model) {
+                    if (loader_.request(generation_, static_cast<int>(i), cd->entry.path, cd->entry.name, kind)) {
+                        requested_[i] = 1;
+                        --budget;
+                    }
                 }
             }
         }
         if (!inRoom_) {
             for (int r = 0; r < static_cast<int>(rooms_.size()); ++r) {
                 const float dx = roomDoorX(r) - eye_.x, dz = roomDoorZ(r) - eye_.z;
-                if (rooms_[r].ready || dx * dx + dz * dz > 110.0f * 110.0f) continue;
-                fillRoomInfo(r);  // one room per frame keeps the hallway smooth
-                break;
+                if (dx * dx + dz * dz > 110.0f * 110.0f) continue;
+                if (!rooms_[r].ready) {
+                    fillRoomInfo(r);  // one room per frame keeps the hallway smooth
+                    break;
+                }
+                if (rooms_[r].hasPreview && r < static_cast<int>(doorCards_.size()) &&
+                    !doorCards_[r]->hasPreviewRequested) {
+                    addRoomExtras(r);
+                    break;
+                }
             }
         }
     }

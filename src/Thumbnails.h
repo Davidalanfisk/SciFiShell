@@ -15,7 +15,7 @@
 
 namespace sf {
 
-enum class FileKind { Folder, Image, Video, Audio, Text, Other };
+enum class FileKind { Folder, Image, Video, Audio, Text, Other, Model };
 
 // Extension based; unknown extensions are Other.
 FileKind classifyFile(const std::string& path, bool isDir);
@@ -60,7 +60,8 @@ public:
 
     // Drops queued work and invalidates in-flight results; returns the new generation.
     int reset();
-    void request(int generation, int index, const std::string& path, const std::string& name, FileKind kind, bool plain = false);
+    // False means backpressure; the caller can retry on a later frame.
+    bool request(int generation, int index, const std::string& path, const std::string& name, FileKind kind, bool plain = false);
     bool poll(ThumbResult& out);
 
 private:

@@ -80,6 +80,8 @@ const LangDef kLangs[] = {
     {"Go / Rust / PHP", "go rs php", kGenericKeywords, "//", "#", "/*", "*/", "\"'`", 0},
     {"JavaScript / TypeScript", "js ts tsx jsx mjs", kScriptKeywords, "//", "", "/*", "*/", "\"'`", 0},
     {"Python", "py", kPythonKeywords, "#", "", "", "", "\"'", 0},
+    {"Lua", "lua", "and break do else elseif end false for function goto if in local nil not or repeat return then true until while",
+     "--", "", "--[[", "]]", "\"'", 0},
     {"Shell", "sh", kPythonKeywords, "#", "", "", "", "\"'", 0},
     {"PowerShell", "ps1", kPythonKeywords, "#", "", "<#", "#>", "\"'", kCaseInsensitive},
     {"Batch", "bat", kBatKeywords, "::", "REM ", "", "", "\"", kCaseInsensitive},

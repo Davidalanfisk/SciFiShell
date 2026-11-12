@@ -86,7 +86,7 @@ bool Renderer::init(SDL_Window* window, const std::string& shaderDir) {
         return false;
     }
     int w = 0, h = 0;
-    SDL_GetWindowSize(window, &w, &h);
+    SDL_GetWindowSizeInPixels(window, &w, &h);
 
     SwapChainDesc sc;
     sc.Width = static_cast<Uint32>(w);
@@ -500,7 +500,7 @@ void Renderer::buildMeshes() {
 
 void Renderer::resize() {
     int w = 0, h = 0;
-    SDL_GetWindowSize(window_, &w, &h);
+    SDL_GetWindowSizeInPixels(window_, &w, &h);
     if (swapChain_ && w > 0 && h > 0) swapChain_->Resize(static_cast<Uint32>(w), static_cast<Uint32>(h));
 }
 

@@ -4,6 +4,7 @@
 #include "GameplayFrame.h"
 #include "GameplayControlMotion.h"
 #include "GameplayPermissions.h"
+#include "GameplayHudPanel.h"
 #include "TextRender.h"
 
 #include <algorithm>
@@ -55,6 +56,15 @@ bool AppShell::registerGameplay(const GameplayPackage& package, const std::files
     entry->view = package.view;
     entry->sound = package.sound;
     entry->hud = package.hud;
+    entry->networkHosts = package.networkHosts;
+    entry->map = package.map;
+    entry->linkHosts = package.linkHosts;
+    entry->hotkeys = package.hotkeys;
+    entry->settings = package.settings;
+    loadPluginSettings(package.id, *entry);
+    entry->name = package.name;
+    if (!package.roomModel.empty())
+        entry->roomModel = std::make_shared<const GameplayModel>(package.models.at(package.roomModel));
     entry->owner = nextGameplayOwner_++;
     entry->scene = std::make_unique<GameplaySceneRenderer>(renderer_, entry->owner);
     if (!gameplay_.emplace(package.id, entry).second) return false;
@@ -72,6 +82,17 @@ bool AppShell::registerGameplay(const GameplayPackage& package, const std::files
         entry->hudLabel.reset();
         entry->hudRevision = 0;
         entry->hudDelay = 0;
+        if (entry->networkToken) gameplayNetwork_.cancelOwner(entry->networkToken);
+        entry->networkToken = 0;
+        entry->panelsRevision = 0;
+        entry->panelDelay = 0;
+        entry->panels = {};
+        entry->panelLabels = {};
+        entry->panelScrollStart = {};
+        entry->panelRasterScales = {};
+        entry->panelAreaWidth = entry->panelAreaHeight = 0;
+        entry->panelPixelBudget = 0;
+        entry->panelUploads = 0;
         entry->pendingError.clear();
         entry->inputState.reset();
         entry->controllerInput.reset();
@@ -140,9 +161,66 @@ bool AppShell::registerGameplay(const GameplayPackage& package, const std::files
         const auto preferences = PluginManager::defaultStatePath();
         const auto storageDirectory = preferences.empty() ? std::filesystem::path{} :
             preferences.parent_path() / "plugin-storage";
+        PluginScriptRuntime::MapQuery map;
+        map.context = this;
+        map.view = [](void* context, PluginScriptRuntime::MapView* out, char* reason, size_t size) noexcept {
+            auto& app = *static_cast<AppShell*>(context);
+            const char* why = nullptr;
+            if (app.state_ != State::FileRoom || !app.city_) why = "city unavailable";
+            else if (!app.cityMode_) why = "interior";
+            else if (!app.city_->built()) why = "city unavailable";
+            if (why) { std::snprintf(reason, size, "%s", why); return false; }
+            const Vec3 eye = app.viewEye();
+            const Vec3 forward = app.vrOn_ ? app.head_.forward : app.camera_.forward();
+            const float extent = app.city_->extent();
+            out->x = eye.x; out->z = eye.z;
+            // Heading in degrees clockwise from north (-Z), matching a map drawn with north up.
+            out->heading = std::atan2(forward.x, -forward.z) * 180.0 / 3.14159265358979323846;
+            if (out->heading < 0) out->heading += 360.0;
+            out->minX = -extent; out->minZ = -extent; out->maxX = extent; out->maxZ = extent;
+            return true;
+        };
+        map.places = [](void* context, bool regions, PluginScriptRuntime::MapPlace* out, size_t max) noexcept -> size_t {
+            auto& app = *static_cast<AppShell*>(context);
+            if (!app.gameplayWorldAvailable()) return 0;
+            std::vector<City::MapPlace> places;
+            try { app.city_->mapPlaces(regions, places); } catch (const std::bad_alloc&) { return 0; }
+            size_t count = 0;
+            auto copy = [](std::array<char, 32>& to, const std::string& from) {
+                to.fill(0);
+                size_t n = 0;
+                for (unsigned char c : from) {
+                    if (n + 1 >= to.size()) break;
+                    if (c >= 0x20 && c < 0x7f) to[n++] = static_cast<char>(c);
+                }
+            };
+            for (const auto& place : places) {
+                if (count >= max) break;
+                auto& item = out[count++];
+                copy(item.id, place.id); copy(item.name, place.name); copy(item.kind, place.kind);
+                item.x = place.x; item.z = place.z; item.width = place.width; item.depth = place.depth;
+            }
+            return count;
+        };
+        PluginScriptRuntime::HostServices services;
+        services.context = this;
+        services.map = entry->map ? &map : nullptr;
+        services.settings = &entry->settingValues;
+        if (entry->hud) {
+            services.measureText = [](void*, const char* text, size_t size, float px) noexcept -> float {
+                try { return measureText(std::string(text, size), px, FontFace::UI); }
+                catch (...) { return -1.0f; }
+            };
+            services.hudView = [](void* context, int* width, int* height) noexcept {
+                auto& app = *static_cast<AppShell*>(context);
+                if (app.gameplayHudAreaWidth_ <= 0 || app.gameplayHudAreaHeight_ <= 0) return false;
+                *width = app.gameplayHudAreaWidth_; *height = app.gameplayHudAreaHeight_;
+                return true;
+            };
+        }
         if (!entry->session.startFile(entry->path, entry->digest, *gameplayConsent_, entry->world ? &world : nullptr,
                                       error, entry->view ? &view : nullptr, entry->layout ? &layout : nullptr,
-                                      storageDirectory, gameplayFrame_))
+                                      storageDirectory, gameplayFrame_, &services))
             return false;
         if (!entry->scene->prepare(entry->session, error)) {
             std::string stopError;
@@ -193,10 +271,13 @@ void AppShell::toggleGameplay(const std::string& id) {
                                                   entry->second->view, entry->second->sound, entry->second->hud,
                                                   entry->second->layout, entry->second->impulse, entry->second->control,
                                                   entry->second->storage, entry->second->controller,
-                                                  entry->second->messaging);
+                                                  entry->second->messaging, entry->second->networkHosts,
+                                                  entry->second->map, entry->second->hotkeyLetters(),
+                                                  entry->second->linkHosts);
         if (gameplayConfirm_ != id || std::chrono::steady_clock::now() >= gameplayDeadline_ ||
             settingsPanel_->notice() != notice) {
             gameplayConfirm_ = id;
+            gameplayConfirmNotice_ = notice;
             gameplayDeadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
             settingsPanel_->setNotice(notice);
             return;
@@ -326,6 +407,17 @@ void AppShell::tickGameplay(double dt, const FrameInput& input, const PadState& 
             }
         }
     }
+    for (auto& result : gameplayNetwork_.take()) {
+        for (auto& [id, entry] : gameplay_) {
+            if (!result.owner || entry->networkToken != result.owner || !entry->session.running()) continue;
+            std::string error;
+            if (!entry->session.networkResult(result.id, result.ok, result.status, result.text, error)) {
+                plugins_.markFailed(id, error);
+                if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
+            }
+            break;
+        }
+    }
     for (auto& [id, entry] : gameplay_) {
         if (!entry->session.running()) continue;
         std::string error;
@@ -362,6 +454,32 @@ void AppShell::tickGameplay(double dt, const FrameInput& input, const PadState& 
             if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
         }, input.shift);
         if (!ok) continue;
+        if (pluginInput && gameplayWorldAvailable()) {
+            for (const char key : input.pluginKeys) {
+                for (const auto& [letter, action] : entry->hotkeys) {
+                    if (letter != key) continue;
+                    if (!entry->session.action(action, error)) { ok = false; break; }
+                    const std::string link = entry->session.takeLink();
+                    if (link.empty()) continue;
+                    if (!script_.empty()) scriptLog("plugin link " + link);
+#ifdef SCIFI_HAS_CEF
+                    if (browser_) {
+                        browser_->open(link, head_.eye, head_.forward, vrOn_);
+                        raiseFocus({kWinBrowser, browser_.get()});
+                    }
+#else
+                    settingsPanel_->setNotice("BUILT-IN BROWSER UNAVAILABLE IN THIS BUILD");
+#endif
+                }
+                if (!ok) break;
+            }
+            if (!ok) {
+                plugins_.markFailed(id, error);
+                if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
+                continue;
+            }
+            if (!entry->session.running()) continue;
+        }
         const auto pose = entry->session.takeControlPose();
         if (gameplayControl_.owner() == entry->owner && !entry->session.controlOffer().available)
             releaseGameplayControl();
@@ -419,6 +537,15 @@ void AppShell::tickGameplay(double dt, const FrameInput& input, const PadState& 
             }
         }
         entry->hudDelay = std::max(0.0, entry->hudDelay - dt);
+        entry->panelDelay = std::max(0.0, entry->panelDelay - dt);
+        if (ok) {
+            const auto requests = entry->session.takeNetworkRequests();
+            if (!requests.empty() && !entry->networkToken) entry->networkToken = ++nextGameplayNetworkToken_;
+            for (const auto& request : requests)
+                if (!gameplayNetwork_.submit(entry->networkToken, request.id, request.url, error)) { ok = false; break; }
+            for (const auto cancelled : entry->session.takeNetworkCancels())
+                if (entry->networkToken) gameplayNetwork_.cancel(entry->networkToken, cancelled);
+        }
         if (ok) {
             const auto sounds = entry->session.takeSounds();
             if (!entry->soundBudget.consume(dt, sounds.count)) {
@@ -500,6 +627,28 @@ void AppShell::tickGameplay(double dt, const FrameInput& input, const PadState& 
 }
 
 void AppShell::prepareGameplay() {
+    const auto hudPlugins = std::count_if(gameplay_.begin(), gameplay_.end(), [](const auto& pair) {
+        return pair.second->session.running() && pair.second->hud;
+    });
+    const size_t budget = std::min(kGameplayHudPluginPixels, kGameplayHudGlobalPixels / std::max<size_t>(1, hudPlugins));
+    if (budget != gameplayHudPixelBudget_) {
+        // Release old allocations before redistributing the global budget.
+        for (auto& [id, entry] : gameplay_) {
+            entry->panelLabels = {};
+            entry->panelRasterScales = {};
+            entry->panelDelay = 0;
+        }
+        gameplayHudPixelBudget_ = budget;
+    }
+    gameplayHudAreaWidth_ = static_cast<int>(renderer_.desktopWidth());
+    gameplayHudAreaHeight_ = static_cast<int>(renderer_.desktopHeight());
+    if (vrOn_) {
+        const float halfH = std::tan(kFovY * 0.5f) * 1.2f;
+        gameplayHudAreaWidth_ = std::max(gameplayHudVrWidth_,
+            static_cast<int>(renderer_.desktopHeight() * 0.7f / (halfH * 2)));
+        gameplayHudAreaHeight_ = std::max(gameplayHudVrHeight_,
+            static_cast<int>(renderer_.desktopHeight() * 0.5f / (halfH * 2)));
+    }
     for (auto& [id, entry] : gameplay_) {
         if (!entry->session.running()) continue;
         std::string error;
@@ -528,7 +677,89 @@ void AppShell::prepareGameplay() {
             entry->hudRevision = text.revision;
             entry->hudDelay = 0.25;
         }
+        if (entry->hud && !updateGameplayPanels(*entry, error)) {
+            plugins_.markFailed(id, error);
+            if (settingsPanel_->isOpen()) settingsPanel_->setNotice(plugins_.error());
+        }
     }
+}
+
+bool AppShell::updateGameplayPanels(GameplayEntry& entry, std::string& error) {
+    const auto revision = entry.session.hudPanelsRevision();
+    if (revision == entry.panelsRevision && entry.panelAreaWidth == gameplayHudAreaWidth_ &&
+        entry.panelAreaHeight == gameplayHudAreaHeight_ && entry.panelPixelBudget == gameplayHudPixelBudget_) return true;
+    std::vector<PluginScriptRuntime::HudPanel> panels;
+    try {
+        panels = entry.session.hudPanels();
+    } catch (const std::bad_alloc&) {
+        error = "Cannot allocate gameplay HUD panels";
+        return false;
+    }
+    auto sameContent = [](const PluginScriptRuntime::HudPanel& a, const PluginScriptRuntime::HudPanel& b) {
+        if (a.id != b.id || a.canvasWidth != b.canvasWidth || a.canvasHeight != b.canvasHeight ||
+            a.background != b.background || a.commands.size() != b.commands.size()) return false;
+        for (size_t i = 0; i < a.commands.size(); ++i) {
+            const auto& x = a.commands[i];
+            const auto& y = b.commands[i];
+            if (x.kind != y.kind || x.x0 != y.x0 || x.y0 != y.y0 || x.x1 != y.x1 || x.y1 != y.y1 ||
+                x.size != y.size || x.color != y.color || x.align != y.align || x.text != y.text) return false;
+        }
+        return true;
+    };
+    std::array<const PluginScriptRuntime::HudPanel*, 4> next{};
+    for (const auto& panel : panels)
+        if (panel.id >= 1 && panel.id <= 4) next[static_cast<size_t>(panel.id - 1)] = &panel;
+    const auto scales = gameplayHudRasterScales(panels, gameplayHudAreaWidth_, gameplayHudAreaHeight_, gameplayHudPixelBudget_);
+    bool redraw = false;
+    for (size_t i = 0; i < next.size(); ++i)
+        if (next[i] && scales[i] > 0 && (!entry.panelLabels[i] || scales[i] != entry.panelRasterScales[i] ||
+            !sameContent(*next[i], entry.panels[i]))) redraw = true;
+    // Removal, placement and visibility apply immediately; pixel uploads are throttled to 10 Hz per plugin.
+    if (redraw && entry.panelDelay > 0) {
+        for (size_t i = 0; i < next.size(); ++i) {
+            if (!next[i] || scales[i] <= 0) {
+                entry.panels[i] = next[i] ? *next[i] : PluginScriptRuntime::HudPanel{};
+                entry.panelLabels[i].reset();
+                continue;
+            }
+            auto& shown = entry.panels[i];
+            if (!entry.panelLabels[i] || shown.id != next[i]->id) continue;
+            shown.anchor = next[i]->anchor; shown.x = next[i]->x; shown.y = next[i]->y;
+            shown.width = next[i]->width; shown.height = next[i]->height; shown.visible = next[i]->visible;
+            if (shown.scrollSpeed != next[i]->scrollSpeed) entry.panelScrollStart[i] = time_;
+            shown.scrollSpeed = next[i]->scrollSpeed; shown.viewWidth = next[i]->viewWidth;
+        }
+        return true;
+    }
+    try {
+        for (size_t i = 0; i < next.size(); ++i) {
+            if (!next[i] || scales[i] <= 0) {
+                entry.panels[i] = next[i] ? *next[i] : PluginScriptRuntime::HudPanel{};
+                entry.panelLabels[i].reset();
+                continue;
+            }
+            if (!entry.panelLabels[i] || scales[i] != entry.panelRasterScales[i] || !sameContent(*next[i], entry.panels[i])) {
+                if (!sameContent(*next[i], entry.panels[i]) || entry.panels[i].scrollSpeed != next[i]->scrollSpeed)
+                    entry.panelScrollStart[i] = time_;
+                entry.panelLabels[i].reset();
+                std::shared_ptr<GpuLabel> texture = renderer_.createLabel(rasterizeGameplayHudPanel(*next[i], scales[i]));
+                if (!texture) { error = "Cannot allocate gameplay HUD panel texture"; return false; }
+                entry.panelLabels[i] = std::move(texture);
+                ++entry.panelUploads;
+            }
+            entry.panels[i] = *next[i];
+        }
+    } catch (const std::bad_alloc&) {
+        error = "Cannot allocate gameplay HUD panel";
+        return false;
+    }
+    if (redraw) entry.panelDelay = 0.1;
+    entry.panelsRevision = revision;
+    entry.panelRasterScales = scales;
+    entry.panelAreaWidth = gameplayHudAreaWidth_;
+    entry.panelAreaHeight = gameplayHudAreaHeight_;
+    entry.panelPixelBudget = gameplayHudPixelBudget_;
+    return true;
 }
 
 void AppShell::renderGameplay() {

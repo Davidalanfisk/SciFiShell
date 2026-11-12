@@ -16,6 +16,7 @@
 #include "GameplayImpulse.h"
 #include "PluginManager.h"
 #include "PluginScript.h"
+#include "PluginWorkspace.h"
 
 #include <algorithm>
 #include <chrono>
@@ -842,7 +843,39 @@ int main() {
     duplicatePermission.replace(duplicatePermission.find(sceneWorld), sceneWorld.size(), "\"scene\",\"scene\"");
     check(!sf::PluginPackageStore::parseGameplayManifest(duplicatePermission, game, error),
           "duplicate permission rejected");
-    invalidGame.replace(invalidGame.find(sceneWorld), sceneWorld.size(), "\"scene\",\"network\"");
+    {
+        const auto networked = [&](const std::string& permissions, const std::string& hosts) {
+            auto text = gameplayManifest;
+            text.replace(text.find(sceneWorld), sceneWorld.size(), permissions);
+            if (!hosts.empty()) text.insert(text.size() - 1, ",\"network_hosts\":" + hosts);
+            sf::GameplayPackage parsed;
+            std::string parseError;
+            const bool ok = sf::PluginPackageStore::parseGameplayManifest(text, parsed, parseError);
+            return std::make_pair(ok ? parsed : sf::GameplayPackage{}, ok ? std::string{} : parseError);
+        };
+        auto valid = networked("\"scene\",\"network\"", R"(["api.example.com","news.example.org"])");
+        check(valid.second.empty() && valid.first.network &&
+                  valid.first.networkHosts == std::vector<std::string>{"api.example.com", "news.example.org"},
+              "network permission with declared hosts accepted");
+        check(networked("\"scene\",\"network\"", "").second.find("manifest") != std::string::npos,
+              "network permission without hosts rejected");
+        check(!networked(sceneWorld, R"(["api.example.com"])").second.empty(),
+              "network hosts without permission rejected");
+        for (const char* bad : {R"(["localhost"])", R"(["127.0.0.1"])", R"(["10.0.0.1"])", R"(["[::1]"])",
+                                R"(["https://api.example.com"])", R"(["api.example.com:8080"])", R"(["*.example.com"])",
+                                R"(["metadata.google.internal"])", R"(["Api.example.com"])", R"([])", R"(["a.com","a.com"])",
+                                R"(["a1.com","a2.com","a3.com","a4.com","a5.com"])"})
+            check(!networked("\"scene\",\"network\"", bad).second.empty(), (std::string("invalid network host rejected: ") + bad).c_str());
+        check(!networked("\"scene\",\"network\"", "[\"" + std::string(60, 'a') + ".com\"]").second.empty(),
+              "network host longer than 63 characters rejected");
+        check(networked("\"scene\",\"network\"", "[\"" + std::string(59, 'a') + ".com\"]").second.empty(),
+              "63-character network host accepted");
+        check(!networked("\"scene\",\"network\"",
+                         "[\"" + std::string(40, 'a') + ".com\",\"" + std::string(40, 'b') + ".com\",\"" + std::string(40, 'c') + ".com\"]")
+                   .second.empty(),
+              "network host list total length capped");
+    }
+    invalidGame.replace(invalidGame.find(sceneWorld), sceneWorld.size(), "\"scene\",\"telepathy\"");
     check(!sf::readGameplayPackage(archive({{"plugin.json", invalidGame}, {"scripts/main.lua", code}}),
                                    game, error) && game.id.empty() && error.find("manifest") != std::string::npos,
           "unsupported permission clears package");
@@ -1835,6 +1868,145 @@ int main() {
               "revocation prevents restart");
         check(restartedConsent.revoke("com.example.game", error), "consent revocation is idempotent");
         fs::remove(dir / "consents");
+    }
+    {
+        // Sample plugin: settings, hotkeys, link hosts and the custom room model all validate from the shipped fixture.
+        const fs::path sample = fs::path(SCIFI_TEST_ASSETS) / ".." / "tests" / "fixtures" / "network-hud-demo";
+        const auto slurp = [](const fs::path& path) {
+            std::ifstream in(path, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        };
+        const auto sampleManifest = slurp(sample / "plugin.json"), sampleScript = slurp(sample / "scripts" / "main.lua"),
+                   roomModel = slurp(sample / "assets" / "room.glb");
+        sf::GameplayPackage demo;
+        check(sf::readGameplayPackage(archive({{"plugin.json", sampleManifest}, {"scripts/main.lua", sampleScript},
+                                               {"assets/room.glb", roomModel}}), demo, error) &&
+                  demo.roomModel == "assets/room.glb" && demo.settings.size() == 2 &&
+                  demo.settings[0].key == "location" && demo.settings[1].choices.size() == 3 &&
+                  demo.hotkeys.size() == 1 && demo.hotkeys[0].first == 'n' && demo.hotkeys[0].second == "open_story" &&
+                  demo.linkHosts.size() == 4 && demo.networkHosts.size() == 4,
+              "sample plugin manifest with settings, hotkeys, link hosts and room model");
+        sf::GameplayModel room;
+        check(sf::decodeGameplayModel(roomModel, room, error) && room.vertices.size() > 1000,
+              "sample room GLB decodes within model limits");
+        const auto withField = [&](const std::string& field) {
+            auto text = gameplayManifest;
+            text.insert(text.size() - 1, "," + field);
+            sf::GameplayPackage parsed;
+            std::string parseError;
+            return sf::PluginPackageStore::parseGameplayManifest(text, parsed, parseError);
+        };
+        check(withField(R"("settings":["mode|MODE|a=Alpha,b=Beta"])"), "minimal setting accepted");
+        for (const char* bad : {R"("settings":["mode|MODE|a=Alpha"])", R"("settings":["Mode|MODE|a=A,b=B"])",
+                                R"("settings":["mode|MODE|a=A,a=B"])", R"("settings":["m|M|a=A,b=B","m|M|a=A,b=B"])",
+                                R"("hotkeys":["w=go"])", R"("hotkeys":["n=go","n=stop"])", R"("hotkeys":["n=Go Now"])",
+                                R"("link_hosts":["localhost"])", R"("room_model":"assets/missing.txt")"})
+            check(!withField(bad), (std::string("invalid host service manifest field rejected: ") + bad).c_str());
+        check(!sf::readGameplayPackage(archive({{"plugin.json", gameplayManifest.substr(0, gameplayManifest.size() - 1) +
+                                                     R"(,"room_model":"assets/room.glb"})"},
+                                                {"scripts/main.lua", "return {}"}}), demo, error),
+              "room model must exist in the archive");
+
+        // Editable workspace round trip and the safe apply (replace) flow.
+        const fs::path work = dir / "workspace-test", zipPath = work / "com.example.game.zip", ws = work / "edit" / "com.example.game";
+        fs::create_directories(work);
+        const auto writeFile = [](const fs::path& path, const std::string& bytes) {
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        };
+        const auto roomManifest = gameplayManifest.substr(0, gameplayManifest.size() - 1) + R"(,"room_model":"assets/room.glb"})";
+        writeFile(zipPath, archive({{"plugin.json", roomManifest}, {"scripts/main.lua", "return {}"}, {"assets/room.glb", roomModel}}));
+        bool created = false;
+        check(sf::extractGameplayWorkspace(zipPath, ws, created, error) && created &&
+                  slurp(ws / "scripts" / "main.lua") == "return {}" && slurp(ws / "assets" / "room.glb") == roomModel,
+              "workspace extraction copies validated package files");
+        writeFile(ws / "scripts" / "main.lua", "return {on_tick=function() end}");
+        check(sf::extractGameplayWorkspace(zipPath, ws, created, error) && !created &&
+                  slurp(ws / "scripts" / "main.lua") == "return {on_tick=function() end}",
+              "re-browsing preserves workspace edits");
+        const fs::path packed = work / "packed.zip";
+        check(sf::packGameplayWorkspace(ws, packed, error) && sf::readGameplayPackageFile(packed, demo, error) &&
+                  demo.script == "return {on_tick=function() end}" && demo.roomModel == "assets/room.glb",
+              "workspace packs into a valid gameplay package");
+        check(!sf::packGameplayWorkspace(ws, packed, error), "packing never overwrites an existing ZIP");
+        writeFile(ws / "notes.txt", "hello");
+        check(!sf::packGameplayWorkspace(ws, work / "extra.zip", error) && error.find("notes.txt") != std::string::npos &&
+                  !fs::exists(work / "extra.zip"),
+              "unexpected workspace file rejected");
+        fs::remove(ws / "notes.txt");
+        {
+            const fs::path settingsFile = work / "plugin-settings" / "com.example.game.txt";
+            check(sf::savePluginSettings(settingsFile, {{"location", "london"}, {"news", "bbc"}}, error),
+                  "first plugin settings save");
+            check(sf::savePluginSettings(settingsFile, {{"location", "new_york"}, {"news", "bbc"}}, error) &&
+                      sf::savePluginSettings(settingsFile, {{"location", "new_york"}, {"news", "npr"}}, error),
+                  "repeated plugin settings saves replace the existing file");
+            const auto reloaded = sf::loadPluginSettings(settingsFile);
+            check(reloaded.size() == 2 && reloaded.at("location") == "new_york" && reloaded.at("news") == "npr" &&
+                      !fs::exists(fs::path(settingsFile).concat(".tmp")),
+                  "latest plugin settings survive a reload without temp leftovers");
+            std::vector<std::pair<std::string, std::string>> tooMany(9, {"k", "v"});
+            check(!sf::savePluginSettings(settingsFile, tooMany, error) &&
+                      sf::loadPluginSettings(settingsFile).at("news") == "npr",
+                  "rejected settings save keeps the previous file");
+        }
+#ifdef _WIN32
+        fs::create_directories(work / "outside");
+        writeFile(work / "outside" / "secret.png", "x");
+        const std::string junction = "cmd /c mklink /J \"" + (ws / "assets" / "linked").string() + "\" \"" +
+                                     (work / "outside").string() + "\" >nul";
+        if (std::system(junction.c_str()) == 0) {
+            check(!sf::packGameplayWorkspace(ws, work / "junction.zip", error) && error.find("junction") != std::string::npos,
+                  "workspace junctions are never followed");
+            fs::remove(ws / "assets" / "linked");
+        } else {
+            check(false, "create workspace junction fixture");
+        }
+        check(fs::exists(work / "outside" / "secret.png"), "junction rejection leaves the target untouched");
+#endif
+
+        sf::GameplayPackage registeredPackage;
+        int failRegistrations = 0;
+        int registrations = 0;
+        const fs::path storeDir = work / "store";
+        sf::PluginPackageStore gameStore(storeDir, [](const sf::ThemePackage&) { return true; }, {},
+            [&](const sf::GameplayPackage& pkg, const fs::path&, const sf::GameplayDigest&) {
+                if (failRegistrations > 0) { --failRegistrations; return false; }
+                ++registrations;
+                registeredPackage = pkg;
+                return true;
+            });
+        gameStore.discover();
+        check(gameStore.install(zipPath) && registeredPackage.script == "return {}", "install gameplay ZIP for replace");
+        int unregistered = 0;
+        check(gameStore.replaceGameplay("com.example.game", packed, [&] { ++unregistered; }) && unregistered == 1 &&
+                  registeredPackage.script == "return {on_tick=function() end}" &&
+                  !fs::exists(storeDir / "com.example.game.zip.bak"),
+              "apply edits replaces the installed ZIP and re-registers it");
+        auto otherManifest = roomManifest;
+        otherManifest.replace(otherManifest.find("com.example.game"), 16, "com.example.gamf");
+        writeFile(work / "other.zip", archive({{"plugin.json", otherManifest}, {"scripts/main.lua", "return {}"},
+                                               {"assets/room.glb", roomModel}}));
+        unregistered = 0;
+        check(!gameStore.replaceGameplay("com.example.game", work / "other.zip", [&] { ++unregistered; }) &&
+                  unregistered == 0 && gameStore.error().find("id") != std::string::npos,
+              "edited package cannot change its id");
+        writeFile(work / "broken.zip", "not a zip");
+        check(!gameStore.replaceGameplay("com.example.game", work / "broken.zip", [&] { ++unregistered; }) && unregistered == 0,
+              "invalid edited package rejected before touching the installed copy");
+        failRegistrations = 1;
+        const int before = registrations;
+        check(!gameStore.replaceGameplay("com.example.game", zipPath, [&] { ++unregistered; }) &&
+                  gameStore.error().find("previous package restored") != std::string::npos &&
+                  registrations == before + 1 && registeredPackage.script == "return {on_tick=function() end}" &&
+                  !fs::exists(storeDir / "com.example.game.zip.bak"),
+              "failed registration rolls back to the previous package and re-registers it");
+        sf::GameplayPackage onDisk;
+        check(sf::readGameplayPackageFile(storeDir / "com.example.game.zip", onDisk, error) &&
+                  onDisk.script == "return {on_tick=function() end}",
+              "failed replace restores the previous installed ZIP");
+        std::error_code cleanup;
+        fs::remove_all(work, cleanup);
     }
     { std::ofstream out(source); out << good; }
     std::set<std::string> ids;

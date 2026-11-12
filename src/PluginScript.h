@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include <array>
 #include <cstdint>
@@ -54,7 +55,53 @@ public:
     };
     struct MessageBatch { std::array<MessageEvent, 8> events{}; size_t count = 0; };
     struct EngineSound { bool pending = false, active = false, boost = false; float speed = 0; };
-    struct HudText { std::array<char, 33> text{}; std::uint64_t revision = 0; };
+    struct HudText { std::array<char, 65> text{}; std::uint64_t revision = 0; };
+    // Plugin-owned 2D HUD panels. Placement is normalized to the visible view: the panel's anchor point
+    // (0, 0.5 or 1 on each axis) sits at that screen anchor plus (x, y); w/h are fractions of the view.
+    struct HudCommand {
+        enum class Kind { Rect, Frame, Line, Circle, Text };
+        Kind kind = Kind::Rect;
+        float x0 = 0, y0 = 0, x1 = 0, y1 = 0, size = 0;
+        std::array<std::uint8_t, 4> color{};
+        int align = 0;  // text: 0 left, 1 centre, 2 right
+        std::string text;
+    };
+    struct HudPanel {
+        int id = 0;
+        int anchor = 0;  // 0..8: row-major top_left .. bottom_right
+        double x = 0, y = 0, width = 0, height = 0;
+        int canvasWidth = 0, canvasHeight = 0;
+        bool visible = true;
+        std::array<std::uint8_t, 4> background{};
+        std::vector<HudCommand> commands;
+        std::uint64_t revision = 0;
+        // Marquee: when scrollSpeed > 0 the panel shows viewWidth canvas units, looping horizontally.
+        float scrollSpeed = 0;
+        int viewWidth = 0;
+    };
+    // Read-only city map data. Coordinates are world metres on the ground plane (x east, z south).
+    struct MapView { double x = 0, z = 0, heading = 0, minX = 0, minZ = 0, maxX = 0, maxZ = 0; };
+    struct MapPlace {
+        std::array<char, 32> id{}, name{}, kind{};
+        double x = 0, z = 0, width = 0, depth = 0;  // centre; width/depth are 0 for points of interest
+    };
+    struct MapQuery {
+        void* context = nullptr;
+        // False with a short reason when no city map applies (interior, city unavailable).
+        bool (*view)(void*, MapView*, char* reason, size_t reasonSize) noexcept = nullptr;
+        size_t (*places)(void*, bool regions, MapPlace* out, size_t max) noexcept = nullptr;
+    };
+    // Optional host services that are not tied to a single manifest permission flag.
+    struct HostServices {
+        const MapQuery* map = nullptr;                                               // "map" permission
+        const std::vector<std::pair<std::string, std::string>>* settings = nullptr;  // declared key, current value
+        const std::vector<std::string>* actions = nullptr;                           // hotkey action names
+        const std::vector<std::string>* linkHosts = nullptr;                         // open_link destinations
+        void* context = nullptr;
+        float (*measureText)(void*, const char* text, size_t size, float px) noexcept = nullptr;  // hud only
+        bool (*hudView)(void*, int* width, int* height) noexcept = nullptr;                     // hud only
+    };
+    struct NetworkRequest { std::uint64_t id = 0; std::string url; };
     struct Impulse { double x = 0, y = 0, z = 0; bool pending = false; };
     struct ControlOffer { double x = 0, y = 0, z = 0; bool available = false; };
     struct ControlPose { double x = 0, y = 0, z = 0, yaw = 0, pitch = 0; bool pending = false; };
@@ -85,11 +132,17 @@ public:
                const ViewQuery* view = nullptr, bool soundGranted = false, bool hudGranted = false,
                const LayoutQuery* layout = nullptr, bool impulseGranted = false, bool controlGranted = false,
                bool inputGranted = false, GameplayStorage* storage = nullptr, bool messagingGranted = false,
-               std::uint64_t initialFrame = 0);
+               std::uint64_t initialFrame = 0, const std::vector<std::string>* networkHosts = nullptr,
+               const HostServices* services = nullptr);
     void prepareFrame(std::uint64_t frame);
     bool tick(double seconds, std::string& error);
     bool input(const std::string& control, double value, std::string& error);
     bool message(std::string_view sender, const MessageEvent& event, std::string& error);
+    // The user changed a declared setting on the plugin's room console; dispatches on_setting(key, value).
+    bool setting(const std::string& key, const std::string& value, std::string& error);
+    // A declared hotkey was freshly pressed; dispatches on_action(name). open_link is only valid inside it.
+    bool action(const std::string& name, std::string& error);
+    std::string takeLink();  // validated https URL requested by open_link during the last action, or empty
     bool stop(std::string& error);
     bool running() const;
     std::vector<Box> boxes() const;
@@ -100,6 +153,14 @@ public:
     MessageBatch takeMessages();
     EngineSound takeEngineSound();
     HudText hudText() const;
+    // Revision changes whenever any panel is created, moved, redrawn or removed.
+    std::uint64_t hudPanelsRevision() const;
+    std::vector<HudPanel> hudPanels() const;
+    // Requests queued by net_get since the last call. The host must answer each id exactly once with
+    // networkResult (or drop it when the runtime stops); unknown or cancelled ids are ignored.
+    std::vector<NetworkRequest> takeNetworkRequests();
+    std::vector<std::uint64_t> takeNetworkCancels();  // ids already taken by takeNetworkRequests, then net_cancel'd
+    bool networkResult(std::uint64_t id, bool ok, int status, const std::string& text, std::string& error);
     Impulse takeImpulse();
     ControlOffer controlOffer() const;
     ControlPose takeControlPose();

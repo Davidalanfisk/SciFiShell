@@ -105,6 +105,13 @@ void City::setDowntown(const std::map<std::string, int>& plots,
     if (resized) resizeDistrictGeometry();
 }
 
+void City::clearDowntownModel(const std::string& id) {
+    const auto it = downtownModels_.find(id);
+    if (it == downtownModels_.end()) return;
+    renderer_.releaseGameplayModels(it->second.owner);
+    downtownModels_.erase(it);
+}
+
 void City::resizeDistrictGeometry() {
     clearHover();
     hasEntered_ = false;
@@ -185,7 +192,7 @@ bool City::setDowntownModel(const std::string& id, const GameplayModel& model, s
 bool City::downtownExit(const std::string& id, Vec3& pos) const {
     for (const auto& b : downtown_) if (b.id == id) {
         const auto p = downtownPlot(b.slot);
-        pos = {p.x, 1.7f, p.z - 12};
+        pos = {p.x, 1.7f, p.z - (downtownScale(b) > 1.0f ? 14.0f : 12.0f)};
         resolve(pos, 0.8f, 1.7f);
         pos.y = floorAt(pos, 0.8f, 1.7f) + 1.7f;
         return true;
@@ -215,14 +222,61 @@ bool City::pickDowntown(Vec3 o, Vec3 d, std::string& id) const {
         const auto p = downtownPlot(b.slot);
         if (std::fabs(d.z) < 1e-6f) continue;
         const bool custom = downtownModels_.count(b.id) != 0;
-        const float t = (p.z - (custom ? 9.0f : 6.1f) - o.z) / d.z;
+        const float s = downtownScale(b);
+        const float t = (p.z - (custom ? 9.0f : 6.1f * s) - o.z) / d.z;
         const float x = o.x + d.x*t, y = o.y + d.y*t;
-        if (t >= 0 && t < best && std::fabs(x-p.x) < (custom ? 2.0f : 1.36f) &&
-            y >= 0 && y <= (custom ? 4.0f : 3.4f)) {
+        if (t >= 0 && t < best && std::fabs(x-p.x) < (custom ? 2.0f : 1.36f * s) &&
+            y >= 0 && y <= (custom ? 4.0f : 3.4f * s)) {
             id = b.id; best = t;
         }
     }
     return best < 12.0f;
+}
+
+float City::downtownScale(const DowntownBuilding& b) const {
+    if (downtownModels_.count(b.id) || b.id == kDowntownArcadeId) return 1.0f;
+    return kDowntownDefaultScale;
+}
+
+void City::renderDefaultDowntown(Renderer& r, const DowntownBuilding& b, Vec3 p, Vec3 accent, Vec3 alt) {
+    const float s = kDowntownDefaultScale;
+    auto box = [&](Vec3 at, Vec3 size, Vec3 colour, bool glow = false) {
+        renderBox(r, {p.x+at.x*s, at.y*s, p.z+at.z*s}, size*s, colour, 0.5f, glow ? 4 : 3, 1, glow ? 1.0f : 0.0f, 0);
+    };
+    const Vec3 body = accent*0.65f;
+    box({0,4,0}, {12,8,12}, body);
+    for (float side : {-1.0f, 1.0f}) {
+        box({side*5.7f,4.2f,0}, {0.6f,8.4f,12.6f}, body);           // pilasters, as on the settings buildings
+        box({side*4.8f,7.8f,0}, {0.22f,0.22f,12.8f}, alt, true);    // cornice light strips
+        box({side*2.7f,2.1f,-6.35f}, {0.3f,4.2f,0.6f}, body);       // door buttresses
+        box({side*6.05f,3.0f,-3.0f}, {0.12f,4.5f,0.12f}, alt, true);
+        box({side*6.05f,3.0f,3.0f}, {0.12f,4.5f,0.12f}, alt, true);
+    }
+    box({0,8.1f,0.5f}, {10.4f,0.35f,10.8f}, body);
+    for (int i = 0; i < 3; ++i) box({0,5.2f+i*0.7f,-6.2f}, {7-i*1.2f,0.18f,0.15f}, alt, true);
+    // A distinct roof silhouette per plugin so neighbouring default buildings are easy to tell apart.
+    uint32_t hash = 2166136261u;
+    for (unsigned char c : b.id) hash = (hash ^ c) * 16777619u;
+    switch (hash % 4) {
+        case 0:
+            box({0,9,0}, {5,2,4}, body);
+            for (int i = 0; i < 3; ++i) box({-1.6f+i*1.6f,9,-2.1f}, {0.7f,1.3f,0.15f}, alt, true);
+            break;
+        case 1:
+            for (int i = 0; i < 3; ++i) box({float(i-1)*3,8.5f+i*0.4f,0}, {0.3f,1+i*0.8f,0.3f}, alt, true);
+            break;
+        case 2:
+            box({0,8.5f,0}, {8,1,8}, body);
+            for (float x : {-3.2f,3.2f}) for (float z : {-3.2f,3.2f}) box({x,9.6f,z}, {0.5f,1.2f,0.5f}, alt, true);
+            break;
+        default:
+            for (int i = 0; i < 5; ++i) {
+                const float height = 1.0f + float((i*3)%5)*0.35f;  // keeps the roof under the 16 m district clearance
+                box({float(i-2)*1.5f,8+height*0.5f,0}, {1.1f,height,3.0f}, body);
+                box({float(i-2)*1.5f,8+height,-1.6f}, {0.7f,0.12f,0.15f}, alt, true);
+            }
+            break;
+    }
 }
 
 void City::renderDowntown(Renderer& r, Vec3 eye) {
@@ -238,6 +292,11 @@ void City::renderDowntown(Renderer& r, Vec3 eye) {
         renderBox(r, {p.x, 0.025f, p.z}, {28, 0.05f, 28}, th.alt*0.4f, 0, 6, 1, 0, 0);
         const auto model = downtownModels_.find(b.id);
         if (model == downtownModels_.end()) {
+            if (b.id != kDowntownArcadeId) {
+                renderDefaultDowntown(r, b, {p.x,0,p.z}, th.accent, th.alt);
+                renderDistrictDoor(r, b, {p.x,0,p.z}, th.alt, false, kDowntownDefaultScale);
+                continue;
+            }
             renderBox(r, {p.x, 4, p.z}, {12, 8, 12}, th.accent*0.65f, 0.5f, 3, 1, 0, 0);
             if(b.id==kDowntownArcadeId) {
                 const Vec3 cyan{.12f,.8f,.75f},pink{.65f,.13f,.46f};
@@ -266,11 +325,11 @@ void City::renderDowntown(Renderer& r, Vec3 eye) {
     }
 }
 
-void City::renderDistrictDoor(Renderer& r, DowntownBuilding& b, Vec3 plot, Vec3 tint, bool north) {
+void City::renderDistrictDoor(Renderer& r, DowntownBuilding& b, Vec3 plot, Vec3 tint, bool north, float scale) {
     if (!b.label && labelBudget_ > 0) { b.label = makeDoorLabel(b.name,tint); --labelBudget_; }
     if (!b.label) return;
     const float sign = north ? 1.0f : -1.0f;
-    const float size = north ? 2.0f : 1.0f;
+    const float size = scale > 0 ? scale : (north ? 2.0f : 1.0f);
     const float z = plot.z+sign*6.0f*size, dh = 3.4f*size, dw = dh*0.8f;
     const Vec3 glow = tint*0.8f+Vec3{0.3f,0.3f,0.3f};
     for (float side : {-1.0f,1.0f})
@@ -379,6 +438,45 @@ int City::gameplayCell(float x, float z, double* result) const noexcept {
         }
     }
     return 0;
+}
+
+void City::mapPlaces(bool regions, std::vector<MapPlace>& out) const {
+    out.clear();
+    if (!built_) return;
+    auto add = [&](std::string id, std::string name, std::string kind, float x, float z, float w, float d) {
+        out.push_back({std::move(id), std::move(name), std::move(kind), x, z, w, d});
+    };
+    if (regions) {
+        add("core", "CORE", "hub", 0, 0, 72, 72);
+        int index = 0;
+        for (const auto& p : platforms_) {
+            ++index;
+            if (p.gone || p.grow <= 0.05f) continue;
+            // Platform names are drive letters/volume labels; plugins only get an anonymous ordinal.
+            add("storage-" + std::to_string(index), "STORAGE " + std::to_string(index), "storage", p.cx, p.cz, p.side, p.side);
+        }
+        if (!downtown_.empty()) {
+            const auto& r = downtownRegion_;
+            add("downtown", "DOWNTOWN", "district", r.x, r.z, r.width, r.depth);
+        }
+        if (!settingsBuildings_.empty()) {
+            const auto& r = settingsRegion_;
+            add("settings", "SETTINGS", "district", r.x, r.z, r.width, r.depth);
+        }
+        return;
+    }
+    add("cpu", "CPU", "monument", 0, -55, 0, 0);
+    add("ram", "RAM", "monument", -52, 30, 0, 0);
+    add("gpu", "GPU", "monument", 52, 30, 0, 0);
+    for (const auto& b : downtown_) {
+        const auto p = downtownPlot(b.slot);
+        const float side = 12.0f * downtownScale(b);
+        add("plugin:" + b.id, b.name, "plugin", p.x, p.z, side, side);
+    }
+    for (const auto& b : settingsBuildings_) {
+        const auto p = downtownPlot(b.slot, true);
+        add("settings:" + b.id, b.name, "settings", p.x, p.z, 24, 24);
+    }
 }
 
 bool City::prepareDrivingModule(const std::filesystem::path& path, std::string& error) {
@@ -2181,8 +2279,10 @@ void City::gatherBoxes(const Vec3& p, float rad, std::vector<Box>& boxes) const 
     monumentBoxes(boxes);
     for (const auto& b : downtown_) {
         const auto plot = downtownPlot(b.slot);
-        if (std::fabs(p.x-plot.x) > 8+rad || std::fabs(p.z-plot.z) > 8+rad) continue;
-        boxes.push_back({plot.x-6, plot.x+6, downtownModels_.count(b.id) ? 12.0f : 8.0f, plot.z-6, plot.z+6});
+        const float half = 6.0f * downtownScale(b);
+        if (std::fabs(p.x-plot.x) > half+2+rad || std::fabs(p.z-plot.z) > half+2+rad) continue;
+        const float top = downtownModels_.count(b.id) ? 12.0f : 8.0f * downtownScale(b);
+        boxes.push_back({plot.x-half, plot.x+half, top, plot.z-half, plot.z+half});
     }
     for (const auto& b : settingsBuildings_) {
         const auto plot = downtownPlot(b.slot,true);

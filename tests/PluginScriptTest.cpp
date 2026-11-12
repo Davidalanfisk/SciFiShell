@@ -1,4 +1,5 @@
 #include "PluginScript.h"
+#include "PluginNetPolicy.h"
 #include "PluginLimits.h"
 #include "GameplayCellGrid.h"
 #include "GameplayControlLease.h"
@@ -7,15 +8,18 @@
 #include "GameplayClickRouter.h"
 #include "GameplayMessaging.h"
 
+#include <cstdio>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 
 int main() {
     int failures = 0;
-    auto check = [&](bool ok, const char* message) {
-        if (!ok) { std::cerr << message << '\n'; ++failures; }
-    };
     std::string result, error;
+    auto check = [&](bool ok, const char* message) {
+        if (!ok) { std::cerr << message << ' ' << error << '\n'; ++failures; }
+    };
     struct Tower { double x, z; };
     std::vector<Tower> towers{{-14, -14}, {14, 14}};
     double cell[5]{};
@@ -89,11 +93,11 @@ int main() {
                 "' return {on_tick=function() if big=='' then missing() end end}";
         check(runtime.start(large, error) && runtime.tick(0.01, error) && runtime.stop(error),
               "large source literal loads beyond old 1 MiB compile allocation limit");
-        large = "local big='" + std::string(2 * 1024 * 1024, 'x') +
+        large = "local big='" + std::string(9 * 1024 * 1024, 'x') +
                 "' return {on_tick=function() big=big..big end}";
         check(runtime.start(large, error) && !runtime.tick(0.01, error) &&
               !runtime.running() && error.find("memory") != std::string::npos,
-              "loaded-code allowance does not grant unbounded callback allocations");
+              "loaded-code allowance does not grant unbounded callback allocations beyond 16 MiB");
         large = "return {on_tick=function() while true do end end}";
         large.resize(sf::kPluginTextLimit, ' ');
         check(runtime.start(large, error) && !runtime.tick(0.01, error) &&
@@ -407,7 +411,7 @@ int main() {
     check(!runtime.start("return os.execute('x')", error), "lifecycle has no OS library");
     check(!runtime.start("while true do end", error) && error.find("instruction limit") != std::string::npos,
           "startup instruction limit");
-    check(runtime.start("local s='xx' return {on_tick=function() for i=1,20 do s=s..s end end}", error),
+    check(runtime.start("local s='xx' return {on_tick=function() for i=1,24 do s=s..s end end}", error),
           "start for lifecycle allocation limit");
     check(!runtime.tick(0.1, error) && !runtime.running() && error.find("memory") != std::string::npos,
           "callback allocation limit closes state");
@@ -787,11 +791,222 @@ int main() {
                         error, false, nullptr, nullptr, nullptr, false, true) &&
           !runtime.tick(0.1, error) && runtime.hudText().text[0] == 0,
           "failed callback removes HUD");
-    check(!runtime.start("hud_set('123456789012345678901234567890123') return {}",
+    check(!runtime.start("hud_set('" + std::string(65, '1') + "') return {}",
                          error, false, nullptr, nullptr, nullptr, false, true) &&
           !runtime.start("hud_set('bad\\ntext') return {}", error, false, nullptr, nullptr, nullptr, false, true) &&
           !runtime.start("hud_set(123) return {}", error, false, nullptr, nullptr, nullptr, false, true),
           "HUD string type, length and printable text are enforced");
+    check(runtime.start("hud_set('" + std::string(64, 'A') + "') return {}", error, false, nullptr, nullptr, nullptr,
+                        false, true) && std::string(runtime.hudText().text.data()).size() == 64 && runtime.stop(error) &&
+          !runtime.start("hud_set('" + std::string(65, 'A') + "') return {}", error, false, nullptr, nullptr, nullptr,
+                         false, true) && error.find("64") != std::string::npos,
+          "HUD text accepts 64 characters and rejects 65");
+    {
+        auto hudStart = [&](const std::string& source) {
+            return runtime.start(source, error, false, nullptr, nullptr, nullptr, false, true);
+        };
+        check(hudStart("local p=hud_panel('bottom_right',-0.01,-0.01,0.25,0.2) "
+                       "hud_clear(p,0,0,0,0.5) hud_rect(p,0,0,10,10,1,0,0) hud_rect(p,0,0,10,10,1,0,0,1,3) "
+                       "hud_frame(p,1,1,50,50,2,0,1,0,0.5) hud_line(p,0,0,100,100,1.5,1,1,1) "
+                       "hud_circle(p,40,40,12,0,0,1) hud_text(p,4,4,'Wetter \\xc3\\xbc 12\\xc2\\xb0C',18,1,1,1,1,'right') "
+                       "return {}") && runtime.hudPanels().size() == 1,
+              "HUD panel accepts shapes and UTF-8 text");
+        auto panels = runtime.hudPanels();
+        const size_t commandCount = panels.empty() ? 0 : panels[0].commands.size();
+        panels.resize(1);
+        panels[0].commands.resize(6);
+        check(commandCount == 6 && panels[0].id == 1 && panels[0].anchor == 8 && panels[0].canvasWidth == 320 &&
+              panels[0].canvasHeight == 144 && panels[0].commands.size() == 6 && panels[0].background[3] == 128 &&
+              panels[0].commands[1].size == 3 && panels[0].commands[5].align == 2 &&
+              panels[0].commands[5].text == "Wetter \xc3\xbc 12\xc2\xb0" "C",
+              "HUD panel records placement, default canvas and commands");
+        const auto revision = runtime.hudPanelsRevision();
+        check(runtime.stop(error) && runtime.hudPanels().empty() && runtime.hudPanelsRevision() > revision,
+              "HUD panels cleared on stop with a new revision");
+        check(hudStart("local a=hud_panel('top_left',0,0,0.5,0.5,1024,1024) "
+                       "local ok=pcall(hud_panel,'top',0,0,0.1,0.1,16,16) assert(not ok) "
+                       "hud_panel_remove(a) for i=1,4 do assert(hud_panel('center',0,0,0.1,0.1,16,16)==i) end "
+                       "assert(not pcall(hud_panel,'center',0,0,0.1,0.1)) return {}") && runtime.stop(error),
+              "HUD panel count and total canvas pixels are bounded and slots are reused");
+        check(!hudStart("hud_panel('middle',0,0,0.1,0.1) return {}") && error.find("anchor") != std::string::npos &&
+              !hudStart("hud_panel('top',2,0,0.1,0.1) return {}") &&
+              !hudStart("hud_panel('top',0,0,0.01,0.1) return {}") &&
+              !hudStart("hud_panel('top',0,0,0.1,0.1,8,8) return {}") &&
+              !hudStart("hud_rect(1,0,0,1,1,1,1,1) return {}") && error.find("unknown HUD panel") != std::string::npos &&
+              !hudStart("local p=hud_panel('top',0,0,0.1,0.1) hud_rect(p,0,0,1/0,1,1,1,1) return {}") &&
+              !hudStart("local p=hud_panel('top',0,0,0.1,0.1) hud_rect(p,0,0,1,1,2,1,1) return {}") &&
+              !hudStart("local p=hud_panel('top',0,0,0.1,0.1) hud_text(p,0,0,'a\\nb',12) return {}") &&
+              !hudStart("local p=hud_panel('top',0,0,0.1,0.1) hud_text(p,0,0,'\\xff',12) return {}") &&
+              !hudStart("local p=hud_panel('top',0,0,0.1,0.1) hud_text(p,0,0,'x',200) return {}") &&
+              !hudStart("local p=hud_panel('top',0,0,0.1,0.1) hud_text(p,0,0,'x',12,1,1,1,1,'justify') return {}"),
+              "HUD panel placement, colours, coordinates and text are validated");
+        check(!hudStart("local p=hud_panel('top',0,0,0.1,0.1) for i=1,513 do hud_rect(p,0,0,1,1,1,1,1) end return {}") &&
+              error.find("512") != std::string::npos &&
+              hudStart("local p=hud_panel('top',0,0,0.1,0.1) for k=1,3 do for i=1,512 do hud_rect(p,0,0,1,1,1,1,1) end "
+                       "hud_clear(p) end hud_panel_visible(p,false) hud_panel_move(p,'left',0.1,0,0.3,0.3) return {}") &&
+              runtime.hudPanels()[0].commands.empty() && !runtime.hudPanels()[0].visible &&
+              runtime.hudPanels()[0].anchor == 3 && runtime.stop(error),
+              "HUD panel command budget, clear, visibility and move");
+        check(!hudStart("local p=hud_panel('top',0,0,0.1,0.1) local s=string.rep('a',256) "
+                        "for i=1,65 do hud_text(p,0,0,s,12) end return {}") && error.find("16 KiB") != std::string::npos,
+              "HUD panel text bytes are bounded");
+        check(!runtime.start("hud_panel('top',0,0,0.1,0.1) return {}", error) &&
+              error.find("'hud' permission") != std::string::npos,
+              "missing HUD permission names the required permission");
+    }
+    {
+        using namespace sf::pluginnet;
+        auto v4 = [](std::uint8_t a, std::uint8_t b, std::uint8_t c, std::uint8_t d) {
+            const std::uint8_t address[4]{a, b, c, d};
+            return publicIpv4(address);
+        };
+        check(v4(93, 184, 216, 34) && v4(1, 1, 1, 1), "public IPv4 accepted");
+        check(!v4(127, 0, 0, 1) && !v4(10, 1, 2, 3) && !v4(172, 16, 0, 1) && !v4(192, 168, 1, 1) &&
+                  !v4(169, 254, 169, 254) && !v4(100, 64, 0, 1) && !v4(0, 0, 0, 0) && !v4(224, 0, 0, 1) &&
+                  !v4(255, 255, 255, 255) && !v4(192, 0, 2, 1) && !v4(198, 18, 0, 1),
+              "private, loopback, link-local, metadata, CGNAT, multicast and reserved IPv4 refused");
+        auto v6 = [](std::initializer_list<std::uint8_t> bytes) {
+            std::uint8_t address[16]{};
+            size_t i = 0;
+            for (auto b : bytes) address[i++] = b;
+            return publicIpv6(address);
+        };
+        check(v6({0x26, 0x06, 0x47, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}), "public IPv6 accepted");
+        check(!v6({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}) && !v6({0xfe, 0x80}) && !v6({0xfc}) && !v6({0xfd}) &&
+                  !v6({0xff, 0x02}) && !v6({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127, 0, 0, 1}) &&
+                  !v6({0x20, 0x01, 0x0d, 0xb8}),
+              "loopback, link-local, ULA, multicast, mapped and documentation IPv6 refused");
+        check(textContentType("application/json; charset=utf-8") && textContentType("text/plain") &&
+                  textContentType("application/rss+xml") && textContentType("application/atom+xml") &&
+                  !textContentType("application/octet-stream") && !textContentType("image/png") &&
+                  !textContentType("application/javascript") && !textContentType(""),
+              "only text-like content types accepted");
+        std::string body = "\xEF\xBB\xBFhello\tworld\r\n";
+        check(sanitizeText(body, "text/plain", error) && body == "hello\tworld\r\n", "BOM stripped from UTF-8 text");
+        body = "caf\xE9";
+        check(sanitizeText(body, "text/plain; charset=ISO-8859-1", error) && body == "caf\xC3\xA9",
+              "ISO-8859-1 converted to UTF-8");
+        body = "caf\xE9";
+        check(!sanitizeText(body, "text/plain", error), "invalid UTF-8 rejected");
+        body = std::string("a\0b", 3);
+        check(!sanitizeText(body, "text/plain", error), "NUL in text rejected");
+        body = "a\x1b[2Jb";
+        check(!sanitizeText(body, "text/plain", error), "control characters in text rejected");
+        std::vector<FeedItem> items;
+        check(parseFeed("<rss><channel><item><title>A &amp; B</title><link>https://x.example/a</link>"
+                        "<description><![CDATA[<b>bold</b> <script>alert(1)</script>text]]></description></item>"
+                        "<item><title>Second</title></item></channel></rss>", 1, items, error) &&
+                  items.size() == 1 && items[0].title == "A & B" && items[0].link == "https://x.example/a" &&
+                  items[0].summary.find('<') == std::string::npos &&
+                  items[0].summary.find("alert") == std::string::npos,
+              "RSS items are plain text, capped, and drop markup and scripts");
+        items.clear();
+        check(!parseFeed("just some text", 10, items, error) && items.empty(), "non-feed text rejected by feed parser");
+    }
+    {
+        const std::vector<std::string> hosts{"api.example.com", "news.example.org"};
+        auto netStart = [&](const std::string& source) {
+            return runtime.start(source, error, false, nullptr, nullptr, nullptr, false, false, nullptr, false, false,
+                                 false, nullptr, false, 0, &hosts);
+        };
+        check(!runtime.start("net_get('https://api.example.com/') return {}", error) &&
+              error.find("'network' permission") != std::string::npos,
+              "network API absent without permission and the error names it");
+        check(netStart("local c=capabilities() assert(c.network and not c.hud and c.api==3) "
+                       "results={} local id=net_get('https://API.example.com:443/v1/weather?lat=1&lon=2') "
+                       "assert(id==1) "
+                       "return {on_network=function(i,ok,status,text) results[#results+1]=i..':'..tostring(ok)..':'..status..':'..text "
+                       "hud=1 end, on_tick=function() assert(#results==1 and results[1]=='1:true:200:{\"t\":1}') end}"),
+              "network-granted runtime queues a declared-host request");
+        auto requests = runtime.takeNetworkRequests();
+        check(requests.size() == 1 && requests[0].id == 1 &&
+              requests[0].url == "https://api.example.com/v1/weather?lat=1&lon=2" && runtime.takeNetworkRequests().empty(),
+              "queued request is normalized and taken once");
+        check(runtime.networkResult(1, true, 200, "{\"t\":1}", error) && runtime.networkResult(1, true, 200, "x", error) &&
+              runtime.networkResult(77, false, 0, "nope", error) && runtime.tick(0.01, error) && runtime.stop(error),
+              "network result dispatched once and unknown or repeated ids are ignored");
+        check(netStart("assert(not pcall(net_get, 'http://api.example.com/')) assert(not pcall(storage_get)) return {}") && runtime.stop(error), "network errors can be caught with pcall");
+        check(!netStart("net_get('http://api.example.com/') return {}") && error.find("https") != std::string::npos &&
+              !netStart("net_get('https://evil.example.net/') return {}") &&
+              !netStart("net_get('https://user@api.example.com/') return {}") &&
+              !netStart("net_get('https://api.example.com:8443/') return {}") &&
+              !netStart("net_get('https://api.example.com/#x') return {}") &&
+              !netStart("net_get('https://api.example.com.evil.net/') return {}") &&
+              !netStart("net_get('https://127.0.0.1/') return {}"),
+              "undeclared hosts, non-HTTPS, userinfo, ports and fragments are rejected");
+        check(netStart("for i=1,4 do assert(net_get('https://api.example.com/'..i)==i) end "
+                       "local id,err=net_get('https://api.example.com/5') assert(id==nil and err:find('pending')) "
+                       "assert(net_pending()==4 and net_cancel(2) and not net_cancel(2) and net_pending()==3) "
+                       "local id2,err2=net_get('https://api.example.com/6') assert(id2==nil and err2:find('rate')) "
+                       "return {on_network=function() error('cancelled request delivered') end}") &&
+              runtime.takeNetworkRequests().size() == 3 && runtime.networkResult(2, true, 200, "late", error),
+              "pending and rate limits return nil plus message and cancellation drops queued work");
+        check(runtime.takeNetworkCancels().empty(), "cancelling a still-queued request needs no transport cancel");
+        check(runtime.networkResult(1, false, 404, "network: HTTP status 404", error) == false &&
+              error.find("cancelled request delivered") != std::string::npos && !runtime.running(),
+              "on_network errors stop the runtime like other callbacks");
+        check(netStart("net_get('https://api.example.com/') return {}") && runtime.stop(error) &&
+              runtime.takeNetworkRequests().empty() && runtime.networkResult(1, true, 200, "x", error),
+              "stop drops queued requests and late results are ignored");
+        check(netStart("net_get('https://api.example.com/a') net_get('https://api.example.com/b') "
+                       "return {on_tick=function() net_cancel(1) end, "
+                       "on_network=function(id) if id==1 then error('cancelled request delivered') end end}") &&
+              runtime.takeNetworkRequests().size() == 2 && runtime.tick(0.01, error) &&
+              runtime.takeNetworkCancels() == std::vector<std::uint64_t>{1} && runtime.takeNetworkCancels().empty() &&
+              runtime.networkResult(1, true, 200, "late", error) && runtime.running() && runtime.stop(error),
+              "net_cancel of a submitted request is handed to the host to abort the transfer");
+        {
+            // Worst case a plugin can be handed: four maximal (1 MiB) bodies, each retained along with its
+            // decoded JSON. The 16 MiB Lua allocator limit must fail cleanly instead of growing without bound.
+            std::string big = "[";
+            for (int i = 0; big.size() < 1000000; ++i) big += std::to_string(100000 + i) + ",";
+            big.back() = ']';
+            check(netStart("keep={} for i=1,4 do assert(net_get('https://api.example.com/'..i)==i) end "
+                           "return {on_network=function(i,ok,s,t) assert(ok) keep[#keep+1]=t "
+                           "keep[#keep+1]=assert(json_decode(t)) end}") &&
+                      runtime.takeNetworkRequests().size() == 4 && runtime.networkResult(1, true, 200, big, error),
+                  "a maximal JSON result is delivered and decoded within the Lua memory limit");
+            bool failed = false;
+            for (std::uint64_t id = 2; id <= 4 && !failed; ++id) failed = !runtime.networkResult(id, true, 200, big, error);
+            check(failed && error.find("memory") != std::string::npos && !runtime.running(),
+                  "retaining four maximal results and their JSON hits the 16 MiB limit as a clean memory error");
+            check(netStart("return {}") && runtime.stop(error), "runtime restarts normally after a memory failure");
+        }
+        const std::vector<std::string> badHosts{"localhost"};
+        check(!runtime.start("return {}", error, false, nullptr, nullptr, nullptr, false, false, nullptr, false, false,
+                             false, nullptr, false, 0, &badHosts),
+              "runtime refuses an invalid host list");
+    }
+    check(runtime.start(
+              "local v,e=json_decode('{\"a\":[1,2.5,\"x\\\\u00e9\",true,null,{\"b\":-3}],\"n\":null}') "
+              "assert(v.a[1]==1 and math.type(v.a[1])=='integer' and v.a[2]==2.5 and v.a[3]=='x\\xc3\\xa9' "
+              "and v.a[4]==true and v.a[5]==nil and v.a[6].b==-3 and v.n==nil) "
+              "local bad,msg=json_decode('{\"a\":}') assert(bad==nil and msg:find('json_decode')) "
+              "assert(json_decode(string.rep('[',40)..string.rep(']',40))==nil) "
+              "assert(json_decode('[1,]')==nil and json_decode('\"\\\\ud800\"')==nil and json_decode('1 2')==nil) "
+              "local items=assert(feed_items([==[<rss><channel><item><title>A &amp; B</title><link>https://n.example/1</link>"
+              "<description><![CDATA[<p>Hello <b>world</b><script>x()</script></p>]]></description>"
+              "<pubDate>Mon, 01 Jan 2024</pubDate></item><item><title>Two</title></item></channel></rss>]==], 1)) "
+              "assert(#items==1 and items[1].title=='A & B' and items[1].link=='https://n.example/1' "
+              "and items[1].summary=='Hello world' and items[1].published=='Mon, 01 Jan 2024') "
+              "local atom=assert(feed_items('<feed><entry><title>T</title><link rel=\"alternate\" href=\"https://a.example/x\"/>"
+              "<summary>S &lt;i&gt;i&lt;/i&gt;</summary><updated>2024</updated></entry></feed>')) "
+              "assert(atom[1].link=='https://a.example/x' and atom[1].summary=='S i') "
+              "local none,why=feed_items('plain text') assert(none==nil and why:find('RSS')) "
+              "return {}", error) && runtime.stop(error),
+          "json_decode and feed_items parse untrusted text without executing it");
+    check(runtime.start(
+              "assert(type(pcall)=='function' and tostring(3)=='3' and ('abc'):upper()=='ABC') "
+              "assert(load==nil and setmetatable==nil and getmetatable==nil and rawset==nil and require==nil "
+              "and collectgarbage==nil and string.gsub==nil and string.match==nil and string.dump==nil and os==nil "
+              "and io==nil and debug==nil) "
+              "assert(('a.b'):find('.',1,true)==2 and not pcall(string.find,'a.b','.')) "
+              "assert(table.concat({1,2},',')=='1,2' and utf8.len('\\xc3\\xa9')==1) "
+              "return {}", error) && runtime.stop(error),
+          "gameplay exposes only the vetted safe Lua subset");
+    check(!runtime.start("while true do pcall(function() while true do end end) end return {}", error),
+          "pcall cannot swallow the instruction limit");
+    runtime.stop(error);
     sf::PluginScriptRuntime other;
     check(runtime.start("scene_box(1,0,0,1,1,1,1,1,1) return {}", error, true) &&
           other.start("scene_box(2,0,0,1,1,1,1,1,1) return {}", error, true),
@@ -883,5 +1098,112 @@ int main() {
           runtime.tick(0.1, error) && runtime.models().empty() && runtime.stop(error),
           "remove model by owned handle");
     check(!sf::runPluginScript("return math.sin(1)", result, error), "one-shot script has no math library");
+    {
+        // Host services: text measurement, view size, marquee, settings, hotkey actions, links and the city map.
+        using Runtime = sf::PluginScriptRuntime;
+        struct Fake { bool mapOk = true; int calls = 0; } fake;
+        Runtime::MapQuery map;
+        map.context = &fake;
+        map.view = [](void* c, Runtime::MapView* v, char* reason, size_t size) noexcept {
+            auto& f = *static_cast<Fake*>(c);
+            ++f.calls;
+            if (!f.mapOk) { std::snprintf(reason, size, "inside a building"); return false; }
+            *v = {10, -20, 90, -100, -100, 100, 100};
+            return true;
+        };
+        map.places = [](void*, bool regions, Runtime::MapPlace* out, size_t max) noexcept -> size_t {
+            if (max < 2) return 0;
+            for (size_t i = 0; i < 2; ++i) {
+                std::snprintf(out[i].id.data(), out[i].id.size(), "%s-%d", regions ? "region" : "poi", static_cast<int>(i));
+                std::snprintf(out[i].name.data(), out[i].name.size(), "PLACE %d", static_cast<int>(i));
+                std::snprintf(out[i].kind.data(), out[i].kind.size(), "%s", regions ? "district" : "plugin");
+                out[i].x = 5.0 * i; out[i].z = -5.0 * i; out[i].width = regions ? 32 : 0; out[i].depth = regions ? 40 : 0;
+            }
+            return 2;
+        };
+        std::vector<std::pair<std::string, std::string>> settings{{"news", "bbc"}};
+        std::vector<std::string> actions{"open_story"}, links{"www.example.com"};
+        Runtime::HostServices services;
+        services.map = &map;
+        services.settings = &settings;
+        services.actions = &actions;
+        services.linkHosts = &links;
+        services.measureText = [](void*, const char*, size_t size, float px) noexcept { return static_cast<float>(size) * px * 0.5f; };
+        services.hudView = [](void*, int* w, int* h) noexcept { *w = 3440; *h = 1440; return true; };
+        auto serviceStart = [&](const std::string& source, bool hud = true) {
+            return runtime.start(source, error, false, nullptr, nullptr, nullptr, false, hud, nullptr, false, false,
+                                 false, nullptr, false, 0, nullptr, &services);
+        };
+        check(serviceStart("assert(text_width('abcd', 10) == 20 and text_width('', 10) == 0) "
+                           "local w, h = hud_view() assert(w == 3440 and h == 1440) "
+                           "local p = hud_panel('bottom', 0, 0, 1, 0.02, 4000, 20) hud_scroll(p, 50, 1000) "
+                           "assert(not pcall(hud_scroll, p, 50, 4001) and not pcall(text_width, 'a', 4)) return {}") &&
+              runtime.hudPanels().size() == 1 && runtime.hudPanels()[0].canvasWidth == 4000 &&
+              runtime.hudPanels()[0].scrollSpeed == 50 && runtime.hudPanels()[0].viewWidth == 1000 && runtime.stop(error),
+              "text measurement, view size and bounded marquee scrolling");
+        check(!serviceStart("text_width('a', 10) return {}", false) && error.find("'hud'") != std::string::npos,
+              "text measurement needs the hud permission and the error names it");
+        check(serviceStart("got = '' assert(setting('news') == 'bbc' and not pcall(setting, 'other')) "
+                           "assert(not pcall(open_link, 'https://www.example.com/')) "
+                           "return {on_setting=function(k, v) got = k .. '=' .. setting(k) .. '=' .. v end, "
+                           "on_action=function(n) if setting('news') == 'bad' then open_link('https://evil.example.net/') "
+                           "else open_link('https://WWW.example.com:443/story?id=1') end end, "
+                           "on_tick=function() assert(got == 'news=npr=npr') end}") &&
+              runtime.setting("news", "npr", error) && runtime.tick(0.1, error) &&
+              !runtime.setting("other", "x", error) && !runtime.action("undeclared", error) &&
+              runtime.action("open_story", error) && runtime.takeLink() == "https://www.example.com/story?id=1" &&
+              runtime.takeLink().empty(),
+              "settings dispatch on_setting; links only from fresh actions to declared link hosts");
+        check(runtime.setting("news", "bad", error) && !runtime.action("open_story", error) && runtime.takeLink().empty(),
+              "open_link rejects undeclared hosts and yields no link");
+        runtime.stop(error);
+        check(serviceStart("local v = map_view() assert(v.x == 10 and v.z == -20 and v.heading == 90 and v.max_x == 100) "
+                           "local r, p = map_regions(), map_pois() "
+                           "assert(#r == 2 and r[2].id == 'region-1' and r[2].width == 32 and r[2].kind == 'district') "
+                           "assert(#p == 2 and p[2].name == 'PLACE 1' and p[2].z == -5 and p[2].width == nil) "
+                           "for i = 1, 13 do map_view() end assert(not pcall(map_view)) "
+                           "return {on_tick=function() local v, why = map_view() assert(v == nil and why == 'inside a building') end}") &&
+              (fake.mapOk = false, runtime.tick(0.1, error)) && runtime.stop(error),
+              "read-only map view, regions and POIs with per-callback budget and honest unavailability");
+        {
+            // The shipped review sample must run inside the real sandbox (no gsub/match), not just parse.
+            std::ifstream in(std::string(SCIFI_TEST_ASSETS) + "/../tests/fixtures/network-hud-demo/scripts/main.lua",
+                             std::ios::binary);
+            const std::string sample((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            const std::vector<std::string> sampleHosts{"api.open-meteo.com", "feeds.bbci.co.uk", "feeds.npr.org",
+                                                       "www.nasa.gov"};
+            std::vector<std::pair<std::string, std::string>> sampleSettings{{"location", "london"}, {"news", "bbc"}};
+            std::vector<std::string> sampleLinks{"www.bbc.com", "www.bbc.co.uk", "www.npr.org", "www.nasa.gov"};
+            Runtime::HostServices sampleServices = services;
+            sampleServices.settings = &sampleSettings;
+            sampleServices.linkHosts = &sampleLinks;
+            fake.mapOk = true;
+            check(!sample.empty() && runtime.start(sample, error, true, nullptr, nullptr, nullptr, false, true, nullptr,
+                                                   false, false, false, nullptr, false, 0, &sampleHosts,
+                                                   &sampleServices),
+                  "shipped network HUD sample starts in the sandbox");
+            auto requests = runtime.takeNetworkRequests();
+            check(requests.size() == 2 && requests[0].url.find("api.open-meteo.com") != std::string::npos &&
+                  requests[1].url == "https://feeds.bbci.co.uk/news/rss.xml", "sample requests weather and news");
+            const bool fed = requests.size() == 2 &&
+                runtime.networkResult(requests[0].id, true, 200,
+                    "{\"current\":{\"temperature_2m\":12.5,\"weather_code\":61,\"is_day\":1,\"wind_speed_10m\":9}}",
+                    error) &&
+                runtime.networkResult(requests[1].id, true, 200,
+                    "<rss><channel><item><title>Line\x01one\ttab</title><link>https://www.bbc.com/news/a</link>"
+                    "</item></channel></rss>", error);
+            bool ticked = fed;
+            for (int i = 0; ticked && i < 12; ++i) ticked = runtime.tick(0.1, error);
+            check(ticked && runtime.hudPanels().size() == 4,
+                  "sample handles weather JSON and an RSS title with control characters");
+            check(runtime.action("open_story", error) && runtime.takeLink() == "https://www.bbc.com/news/a",
+                  "sample N action opens the current story link");
+            check(runtime.setting("news", "npr", error) && runtime.takeNetworkRequests().size() == 1 &&
+                  runtime.tick(0.1, error) && runtime.stop(error), "sample refetches after a news source change");
+        }
+        services.map = nullptr;
+        check(!serviceStart("map_view() return {}") && error.find("'map'") != std::string::npos,
+              "map API absent without the map permission");
+    }
     return failures ? 1 : 0;
 }

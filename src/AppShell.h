@@ -1,5 +1,6 @@
 #pragma once
 // Top-level application: window, subsystems, state machine (menu <-> file room) and main loop.
+#include <array>
 #include <functional>
 #include <memory>
 #include <string>
@@ -27,6 +28,7 @@
 #include "GameplayImpulse.h"
 #include "GameplaySoundBudget.h"
 #include "GameplaySceneRenderer.h"
+#include "PluginNetwork.h"
 #include <map>
 #include <set>
 #include <chrono>
@@ -179,6 +181,29 @@ private:
         std::shared_ptr<GpuLabel> hudLabel;
         std::uint64_t hudRevision = 0;
         double hudDelay = 0;
+        std::vector<std::string> networkHosts;
+        bool map = false;
+        std::string name;
+        std::vector<std::string> linkHosts;
+        std::vector<std::pair<char, std::string>> hotkeys;
+        std::vector<GameplaySetting> settings;
+        std::vector<std::pair<std::string, std::string>> settingValues;  // host-persisted current choices
+        std::shared_ptr<const GameplayModel> roomModel;
+        std::string hotkeyLetters() const {
+            std::string letters;
+            for (const auto& hotkey : hotkeys) letters += hotkey.first;
+            return letters;
+        }
+        std::array<double, 4> panelScrollStart{};
+        std::uint64_t networkToken = 0;  // Unique per run so late results from a stopped run are dropped.
+        std::uint64_t panelsRevision = 0;
+        double panelDelay = 0;
+        std::array<PluginScriptRuntime::HudPanel, 4> panels;  // Last presented state per slot.
+        std::array<std::shared_ptr<GpuLabel>, 4> panelLabels;
+        std::array<float, 4> panelRasterScales{};
+        int panelAreaWidth = 0, panelAreaHeight = 0;
+        size_t panelPixelBudget = 0;
+        uint64_t panelUploads = 0;
         GameplaySession session;
         std::unique_ptr<GameplaySceneRenderer> scene;
         std::string pendingError;
@@ -187,17 +212,35 @@ private:
         GameplayControllerInput controllerInput;
     };
     std::map<std::string, std::shared_ptr<GameplayEntry>> gameplay_;
+    size_t gameplayHudPixelBudget_ = 0;
+    int gameplayHudAreaWidth_ = 0, gameplayHudAreaHeight_ = 0;
+    int gameplayHudVrWidth_ = 0, gameplayHudVrHeight_ = 0;
+    bool updateGameplayPanels(GameplayEntry& entry, std::string& error);
     GameplayMessaging gameplayMessages_;
     std::uint64_t gameplayFrame_ = 0;
+    PluginNetwork gameplayNetwork_;
+    std::uint64_t nextGameplayNetworkToken_ = 0;
     GameplayControlLease gameplayControl_;
     GameplayControlInput gameplayControlInput_;
     GameplayClickRouter gameplayClicks_;
     std::unique_ptr<GameplayConsent> gameplayConsent_;
     uint64_t nextGameplayOwner_ = 1;
     std::string gameplayConfirm_;
+    std::string gameplayConfirmNotice_;
     std::chrono::steady_clock::time_point gameplayDeadline_{};
     std::string uninstallConfirm_;
     std::chrono::steady_clock::time_point uninstallDeadline_{};
+    std::string applyConfirm_;
+    std::chrono::steady_clock::time_point applyDeadline_{};
+    GameplayDigest applyDigest_{};  // the exact staged package the pending APPLY confirmation refers to
+    std::map<std::string, std::string> pluginFilesStatus_;
+    std::filesystem::path pluginStateDirectory(const char* leaf) const;
+    void loadPluginSettings(const std::string& id, GameplayEntry& entry);
+    void changePluginSetting(const std::string& id, size_t index, int direction);
+    std::string pluginSettingLabel(const std::string& id, size_t index) const;
+    void browsePluginFiles(const std::string& id);
+    void applyPluginEdits(const std::string& id);
+    std::vector<std::string> pluginFilesInfo(const std::string& id) const;
     InputSystem input_;
     MediaSeekGesture mediaSeek_;
     std::string mediaSeekPath_;

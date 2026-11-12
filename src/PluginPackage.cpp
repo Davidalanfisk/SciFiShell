@@ -2,6 +2,7 @@
 #include "GameplayPackage.h"
 #include "GameplayFileLock.h"
 #include "GameplayLimits.h"
+#include "PluginNetPolicy.h"
 
 #include <algorithm>
 #include <array>
@@ -34,13 +35,13 @@ public:
                 if (!take(']')) {
                     do {
                         std::string v;
-                        if (value.items.size() >= 12 || !string(v)) return false;
+                        if (value.items.size() >= 16 || !string(v)) return false;
                         value.items.push_back(v);
                     } while (take(','));
                     if (!take(']')) return false;
                 }
             } else if (!string(value.text)) return false;
-            if (out.size() >= 11 || !out.emplace(key, value).second) return false;
+            if (out.size() >= 20 || !out.emplace(key, value).second) return false;
             if (take('}')) return finish();
         } while (take(','));
         return false;
@@ -183,21 +184,28 @@ bool PluginPackageStore::parseGameplayManifest(const std::string& text, Gameplay
     const char* keys[] = {"id", "name", "version", "author", "description", "entry", "type",
                           "platforms", "permissions", "api_version"};
     const bool downtown = fields.count("downtown_model") != 0;
-    if (fields.size() != sizeof(keys) / sizeof(keys[0]) + (downtown ? 1 : 0)) { error = "Unexpected or missing gameplay manifest fields"; return false; }
+    const bool hosts = fields.count("network_hosts") != 0;
+    const bool room = fields.count("room_model") != 0;
+    const bool settings = fields.count("settings") != 0;
+    const bool links = fields.count("link_hosts") != 0;
+    const bool hotkeys = fields.count("hotkeys") != 0;
+    if (fields.size() != sizeof(keys) / sizeof(keys[0]) + downtown + hosts + room + settings + links + hotkeys) { error = "Unexpected or missing gameplay manifest fields"; return false; }
     for (const char* key : keys) if (!fields.count(key)) { error = "Missing gameplay manifest field"; return false; }
     for (const auto& [key, value] : fields)
-        if (value.array != (key == "platforms" || key == "permissions")) { error = "Invalid gameplay manifest field type"; return false; }
+        if (value.array != (key == "platforms" || key == "permissions" || key == "network_hosts" ||
+                            key == "settings" || key == "link_hosts" || key == "hotkeys")) { error = "Invalid gameplay manifest field type"; return false; }
     const auto& permissions = fields["permissions"].items;
     bool scene = false, world = false, layout = false, impulse = false, control = false,
          input = false, controller = false, view = false, sound = false, hud = false, storage = false,
-         messaging = false, invalidPermission = false;
+         messaging = false, network = false, map = false, invalidPermission = false;
     for (const auto& permission : permissions) {
         bool* flag = permission == "scene" ? &scene : permission == "world" ? &world :
                      permission == "input" ? &input : permission == "view" ? &view :
                      permission == "sound" ? &sound : permission == "hud" ? &hud :
                      permission == "layout" ? &layout : permission == "impulse" ? &impulse :
                      permission == "control" ? &control : permission == "storage" ? &storage :
-                     permission == "controller" ? &controller : permission == "messaging" ? &messaging : nullptr;
+                     permission == "controller" ? &controller : permission == "messaging" ? &messaging :
+                     permission == "network" ? &network : permission == "map" ? &map : nullptr;
         if (!flag || *flag) invalidPermission = true;
         else *flag = true;
     }
@@ -210,6 +218,14 @@ bool PluginPackageStore::parseGameplayManifest(const std::string& text, Gameplay
         !scene || ((layout || impulse) && !world) || (control && (!world || !input || !view)) ||
         (controller && !input) || invalidPermission) {
         error = "Unsupported or invalid gameplay manifest";
+        return false;
+    }
+    if (network != hosts) {
+        error = "Invalid gameplay manifest: network permission and network_hosts must be declared together";
+        return false;
+    }
+    if (hosts && !pluginnet::validHostList(fields["network_hosts"].items, error)) {
+        error = "Invalid gameplay manifest: " + error;
         return false;
     }
     out.id = fields["id"].text;
@@ -229,14 +245,37 @@ bool PluginPackageStore::parseGameplayManifest(const std::string& text, Gameplay
     out.view = view;
     out.sound = sound;
     out.hud = hud;
+    out.network = network;
+    if (hosts) out.networkHosts = fields["network_hosts"].items;
+    out.map = map;
+    auto modelPath = [](const std::string& model) {
+        return model.size() >= 12 && model.size() <= 120 && model.rfind("assets/", 0) == 0 &&
+               model.substr(model.size() - 4) == ".glb" && model.find("..") == std::string::npos &&
+               model.find('\\') == std::string::npos;
+    };
     if (downtown) {
-        const auto& model = fields["downtown_model"].text;
-        if (model.size() < 12 || model.size() > 120 || model.rfind("assets/", 0) != 0 ||
-            model.substr(model.size() - 4) != ".glb" || model.find("..") != std::string::npos ||
-            model.find('\\') != std::string::npos) {
+        if (!modelPath(fields["downtown_model"].text)) {
             error = "downtown_model must name a bounded assets/*.glb package asset"; return false;
         }
-        out.downtownModel = model;
+        out.downtownModel = fields["downtown_model"].text;
+    }
+    if (room) {
+        if (!modelPath(fields["room_model"].text)) {
+            error = "room_model must name a bounded assets/*.glb package asset"; return false;
+        }
+        out.roomModel = fields["room_model"].text;
+    }
+    if (settings && !parseGameplaySettings(fields["settings"].items, out.settings, error)) {
+        error = "Invalid gameplay manifest: " + error; return false;
+    }
+    if (links) {
+        if (!pluginnet::validHostList(fields["link_hosts"].items, error)) {
+            error = "Invalid gameplay manifest link_hosts: " + error; return false;
+        }
+        out.linkHosts = fields["link_hosts"].items;
+    }
+    if (hotkeys && !parseGameplayHotkeys(fields["hotkeys"].items, out.hotkeys, error)) {
+        error = "Invalid gameplay manifest: " + error; return false;
     }
     error.clear();
     return true;
@@ -433,6 +472,56 @@ bool PluginPackageStore::install(const std::filesystem::path& source) {
     }
     error_.clear();
     return true;
+}
+
+bool PluginPackageStore::replaceGameplay(const std::string& id, const std::filesystem::path& source,
+                                         const std::function<void()>& unregister) {
+    if (!validId(id) || !registerGameplay_) { error_ = "Invalid package ID"; return false; }
+    std::error_code ec;
+    const auto target = dir_ / (id + ".zip"), backup = dir_ / (id + ".zip.bak");
+    const auto oldSize = std::filesystem::file_size(target, ec);
+    if (ec) { error_ = "Installed package not found"; return false; }
+    GameplayPackage incoming;
+    GameplayDigest incomingDigest;
+    if (!loadGameplayZip(source, incoming, incomingDigest)) return false;
+    if (incoming.id != id) { error_ = "Edited package id must stay " + id; return false; }
+    std::uint64_t zipBytes = 0;
+    for (std::filesystem::directory_iterator it(dir_, ec), end; !ec && it != end; it.increment(ec))
+        if (it->path().extension() == ".zip") zipBytes += it->file_size(ec);
+    if (ec || incomingDigest.size > kGameplayInstalledZipLimit - (zipBytes - std::min(zipBytes, oldSize))) {
+        error_ = "Installed ZIP storage limit exceeded"; return false;
+    }
+    std::filesystem::remove(backup, ec);
+    std::filesystem::rename(target, backup, ec);
+    if (ec) { error_ = "Cannot back up installed package: " + ec.message(); return false; }
+    unregister();
+    std::string failure;
+    GameplayPackage copied;
+    GameplayDigest copiedDigest;
+    if (copyBoundedZip(source, target, incomingDigest.size, failure)) {
+        error_.clear();
+        if (loadGameplayZip(target, copied, copiedDigest) && copied.id == id && copiedDigest == incomingDigest &&
+            registerGameplay_(copied, target, copiedDigest)) {
+            std::filesystem::remove(backup, ec);
+            error_.clear();
+            return true;
+        }
+        failure = error_.empty() ? "Edited package changed or could not be registered" : error_;
+        unregister();
+        std::filesystem::remove(target, ec);
+    }
+    GameplayPackage previous;
+    GameplayDigest previousDigest;
+    std::filesystem::rename(backup, target, ec);
+    if (ec) {
+        error_ = failure + "; previous package kept as " + backup.filename().string();
+        return false;
+    }
+    const bool registered = loadGameplayZip(target, previous, previousDigest) &&
+                            registerGameplay_(previous, target, previousDigest);
+    error_ = failure + (registered ? "; previous package restored"
+                                   : "; previous package restored but could not be registered until restart");
+    return false;
 }
 
 bool PluginPackageStore::uninstall(const std::string& id) {

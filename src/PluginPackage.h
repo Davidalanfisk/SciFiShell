@@ -28,6 +28,10 @@ public:
     void discover();
     bool install(const std::filesystem::path& source);
     bool uninstall(const std::string& id);
+    // Replaces an installed gameplay ZIP with a validated package of the same id. `unregister` must remove the
+    // old registration; on failure the previous ZIP is restored and registered again.
+    bool replaceGameplay(const std::string& id, const std::filesystem::path& source,
+                         const std::function<void()>& unregister);
     const std::string& error() const { return error_; }
     static bool parse(const std::string& text, ThemePackage& out, std::string& error);
     static bool parseScript(const std::string& text, ScriptPackage& out, std::string& error);

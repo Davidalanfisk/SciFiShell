@@ -56,6 +56,7 @@ public:
     void setDowntown(const std::map<std::string, int>& plots,
                      const std::vector<std::pair<std::string, std::string>>& names);
     bool setDowntownModel(const std::string& id, const GameplayModel& model, std::string& error);
+    void clearDowntownModel(const std::string& id);
     bool pickDowntown(Vec3 origin, Vec3 dir, std::string& id) const;
     bool downtownExit(const std::string& id, Vec3& pos) const;
     bool downtownCustom(const std::string& id) const { return downtownModels_.count(id) != 0; }
@@ -68,6 +69,9 @@ public:
     const DowntownRegion& settingsDistrictBounds() const { return settingsRegion_; }
     // Returns -1 on unavailable/over-budget, 0 outside a grid cell, 1 with center, pitch and occupancy.
     int gameplayCell(float x, float z, double* result) const noexcept;
+    // Public map data for plugins with the "map" permission. Never includes folder names or drive paths.
+    struct MapPlace { std::string id, name, kind; float x = 0, z = 0, width = 0, depth = 0; };
+    void mapPlaces(bool regions, std::vector<MapPlace>& out) const;
     bool gameplayTrackClearance(float x, float z, float radius, double* result) const;
     void setParksEnabled(bool enabled);
     void setDrivingEnabled(bool enabled);
@@ -292,7 +296,10 @@ private:
     Monument settingsDistrictLabel_;
     void resizeDistrictGeometry();
     void renderSettingsDistrict(Renderer& r, Vec3 eye);
-    void renderDistrictDoor(Renderer& r, DowntownBuilding& building, Vec3 plot, Vec3 tint, bool north);
+    void renderDistrictDoor(Renderer& r, DowntownBuilding& building, Vec3 plot, Vec3 tint, bool north, float scale = 0);
+    static constexpr float kDowntownDefaultScale = 1.5f;  // default plugin buildings: 18 x 12 x 18 on a 32 m plot
+    float downtownScale(const DowntownBuilding& building) const;
+    void renderDefaultDowntown(Renderer& r, const DowntownBuilding& building, Vec3 plot, Vec3 accent, Vec3 alt);
     std::map<std::string, DowntownModel> downtownModels_;
     uint64_t downtownOwner_ = UINT64_MAX;
     Monument downtownLabel_;

@@ -1,17 +1,21 @@
 <#
  Builds the installer from build\Release and optionally publishes it as a public GitHub release.
    .\installer\build-installer.ps1 -Version 0.2.0            # installer\Output\SciFiShell-Setup-0.2.0.exe
+   .\installer\build-installer.ps1 -Version 0.2.0 -BuildDirectory C:\builds\scifishell
    .\installer\build-installer.ps1 -Version 0.2.0 -Publish   # ...and gh release create v0.2.0 (the updater picks it up)
 #>
 param(
     [Parameter(Mandatory)][string]$Version,
+    [string]$BuildDirectory,
     [switch]$Publish
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$rel = Join-Path $root 'build\Release'
+$build = if ($BuildDirectory) { (Resolve-Path -LiteralPath $BuildDirectory).Path } else { Join-Path $root 'build' }
+$rel = Join-Path $build 'Release'
 $stage = Join-Path $PSScriptRoot 'stage'
 if (-not (Test-Path (Join-Path $rel 'SciFiShell.exe'))) { throw "Build first: cmake --build build --config Release --target SciFiShell" }
+if (-not (Test-Path (Join-Path $rel 'libcef.dll'))) { throw "Release packaging requires a CEF-enabled build (libcef.dll is missing)." }
 
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item $stage -ItemType Directory | Out-Null
